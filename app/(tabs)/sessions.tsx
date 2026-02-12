@@ -1,3 +1,4 @@
+import { useTheme } from "@/context/ThemeContext";
 import { Ionicons } from "@expo/vector-icons";
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
@@ -14,7 +15,7 @@ import {
   Text,
   TextInput,
   UIManager,
-  View,
+  View
 } from "react-native";
 
 // Enable LayoutAnimation on Android
@@ -85,6 +86,7 @@ const INITIAL_COUNT = 15;
 const LOAD_MORE_COUNT = 8;
 
 export default function SessionsScreen() {
+  const { colors, themeScheme } = useTheme();
   const [sessions] = useState(() => generateMockSessions(1, INITIAL_COUNT));
   const [displayedSessions, setDisplayedSessions] = useState(() =>
     sessions.slice(0, 10)
@@ -103,7 +105,7 @@ export default function SessionsScreen() {
 
   const toggleFilters = () => {
     const toValue = filtersExpanded ? 0 : 1;
-    
+
     Animated.parallel([
       Animated.spring(rotateAnim, {
         toValue,
@@ -122,7 +124,7 @@ export default function SessionsScreen() {
         useNativeDriver: false,
       }),
     ]).start();
-    
+
     setFiltersExpanded((prev) => !prev);
   };
 
@@ -173,71 +175,84 @@ export default function SessionsScreen() {
   }, [loading, displayedSessions.length, sessions]);
 
   const renderSession = useCallback(
-    ({ item }: { item: (typeof sessions)[0] }) => (
-      <Pressable style={styles.card}>
-        {/* Left Accent Bar */}
-        <View style={[styles.accentBar, { backgroundColor: item.typeColor }]} />
+    ({ item }: { item: (typeof sessions)[0] }) => {
+      const isDark = themeScheme === "dark";
+      return (
+        <Pressable
+          style={[
+            styles.card,
+            {
+              backgroundColor: colors.card,
+              borderColor: isDark ? "#2C2C2E" : "transparent",
+              borderWidth: isDark ? 1 : 0,
+              shadowOpacity: isDark ? 0 : 0.05, // Hide shadow in dark mode for cleaner look
+            },
+          ]}
+        >
+          {/* Left Accent Bar */}
+          <View style={[styles.accentBar, { backgroundColor: item.typeColor }]} />
 
-        <View style={styles.cardContent}>
-          {/* Header Row */}
-          <View style={styles.cardHeader}>
-            <View style={styles.stationInfo}>
-              <Text style={styles.station} numberOfLines={1}>
-                {item.station}
-              </Text>
-              <View style={styles.metaRow}>
-                <Ionicons name="calendar-outline" size={12} color="#8E8E93" />
-                <Text style={styles.metaText}>{item.date}</Text>
-                <Text style={styles.metaDot}>•</Text>
-                <Text style={styles.metaText}>{item.connector}</Text>
+          <View style={styles.cardContent}>
+            {/* Header Row */}
+            <View style={styles.cardHeader}>
+              <View style={styles.stationInfo}>
+                <Text style={[styles.station, { color: colors.text }]} numberOfLines={1}>
+                  {item.station}
+                </Text>
+                <View style={styles.metaRow}>
+                  <Ionicons name="calendar-outline" size={12} color={colors.textSecondary} />
+                  <Text style={[styles.metaText, { color: colors.textSecondary }]}>{item.date}</Text>
+                  <Text style={styles.metaDot}>•</Text>
+                  <Text style={[styles.metaText, { color: colors.textSecondary }]}>{item.connector}</Text>
+                </View>
+              </View>
+
+              {/* Type Badge with overlapping icons */}
+              <View
+                style={[styles.typeBadge, { backgroundColor: item.typeColor + "15" }]} // Lower opacity background
+              >
+                <View style={styles.lightningContainer}>
+                  {Array.from({
+                    length: typeLightningCount[item.type],
+                  }).map((_, idx) => (
+                    <View
+                      key={idx}
+                      style={{
+                        marginLeft: idx > 0 ? -7 : 0,
+                        zIndex: idx,
+                      }}
+                    >
+                      <Ionicons name="flash" size={12} color={item.typeColor} />
+                    </View>
+                  ))}
+                </View>
+                <Text style={[styles.typeText, { color: item.typeColor }]}>{item.type}</Text>
               </View>
             </View>
 
-            {/* Type Badge with overlapping icons */}
-            <View
-              style={[styles.typeBadge, { backgroundColor: item.typeColor }]}
-            >
-              <View style={styles.lightningContainer}>
-                {Array.from({
-                  length: typeLightningCount[item.type],
-                }).map((_, idx) => (
-                  <View
-                    key={idx}
-                    style={{
-                      marginLeft: idx > 0 ? -7 : 0,
-                      zIndex: idx,
-                    }}
-                  >
-                    <Ionicons name="flash" size={12} color="#fff" />
+            {/* Stats Row */}
+            <View style={styles.cardStats}>
+              <View style={styles.statsLeft}>
+                <View style={styles.stat}>
+                  <View style={[styles.statIcon, { backgroundColor: isDark ? "#1C1C1E" : "#E8F9F1" }]}>
+                    <Ionicons name="flash" size={14} color="#2cdb9b" />
                   </View>
-                ))}
+                  <Text style={[styles.statValue, { color: colors.text }]}>{item.energy}</Text>
+                </View>
+                <View style={styles.stat}>
+                  <View style={[styles.statIcon, { backgroundColor: isDark ? "#1C1C1E" : "#F0F0F5" }]}>
+                    <Ionicons name="time" size={14} color={colors.textSecondary} />
+                  </View>
+                  <Text style={[styles.statValue, { color: colors.text }]}>{item.duration}</Text>
+                </View>
               </View>
-              <Text style={styles.typeText}>{item.type}</Text>
+              <Text style={styles.cost}>{item.cost}</Text>
             </View>
           </View>
-
-          {/* Stats Row */}
-          <View style={styles.cardStats}>
-            <View style={styles.statsLeft}>
-              <View style={styles.stat}>
-                <View style={styles.statIcon}>
-                  <Ionicons name="flash" size={14} color="#2cdb9b" />
-                </View>
-                <Text style={styles.statValue}>{item.energy}</Text>
-              </View>
-              <View style={styles.stat}>
-                <View style={[styles.statIcon, { backgroundColor: "#F0F0F5" }]}>
-                  <Ionicons name="time" size={14} color="#8E8E93" />
-                </View>
-                <Text style={styles.statValue}>{item.duration}</Text>
-              </View>
-            </View>
-            <Text style={styles.cost}>{item.cost}</Text>
-          </View>
-        </View>
-      </Pressable>
-    ),
-    []
+        </Pressable>
+      );
+    },
+    [colors, themeScheme]
   );
 
   const renderFooter = useCallback(() => {
@@ -251,132 +266,132 @@ export default function SessionsScreen() {
 
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
       <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Sessions</Text>
-        <Text style={styles.subtitle}>Your charging history</Text>
-      </View>
+        <View style={[styles.header, { backgroundColor: colors.background }]}>
+          <Text style={[styles.title, { color: colors.text }]}>Sessions</Text>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Your charging history</Text>
+        </View>
 
-      {/* Filter Section - Outside FlatList to prevent keyboard issues */}
-      <View style={styles.filterWrapper}>
-        <View style={styles.filtersSection}>
-          {/* Collapsible Header */}
-          <Pressable style={styles.filterToggle} onPress={toggleFilters}>
-            <View style={styles.filterToggleLeft}>
-              <Ionicons name="options-outline" size={18} color="#0f231c" />
-              <Text style={styles.filterToggleText}>Filters</Text>
-              {(typeFilters.length < 3 || search.length > 0) && (
-                <View style={styles.filterBadge}>
-                  <Text style={styles.filterBadgeText}>
-                    {3 - typeFilters.length + (search.length > 0 ? 1 : 0)}
-                  </Text>
-                </View>
-              )}
-            </View>
-            <Animated.View style={{ transform: [{ rotate: chevronRotation }] }}>
-              <Ionicons name="chevron-down" size={20} color="#8E8E93" />
-            </Animated.View>
-          </Pressable>
+        {/* Filter Section - Outside FlatList to prevent keyboard issues */}
+        <View style={styles.filterWrapper}>
+          <View style={[styles.filtersSection, { backgroundColor: colors.card, borderColor: colors.border, shadowColor: colors.shadow }]}>
+            {/* Collapsible Header */}
+            <Pressable style={styles.filterToggle} onPress={toggleFilters}>
+              <View style={styles.filterToggleLeft}>
+                <Ionicons name="options-outline" size={18} color={colors.text} />
+                <Text style={[styles.filterToggleText, { color: colors.text }]}>Filters</Text>
+                {(typeFilters.length < 3 || search.length > 0) && (
+                  <View style={styles.filterBadge}>
+                    <Text style={styles.filterBadgeText}>
+                      {3 - typeFilters.length + (search.length > 0 ? 1 : 0)}
+                    </Text>
+                  </View>
+                )}
+              </View>
+              <Animated.View style={{ transform: [{ rotate: chevronRotation }] }}>
+                <Ionicons name="chevron-down" size={20} color="#8E8E93" />
+              </Animated.View>
+            </Pressable>
 
-          {/* Collapsible Content */}
-          <Animated.View
-            style={[
-              styles.filterContent,
-              {
-                height: filterContentHeight,
-                opacity: filterContentOpacity,
-                overflow: "hidden",
-              },
-            ]}
-          >
-            {/* Search */}
-            <View style={styles.searchContainer}>
-              <Ionicons name="search" size={18} color="#8E8E93" />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search station..."
-                placeholderTextColor="#C7C7CC"
-                value={search}
-                onChangeText={setSearch}
-              />
-              {search.length > 0 && (
-                <Pressable onPress={() => setSearch("")}>
-                  <Ionicons name="close-circle" size={18} color="#C7C7CC" />
-                </Pressable>
-              )}
-            </View>
+            {/* Collapsible Content */}
+            <Animated.View
+              style={[
+                styles.filterContent,
+                {
+                  height: filterContentHeight,
+                  opacity: filterContentOpacity,
+                  overflow: "hidden",
+                },
+              ]}
+            >
+              {/* Search */}
+              <View style={[styles.searchContainer, { backgroundColor: colors.inputBackground }]}>
+                <Ionicons name="search" size={18} color={colors.textTertiary} />
+                <TextInput
+                  style={[styles.searchInput, { color: colors.text }]}
+                  placeholder="Search station..."
+                  placeholderTextColor={colors.textTertiary}
+                  value={search}
+                  onChangeText={setSearch}
+                />
+                {search.length > 0 && (
+                  <Pressable onPress={() => setSearch("")}>
+                    <Ionicons name="close-circle" size={18} color="#C7C7CC" />
+                  </Pressable>
+                )}
+              </View>
 
-            {/* Type Chips */}
-            <View style={styles.typeChips}>
-              {(["AC", "DC", "HPC"] as StationType[]).map((type) => {
-                const active = typeFilters.includes(type);
-                const color = typeColors[type];
-                return (
-                  <Pressable
-                    key={type}
-                    onPress={() => toggleType(type)}
-                    style={[
-                      styles.chip,
-                      {
-                        backgroundColor: active ? color : "#F5F5F5",
-                        borderColor: active ? color : "#E0E0E0",
-                      },
-                    ]}
-                  >
-                    <View style={styles.chipIcons}>
-                      {Array.from({ length: typeLightningCount[type] }).map(
-                        (_, idx) => (
-                          <View
-                            key={idx}
-                            style={{
-                              marginLeft: idx > 0 ? -7 : 0,
-                              zIndex: idx,
-                            }}
-                          >
-                            <Ionicons
-                              name="flash"
-                              size={14}
-                              color={active ? "#fff" : color}
-                            />
-                          </View>
-                        )
-                      )}
-                    </View>
-                    <Text
+              {/* Type Chips */}
+              <View style={styles.typeChips}>
+                {(["AC", "DC", "HPC"] as StationType[]).map((type) => {
+                  const active = typeFilters.includes(type);
+                  const color = typeColors[type];
+                  return (
+                    <Pressable
+                      key={type}
+                      onPress={() => toggleType(type)}
                       style={[
-                        styles.chipText,
-                        { color: active ? "#fff" : "#333" },
+                        styles.chip,
+                        {
+                          backgroundColor: active ? color : colors.backgroundSecondary,
+                          borderColor: active ? color : colors.border,
+                        },
                       ]}
                     >
-                      {type}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </Animated.View>
-        </View>
-      </View>
-
-      <FlatList
-        data={filteredSessions}
-        keyExtractor={(item) => item.id}
-        renderItem={renderSession}
-        contentContainerStyle={styles.list}
-        onEndReached={loadMore}
-        onEndReachedThreshold={0.3}
-        ListFooterComponent={renderFooter}
-        ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="search-outline" size={48} color="#C7C7CC" />
-            <Text style={styles.emptyText}>No sessions found</Text>
+                      <View style={styles.chipIcons}>
+                        {Array.from({ length: typeLightningCount[type] }).map(
+                          (_, idx) => (
+                            <View
+                              key={idx}
+                              style={{
+                                marginLeft: idx > 0 ? -7 : 0,
+                                zIndex: idx,
+                              }}
+                            >
+                              <Ionicons
+                                name="flash"
+                                size={14}
+                                color={active ? "#fff" : color}
+                              />
+                            </View>
+                          )
+                        )}
+                      </View>
+                      <Text
+                        style={[
+                          styles.chipText,
+                          { color: active ? "#fff" : colors.text },
+                        ]}
+                      >
+                        {type}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </Animated.View>
           </View>
-        }
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
-      />
+        </View>
+
+        <FlatList
+          data={filteredSessions}
+          keyExtractor={(item) => item.id}
+          renderItem={renderSession}
+          contentContainerStyle={styles.list}
+          onEndReached={loadMore}
+          onEndReachedThreshold={0.3}
+          ListFooterComponent={renderFooter}
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Ionicons name="search-outline" size={48} color={colors.textTertiary} />
+              <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No sessions found</Text>
+            </View>
+          }
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        />
       </Pressable>
     </SafeAreaView>
   );
@@ -603,3 +618,5 @@ const styles = StyleSheet.create({
     color: "#8E8E93",
   },
 });
+
+

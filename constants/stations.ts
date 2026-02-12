@@ -4,16 +4,20 @@ export type ConnectorStatus = 'available' | 'busy' | 'charging' | 'offline';
 
 export type Station = {
   id: string;
+  uuid: string;
   name: string;
   latitude: number;
   longitude: number;
   type: StationType;
   powerKw: number;
-  distanceKm: number;
+  distanceKm?: number;
   status: ConnectorStatus;
-  isEfish: boolean;
-  address: string;
-  connectors: Array<{
+  isEfish?: boolean;
+  is_public?: boolean;
+  is_24h?: boolean;
+  address?: string;
+  socket_stats?: Record<string, { available: number; total: number }>;
+  connectors?: Array<{
     id: string;
     powerKw: number;
     status: ConnectorStatus;
@@ -23,6 +27,7 @@ export type Station = {
 export const stations: Station[] = [
   {
     id: 'metro-dudullu',
+    uuid: 'uuid-1',
     name: 'Metro Market Dudullu',
     latitude: 41.0149,
     longitude: 29.1327,
@@ -39,6 +44,7 @@ export const stations: Station[] = [
   },
   {
     id: 'umraniye-meydan',
+    uuid: 'uuid-2',
     name: 'Meydan AVM Ümraniye',
     latitude: 41.0197,
     longitude: 29.1242,
@@ -55,6 +61,7 @@ export const stations: Station[] = [
   },
   {
     id: 'sanayi-sultanbeyli',
+    uuid: 'uuid-3',
     name: 'Sultanbeyli Sanayi',
     latitude: 40.9705,
     longitude: 29.2682,
@@ -71,6 +78,7 @@ export const stations: Station[] = [
   },
   {
     id: 'atakoy-marina',
+    uuid: 'uuid-4',
     name: 'Ataköy Marina',
     latitude: 40.9793,
     longitude: 28.8755,
@@ -87,6 +95,7 @@ export const stations: Station[] = [
   },
   {
     id: 'kalamis-park',
+    uuid: 'uuid-5',
     name: 'Kalamış Park',
     latitude: 40.9846,
     longitude: 29.0347,
@@ -103,6 +112,7 @@ export const stations: Station[] = [
   },
   {
     id: 'kadikoy-pier',
+    uuid: 'uuid-6',
     name: 'Kadıköy İskelesi',
     latitude: 40.9915,
     longitude: 29.0255,
@@ -119,6 +129,7 @@ export const stations: Station[] = [
   },
   {
     id: 'sile-road',
+    uuid: 'uuid-7',
     name: 'Şile Yolu Dinlenme Tesisi',
     latitude: 41.0878,
     longitude: 29.2781,
@@ -135,6 +146,7 @@ export const stations: Station[] = [
   },
   {
     id: 'kozyatagi',
+    uuid: 'uuid-8',
     name: 'Kozyatağı İş Merkezi',
     latitude: 40.9832,
     longitude: 29.1031,

@@ -4,18 +4,18 @@ import React from "react";
 import { Image, Pressable, View } from "react-native";
 
 import { HapticTab } from "@/components/haptic-tab";
-import { useColorScheme } from "@/hooks/use-color-scheme";
+import { useTheme } from "@/context/ThemeContext";
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
+  const { colors } = useTheme();
   const router = useRouter();
 
   return (
     <Tabs
-      initialRouteName="index"
+      initialRouteName="mainpage"
       screenOptions={{
-        tabBarActiveTintColor: "#0f2f4f",
-        tabBarInactiveTintColor: "#9aa5b3",
+        tabBarActiveTintColor: colors.tabIconSelected,
+        tabBarInactiveTintColor: colors.tabIconDefault,
         tabBarStyle: {
           position: "absolute",
           left: 12,
@@ -26,9 +26,9 @@ export default function TabLayout() {
           paddingVertical: 42,
           marginBottom: 24,
           marginHorizontal: 12,
-          backgroundColor: "#ffffff",
+          backgroundColor: colors.card,
           borderTopWidth: 0,
-          shadowColor: "#000",
+          shadowColor: colors.shadow,
           shadowOpacity: 0.14,
           shadowOffset: { width: 0, height: 14 },
           shadowRadius: 24,
@@ -41,7 +41,7 @@ export default function TabLayout() {
       }}
     >
       <Tabs.Screen
-        name="index"
+        name="mainpage"
         options={{
           tabBarButton: () => null,
           tabBarItemStyle: { width: 0, display: "none" },
@@ -57,12 +57,16 @@ export default function TabLayout() {
           headerLeft: () => (
             <Pressable
               hitSlop={12}
-              onPress={() => navigation.navigate("index")}
+              onPress={() => navigation.navigate("mainpage")}
               style={{ paddingHorizontal: 4 }}
             >
-              <Ionicons name="chevron-back" size={24} color="#0f2f4f" />
+              <Ionicons name="chevron-back" size={24} color={colors.text} />
             </Pressable>
           ),
+          headerStyle: {
+            backgroundColor: colors.background,
+          },
+          headerTintColor: colors.text,
           tabBarIcon: ({ color }) => (
             <Ionicons size={26} name="flash" color={color} />
           ),
@@ -87,7 +91,7 @@ export default function TabLayout() {
                 backgroundColor: "transparent",
                 alignItems: "center",
                 justifyContent: "center",
-                shadowColor: "#000",
+                shadowColor: colors.shadow,
                 shadowOpacity: focused ? 0.12 : 0.06,
                 shadowOffset: { width: 0, height: 8 },
                 shadowRadius: 12,
@@ -118,12 +122,16 @@ export default function TabLayout() {
           headerLeft: () => (
             <Pressable
               hitSlop={12}
-              onPress={() => navigation.navigate("index")}
+              onPress={() => navigation.navigate("mainpage")}
               style={{ paddingHorizontal: 4 }}
             >
-              <Ionicons name="chevron-back" size={24} color="#0f2f4f" />
+              <Ionicons name="chevron-back" size={24} color={colors.text} />
             </Pressable>
           ),
+          headerStyle: {
+            backgroundColor: colors.background,
+          },
+          headerTintColor: colors.text,
           tabBarIcon: ({ color }) => (
             <Ionicons size={26} name="person-circle" color={color} />
           ),

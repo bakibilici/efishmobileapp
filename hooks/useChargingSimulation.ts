@@ -1,0 +1,216 @@
+import { useEffect, useRef, useState } from 'react';
+
+export type ChargingMode = 'AC' | 'DC' | 'HPC';
+
+export type ChargingState = {
+    isActive: boolean;
+    isMinimized: boolean;
+    mode: ChargingMode;
+    batteryLevel: number; // 0-100
+    power: number; // kW
+    chargedAmount: number; // kWh
+    cost: number; // TL
+    duration: number; // seconds
+    startTime: number | null;
+    // Estimates for DC
+    estTime80: number | null; // minutes remaining to 80%
+    estTime100: number | null; // minutes remaining to 100%
+};
+
+export const useChargingSimulation = () => {
+    const [state, setState] = useState<ChargingState>({
+        isActive: false,
+        isMinimized: false,
+        mode: 'DC', // Type requested in chat for start
+        batteryLevel: 23,
+        power: 0,
+        chargedAmount: 0,
+        cost: 0,
+        duration: 0,
+        startTime: null,
+        estTime80: null,
+        estTime100: null,
+    });
+
+    const timerRef = useRef<any>(null);
+    const isLiveFromBackendRef = useRef(false);
+
+    /** Update charging state from backend WebSocket meter values. When power > 0, widget is shown. */
+    const updateFromMeterValues = (data: {
+        batteryLevel?: number;
+        soc?: number;
+        state_of_charge?: number;
+        power?: number;
+        power_kw?: number;
+        chargedAmount?: number;
+        energy_kwh?: number;
+        charged_kwh?: number;
+        cost?: number;
+        duration?: number;
+        duration_sec?: number;
+        mode?: ChargingMode;
+    }) => {
+        const batteryLevel = data.batteryLevel ?? data.soc ?? data.state_of_charge;
+        const power = data.power ?? data.power_kw ?? 0;
+        const chargedAmount = data.chargedAmount ?? data.energy_kwh ?? data.charged_kwh;
+        const cost = data.cost;
+        const duration = data.duration ?? data.duration_sec;
+        const mode = data.mode ?? (power >= 150 ? 'HPC' : power >= 50 ? 'DC' : 'AC');
+
+        const hasCharging = power > 0 || (batteryLevel != null && batteryLevel > 0);
+
+        setState(prev => {
+            if (hasCharging && !prev.isActive) {
+                isLiveFromBackendRef.current = true;
+                return {
+                    ...prev,
+                    isActive: true,
+                    isMinimized: true,
+                    mode,
+                    batteryLevel: batteryLevel ?? prev.batteryLevel,
+                    power: power || prev.power,
+                    chargedAmount: chargedAmount ?? prev.chargedAmount,
+                    cost: cost ?? prev.cost,
+                    duration: duration ?? prev.duration,
+                    startTime: prev.startTime ?? Date.now(),
+                    estTime80: null,
+                    estTime100: null,
+                };
+            }
+            if (hasCharging) {
+                return {
+                    ...prev,
+                    mode: data.mode ?? prev.mode,
+                    batteryLevel: batteryLevel ?? prev.batteryLevel,
+                    power: power || prev.power,
+                    chargedAmount: chargedAmount ?? prev.chargedAmount,
+                    cost: cost ?? prev.cost,
+                    duration: duration ?? prev.duration,
+                };
+            }
+            return prev;
+        });
+
+        if (!hasCharging) {
+            if (timerRef.current) clearInterval(timerRef.current);
+            isLiveFromBackendRef.current = false;
+            setState(prev => (prev.isActive ? { ...prev, isActive: false, startTime: null } : prev));
+        }
+    };
+
+    const startSimulation = (mode: ChargingMode = 'DC') => {
+        isLiveFromBackendRef.current = false;
+        let power = 22;
+        if (mode === 'DC') power = 120;
+        if (mode === 'HPC') power = 300;
+
+        setState({
+            isActive: true,
+            isMinimized: false,
+            mode,
+            batteryLevel: mode === 'AC' ? 0 : 23, // DC/HPC starts at 23%
+            power,
+            chargedAmount: 0,
+            cost: 0,
+            duration: 0,
+            startTime: Date.now(),
+            estTime80: mode !== 'AC' ? 20 : null, // Faster estimates
+            estTime100: mode !== 'AC' ? 40 : null,
+        });
+    };
+
+    const stopSimulation = () => {
+        isLiveFromBackendRef.current = false;
+        if (timerRef.current) {
+            clearInterval(timerRef.current);
+        }
+        setState(prev => ({ ...prev, isActive: false, startTime: null }));
+    };
+
+    const toggleMinimize = () => {
+        setState(prev => ({ ...prev, isMinimized: !prev.isMinimized }));
+    };
+
+    const setMode = (mode: ChargingMode) => {
+        let power = 22;
+        if (mode === 'DC') power = 120;
+        if (mode === 'HPC') power = 300;
+
+        // Only update mode and power, preserving progress
+        setState(prev => ({
+            ...prev,
+            mode,
+            power,
+            // Keep estimates or recalc simplistically? Keep for now to avoid jump
+        }));
+    }
+
+    useEffect(() => {
+        if (state.isActive && !isLiveFromBackendRef.current) {
+            timerRef.current = setInterval(() => {
+                setState(prev => {
+                    let newLevel = prev.batteryLevel;
+                    let newCharged = prev.chargedAmount;
+                    let newCost = prev.cost;
+                    let newEst80 = prev.estTime80;
+                    let newEst100 = prev.estTime100;
+
+                    // Simulation Logic
+                    if (prev.mode === 'AC') {
+                        // AC: 1% every 2s (so 0.5% per second)
+                        newLevel = Math.min(100, prev.batteryLevel + 0.5);
+                        // Rough kWh calc: 22kW * (1s/3600)
+                        newCharged = prev.chargedAmount + (22 / 3600);
+                        // Cost: 8.5 TL/kWh
+                        newCost = prev.cost + ((22 / 3600) * 8.5); // Add based on increment
+                    } else if (prev.mode === 'DC') {
+                        // DC: 120kW
+                        let increment = prev.batteryLevel < 80 ? 1.5 : 0.2;
+                        newLevel = Math.min(100, prev.batteryLevel + increment);
+                        newCharged = prev.chargedAmount + (120 / 3600);
+                        newCost = prev.cost + ((120 / 3600) * 12.0);
+                    } else {
+                        // HPC: 300kW - Very fast
+                        let increment = prev.batteryLevel < 80 ? 3.0 : 0.5; // Double DC speed
+                        newLevel = Math.min(100, prev.batteryLevel + increment);
+                        newCharged = prev.chargedAmount + (300 / 3600);
+                        newCost = prev.cost + ((300 / 3600) * 12.0); // same price as DC for now or custom
+                    }
+
+                    // Update estimates (Common for DC/HPC)
+                    if (prev.mode !== 'AC') {
+                        if (newEst80 && newEst80 > 0) newEst80 -= (1 / 60);
+                        if (newEst100 && newEst100 > 0) newEst100 -= (1 / 60);
+                    }
+
+                    if (newLevel >= 100) {
+                        newLevel = 100;
+                    }
+
+                    return {
+                        ...prev,
+                        batteryLevel: newLevel,
+                        chargedAmount: newCharged,
+                        cost: newCost,
+                        duration: prev.duration + 1,
+                        estTime80: newEst80,
+                        estTime100: newEst100
+                    };
+                });
+            }, 1000);
+        }
+
+        return () => {
+            if (timerRef.current) clearInterval(timerRef.current);
+        };
+    }, [state.isActive, state.mode]);
+
+    return {
+        ...state,
+        startSimulation,
+        stopSimulation,
+        toggleMinimize,
+        setMode,
+        updateFromMeterValues,
+    };
+};

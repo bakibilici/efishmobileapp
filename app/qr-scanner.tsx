@@ -3,7 +3,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
-  Alert,
+  DeviceEventEmitter,
   Pressable,
   SafeAreaView,
   StatusBar,
@@ -21,7 +21,7 @@ export default function QRScannerModal() {
     router.back();
   };
 
-  const handleBarcodeScanned = ({
+  const handleBarcodeScanned = async ({
     type,
     data,
   }: {
@@ -31,16 +31,51 @@ export default function QRScannerModal() {
     if (scanned) return;
     setScanned(true);
 
-    Alert.alert("QR Kod Tarandı!", `Değer: ${data}`, [
-      {
-        text: "Tekrar Tara",
-        onPress: () => setScanned(false),
-      },
-      {
-        text: "Tamam",
-        style: "cancel",
-      },
-    ]);
+    // Debug: Log raw QR data
+    console.log('=== QR RETURN ===');
+    console.log('Type:', type);
+    console.log('Raw Data:', data);
+    console.log('=================');
+
+    // QR contains a URL - we need to fetch data from it
+    try {
+      const response = await fetch(data);
+      const result = await response.json();
+
+      console.log('=== QR API RESPONSE ===');
+      console.log(JSON.stringify(result, null, 2));
+      console.log('=======================');
+
+      if (result.success && result.data?.socket?.uuid) {
+        // Success - emit socket UUID to mainpage
+        const socketUuid = result.data.socket.uuid;
+        DeviceEventEmitter.emit('evt_QR_SCANNED', { socketUuid });
+
+        // Close scanner
+        closeScanner();
+      } else if (result.message_key === 'qr_code.not_plugged') {
+        // Cable not plugged - emit event to show modal
+        DeviceEventEmitter.emit('evt_QR_NOT_PLUGGED', {});
+        closeScanner();
+      } else {
+        // Unknown error
+        console.log('QR Scan Error:', result.message_key || 'Unknown error');
+        setScanned(false); // Allow retry
+      }
+    } catch (error) {
+      console.log('QR API Error:', error);
+      setScanned(false); // Allow retry
+    }
+  };
+
+  const closeScanner = () => {
+    if (router.canDismiss()) {
+      router.dismiss();
+    } else if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/(tabs)/mainpage");
+    }
   };
 
   if (!permission) {

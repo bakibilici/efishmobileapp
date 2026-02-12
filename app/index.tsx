@@ -1,10 +1,16 @@
+import { useTheme } from "@/context/ThemeContext";
+import { useUser } from "@/context/UserContext";
+import { sendOtp, setAuthToken, verifyOtp } from "@/services/api";
+import { saveTokens } from "@/services/tokenStorage";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import React, { useMemo, useState } from "react";
+import { usePathname, useRouter } from "expo-router";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Alert,
+  ActivityIndicator,
+  Animated,
   Image,
   KeyboardAvoidingView,
+  LayoutAnimation,
   Platform,
   Pressable,
   SafeAreaView,
@@ -13,14 +19,13 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  View,
+  View
 } from "react-native";
 
 const navy = "#0f2f4f";
-const body = "#3c4a5b";
-const field = "#f1f4f7";
-const border = "#dbe1ea";
-const disabled = "#cfd6de";
+const field = "#f8f9fa";
+const border = "#e9ecef";
+const primary = "#2CDD9D";
 
 const formatPhone = (value: string) => {
   const digits = value.replace(/\D/g, "").slice(0, 10);
@@ -33,54 +38,193 @@ const formatPhone = (value: string) => {
 
 export default function LoginScreen() {
   const router = useRouter();
-  const [phone, setPhone] = useState("");
-  const [password, setPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(true);
-  const [showPassword, setShowPassword] = useState(false);
+  const { user, setUser, refreshProfile, isLoading: isUserLoading } = useUser();
+  const { colors, themeScheme } = useTheme();
 
-  const isFormValid = useMemo(
-    () => phone.replace(/\D/g, "").length === 10 && password.length >= 4,
-    [password.length, phone]
-  );
+  // State
+  const [step, setStep] = useState<"PHONE" | "OTP">("PHONE");
+  const [countryCode, setCountryCode] = useState("+90");
+  const [showCountryPicker, setShowCountryPicker] = useState(false);
+  const [phone, setPhone] = useState("");
+  const [otp, setOtp] = useState("");
+  const [keepSignedIn, setKeepSignedIn] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const [toast, setToast] = useState<{ visible: boolean; message: string }>({
+    visible: false,
+    message: "",
+  });
+
+  // Animations
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(50)).current;
+  const otpInputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    // Entrance Animation
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 800,
+        useNativeDriver: true,
+      }),
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        tension: 50,
+        friction: 8,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+
+
+  const pathname = usePathname(); // Add usePathname hook
+
+  // Auto-redirect if already logged in AND we are on the login screen
+  const hasRedirected = useRef(false);
+  useEffect(() => {
+    // Check if we are actually on the login screen ("/" or "/index")
+    const isLoginScreen = pathname === "/" || pathname === "/index";
+
+    if (isLoginScreen && !isUserLoading && user && !hasRedirected.current) {
+      hasRedirected.current = true;
+      console.log("Login screen: User found, redirecting to mainpage");
+      router.replace("/(tabs)/mainpage");
+    }
+  }, [user, isUserLoading, pathname]);
+
+  const isPhoneValid = useMemo(() => phone.replace(/\D/g, "").length >= 10, [phone]);
+  const isOtpValid = useMemo(() => otp.length === 6, [otp]);
+
+  const showToast = (message: string) => {
+    setToast({ visible: true, message });
+    setTimeout(() => setToast({ visible: false, message: "" }), 3000);
+  };
 
   const handlePhoneChange = (text: string) => {
     setPhone(formatPhone(text));
   };
 
-  const handleSignIn = () => {
-    if (!isFormValid) {
-      Alert.alert(
-        "Eksik bilgi",
-        "Lütfen telefon numarası ve şifreyi kontrol edin."
-      );
+  const handleContinue = async () => {
+    if (!isPhoneValid) {
+      showToast("Please enter a valid phone number");
       return;
     }
-    router.replace("/(tabs)");
+
+    setIsLoading(true);
+    try {
+      const cleanPhone = phone.replace(/\D/g, "");
+      const fullPhone = countryCode.replace("+", "") + cleanPhone;
+
+      // Call Send OTP API
+      await sendOtp(fullPhone);
+
+      setIsLoading(false);
+      // Smooth layout transition between steps
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setStep("OTP");
+    } catch (error: any) {
+      setIsLoading(false);
+      const msg = error.response?.data?.message || "Failed to send OTP";
+      showToast(msg);
+    }
+  };
+
+  const handleVerify = async () => {
+    if (otp.length !== 6) {
+      showToast("Please enter a 6-digit code");
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const cleanPhone = phone.replace(/\D/g, "");
+      const fullPhone = countryCode.replace("+", "") + cleanPhone;
+
+      const response = await verifyOtp(fullPhone, otp);
+      console.log("verifyOtp FULL response:", JSON.stringify(response, null, 2));
+
+      setIsLoading(false);
+
+      if (response.message_key === "auth.otp.verified_for_register") {
+        // Navigate to Register Screen
+        router.push({
+          pathname: "/auth/register",
+          params: {
+            phone_number: cleanPhone,
+            phone_code: countryCode.replace("+", ""),
+            registered_token: response.registered_token // Pass the token
+          }
+        });
+      } else {
+        // Login Success
+        console.log("Login flow - checking for tokens...");
+        console.log("response.data:", response.data);
+        console.log("response.access_token:", response.access_token);
+
+        // Try both response.data.access_token and response.access_token
+        const accessToken = response.data?.access_token || response.access_token;
+        const refreshToken = response.data?.refresh_token || response.refresh_token;
+        const userData = response.data?.user || response.user;
+
+        console.log("accessToken found:", !!accessToken);
+        console.log("refreshToken found:", !!refreshToken);
+
+
+        if (accessToken && refreshToken) {
+          console.log("Saving tokens...");
+          await saveTokens(accessToken, refreshToken);
+
+          // Set in-memory token immediately
+          setAuthToken(accessToken);
+
+          console.log("Tokens saved!");
+
+          // Small delay to ensure SecureStore write completes
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+          if (userData) {
+            console.log("Setting user from response:", userData);
+            setUser(userData);
+          } else {
+            console.log("No user in response, calling refreshProfile...");
+            await refreshProfile();
+          }
+        } else {
+          console.log("WARNING: No tokens found in response!");
+        }
+
+        if (router.canGoBack()) {
+          router.dismissAll();
+        }
+        router.replace({
+          pathname: "/(tabs)/mainpage",
+          params: { showLoginSuccess: "true" }
+        });
+      }
+
+    } catch (error: any) {
+      setIsLoading(false);
+      const msg = error.response?.data?.message || "Invalid verification code";
+      showToast(msg);
+    }
   };
 
   const handleContinueAsGuest = () => {
-    router.replace("/(tabs)");
+    router.replace("/(tabs)/mainpage");
   };
 
-  const handleForgotPassword = () => {
-    Alert.alert(
-      "Şifre sıfırlama",
-      "Şifre sıfırlama bağlantısı e-posta veya SMS ile gönderilecek."
-    );
-  };
-
-  const handleSignUp = () => {
-    Alert.alert(
-      "Kayıt ol",
-      "Kayıt işlemi yakında eklenecek. Şimdilik misafir olarak devam edebilirsiniz."
-    );
-    handleContinueAsGuest();
+  const handleBackToPhone = () => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setStep("PHONE");
+    setOtp("");
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" />
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
+      <StatusBar barStyle={themeScheme === 'dark' ? 'light-content' : 'dark-content'} />
 
+      {/* Background Patterns */}
       <View pointerEvents="none" style={styles.patternTopWrapper}>
         <Image
           source={require("@/assets/images/efishpatterns.png")}
@@ -100,119 +244,217 @@ export default function LoginScreen() {
         showsVerticalScrollIndicator={false}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
           style={styles.container}
         >
-          <View style={styles.languagePill}>
-            <Text style={styles.languageText}>EN</Text>
-          </View>
-
-          <Image
-            source={require("@/assets/images/efishlogo.png")}
-            style={styles.logo}
-            resizeMode="contain"
-          />
-
-          <View style={styles.titleBlock}>
-            <Text style={styles.welcomeTitle}>Welcome</Text>
-            <Text style={styles.welcomeSubtitle}>
-              If you're ready to boost your energy with efish, let's get
-              started!
-            </Text>
-          </View>
-
-          <View style={styles.inputStack}>
-            <View style={styles.phoneRow}>
-              <Pressable style={styles.countrySelector}>
-                <Text style={styles.countryCode}>+90</Text>
-                <Ionicons name="chevron-down" size={18} color={navy} />
-              </Pressable>
-              <TextInput
-                placeholder="(5xx) xxx xx xx"
-                placeholderTextColor="#6a7789"
-                keyboardType="phone-pad"
-                style={styles.phoneInput}
-                value={phone}
-                onChangeText={handlePhoneChange}
-              />
-            </View>
-
-            <View style={styles.passwordRow}>
-              <TextInput
-                placeholder="Password"
-                placeholderTextColor="#6a7789"
-                secureTextEntry={!showPassword}
-                style={styles.passwordInput}
-                value={password}
-                onChangeText={setPassword}
-              />
-              <Pressable
-                onPress={() => setShowPassword((prev) => !prev)}
-                hitSlop={10}
-                style={styles.eyeButton}
-              >
-                <Ionicons
-                  name={showPassword ? "eye-off-outline" : "eye-outline"}
-                  size={22}
-                  color={navy}
-                />
-              </Pressable>
-            </View>
-          </View>
-
-          <View style={styles.helperRow}>
-            <Pressable
-              onPress={() => setRememberMe((prev) => !prev)}
-              style={styles.rememberRow}
-            >
-              <View
-                style={[styles.checkbox, rememberMe && styles.checkboxChecked]}
-              >
-                {rememberMe && (
-                  <Ionicons name="checkmark" size={16} color="#ffffff" />
-                )}
+          <Animated.View
+            style={[
+              styles.contentWrap,
+              { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
+            ]}
+          >
+            {/* Header / Logo */}
+            <View style={styles.header}>
+              <View style={[styles.langPill, { backgroundColor: colors.backgroundSecondary }]}>
+                <Text style={[styles.langText, { color: colors.text }]}>EN</Text>
               </View>
-              <Text style={styles.rememberText}>Remember Me</Text>
-            </Pressable>
+              <Image
+                source={require("@/assets/images/efishlogo.png")}
+                style={[styles.logo]}
+                resizeMode="contain"
+              />
+            </View>
 
-            <Pressable onPress={handleForgotPassword}>
-              <Text style={styles.forgotLink}>Forgot Password</Text>
-            </Pressable>
-          </View>
+            {/* Main Card */}
+            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder, shadowColor: colors.shadow }]}>
+              <View style={styles.titleBlock}>
+                <Text style={[styles.welcomeTitle, { color: colors.text }]}>
+                  {step === "PHONE" ? "Welcome Back" : "Verify It's You"}
+                </Text>
+                <Text style={[styles.welcomeSubtitle, { color: colors.textSecondary }]}>
+                  {step === "PHONE"
+                    ? "Enter your mobile number"
+                    : `Enter code sent to ${countryCode} ${phone}`
+                  }
+                </Text>
+              </View>
 
-          <Pressable onPress={handleContinueAsGuest} style={styles.guestLink}>
-            <Text style={styles.guestText}>Continue As a Guest &gt;&gt;</Text>
-          </Pressable>
+              {step === "PHONE" ? (
+                <View style={styles.formGroup}>
+                  <View style={[styles.phoneInputWrap, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
+                    <Pressable
+                      style={[styles.countryBadge, { backgroundColor: colors.card, borderColor: colors.border }]}
+                      onPress={() => setShowCountryPicker(!showCountryPicker)}
+                    >
+                      <Text style={[styles.countryText, { color: colors.text }]}>TR {countryCode}</Text>
+                    </Pressable>
+                    {/* Simple Picker Modal Overlay - keeping it inside mainly for simplicity or use absolute */}
+                    {showCountryPicker && (
+                      <View style={{
+                        position: 'absolute',
+                        top: 50,
+                        left: 0,
+                        backgroundColor: colors.card,
+                        borderRadius: 12,
+                        padding: 4,
+                        elevation: 10,
+                        shadowColor: colors.shadow,
+                        shadowOpacity: 0.1,
+                        shadowRadius: 10,
+                        zIndex: 100,
+                        borderWidth: 1,
+                        borderColor: colors.border
+                      }}>
+                        {["+90", "+1", "+44", "+49"].map(code => (
+                          <Pressable
+                            key={code}
+                            style={{ padding: 10 }}
+                            onPress={() => {
+                              setCountryCode(code);
+                              setShowCountryPicker(false);
+                            }}
+                          >
+                            <Text style={{ fontWeight: '600', color: colors.text }}>{code}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    )}
 
-          <View style={styles.actionButtons}>
-            <Pressable onPress={handleSignUp} style={styles.signUpButton}>
-              <Text style={styles.signUpText}>Sign up</Text>
-            </Pressable>
-            <Pressable
-              onPress={handleSignIn}
-              disabled={!isFormValid}
-              style={[
-                styles.signInButton,
-                isFormValid
-                  ? styles.signInButtonActive
-                  : styles.signInButtonDisabled,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.signInText,
-                  isFormValid
-                    ? styles.signInTextActive
-                    : styles.signInTextDisabled,
-                ]}
-              >
-                Sign in
-              </Text>
-            </Pressable>
-          </View>
+                    <TextInput
+                      placeholder="(5••) ••• ••••"
+                      placeholderTextColor={colors.textTertiary}
+                      keyboardType="phone-pad"
+                      style={[styles.phoneInput, { color: colors.text }]}
+                      value={phone}
+                      onChangeText={handlePhoneChange}
+                      autoFocus
+                    />
+                  </View>
+
+                  <View style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'flex-start' }}>
+                    <Pressable
+                      onPress={() => setKeepSignedIn((prev) => !prev)}
+                      style={styles.checkboxRow}
+                    >
+                      <View style={[
+                        styles.checkbox,
+                        { borderColor: themeScheme === 'dark' && keepSignedIn ? colors.primary : colors.text },
+                        keepSignedIn && { backgroundColor: themeScheme === 'dark' ? colors.primary : colors.text }
+                      ]}>
+                        {keepSignedIn && <Ionicons name="checkmark" size={12} color={themeScheme === 'dark' ? "#000" : colors.card} />}
+                      </View>
+                      <Text style={[styles.checkboxText, { color: colors.text }]}>Keep me signed in</Text>
+                    </Pressable>
+                  </View>
+
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.primaryButton,
+                      { backgroundColor: themeScheme === 'dark' ? colors.primary : navy },
+                      !isPhoneValid && [styles.buttonDisabled, { backgroundColor: themeScheme === 'dark' ? colors.cardBorder : "#e2e8f0" }],
+                      pressed && styles.buttonPressed
+                    ]}
+                    onPress={handleContinue}
+                    disabled={!isPhoneValid || isLoading}
+                  >
+                    {isLoading ? (
+                      <ActivityIndicator color={colors.primaryText} />
+                    ) : (
+                      <>
+                        <Text style={[styles.primaryButtonText, { color: colors.primaryText }, !isPhoneValid && { color: colors.textTertiary }]}>Continue</Text>
+                        <Ionicons name="arrow-forward" size={18} color={isPhoneValid ? colors.primaryText : colors.textTertiary} />
+                      </>
+                    )}
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={styles.formGroup}>
+                  {/* Segmented OTP Input */}
+                  <Pressable
+                    style={styles.otpContainer}
+                    onPress={() => {
+                      otpInputRef.current?.focus();
+                    }}
+                  >
+                    <TextInput
+                      ref={otpInputRef}
+                      style={styles.otpHiddenInput}
+                      keyboardType="number-pad"
+                      maxLength={6}
+                      value={otp}
+                      onChangeText={(t) => {
+                        setOtp(t);
+                        if (t.length === 6) {
+                          // Optional: Auto-submit call logic can go here
+                        }
+                      }}
+                      autoFocus
+                    />
+                    <View style={styles.otpBoxesContainer} pointerEvents="none">
+                      {Array.from({ length: 6 }).map((_, idx) => (
+                        <View
+                          key={idx}
+                          style={[
+                            styles.otpBox,
+                            { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder },
+                            otp.length === idx && [styles.otpBoxActive, { borderColor: colors.primary, backgroundColor: colors.card, shadowColor: colors.primary }],
+                            otp.length > idx && [styles.otpBoxFilled, { borderColor: colors.text, backgroundColor: colors.card }]
+                          ]}
+                        >
+                          <Text style={[
+                            styles.otpText,
+                            { color: colors.text },
+                            otp.length === idx && { color: colors.primary }
+                          ]}>{otp[idx] || ""}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </Pressable>
+
+                  <Pressable
+                    style={({ pressed }) => [
+                      styles.primaryButton,
+                      { backgroundColor: themeScheme === 'dark' ? colors.primary : navy },
+                      (otp.length !== 6 || isLoading) && [styles.buttonDisabled, { backgroundColor: themeScheme === 'dark' ? colors.cardBorder : "#e2e8f0" }],
+                      pressed && styles.buttonPressed
+                    ]}
+                    onPress={handleVerify}
+                    disabled={otp.length !== 6 || isLoading}
+                  >
+                    {isLoading ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={[styles.primaryButtonText, { color: colors.primaryText }, otp.length !== 6 && styles.buttonTextDisabled]}>Verify & Login</Text>
+                    )}
+                  </Pressable>
+
+                  <Pressable onPress={handleBackToPhone} style={styles.textLink}>
+                    <Text style={styles.textLinkContent}>Change Number</Text>
+                  </Pressable>
+                </View>
+              )}
+            </View>
+
+            {/* Footer */}
+            <View style={styles.footer}>
+              <Pressable onPress={handleContinueAsGuest} style={styles.guestLink}>
+                <Text style={[styles.guestText, { color: colors.text }]}>Continue as Guest</Text>
+              </Pressable>
+            </View>
+          </Animated.View>
         </KeyboardAvoidingView>
-      </ScrollView>
-    </SafeAreaView>
+      </ScrollView >
+
+      {/* Custom Toast */}
+      {
+        toast.visible && (
+          <View style={styles.toast}>
+            <Ionicons name="information-circle" size={20} color="#fff" />
+            <Text style={styles.toastText}>{toast.message}</Text>
+          </View>
+        )
+      }
+    </SafeAreaView >
   );
 }
 
@@ -223,222 +465,269 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
+    justifyContent: "center",
   },
   container: {
     flex: 1,
-    paddingHorizontal: 24,
-    paddingTop: 12,
-    paddingBottom: 24,
-    gap: 18,
+    padding: 24,
+    justifyContent: 'center',
+  },
+  contentWrap: {
+    gap: 32,
   },
   patternTopWrapper: {
     position: "absolute",
-    top: 0,
-    right: 0,
-    width: 140,
-    height: 140,
-    zIndex: 0,
+    top: -60,
+    right: -40,
+    width: 250,
+    height: 250,
+    opacity: 0.5,
     transform: [{ rotate: "180deg" }],
-    opacity: 0.3,
   },
   patternTop: {
     width: "100%",
     height: "100%",
-    resizeMode: "cover",
+    resizeMode: "contain",
   },
   patternBottomWrapper: {
     position: "absolute",
-    bottom: 0,
-    left: 0,
-    width: 180,
-    height: 180,
-    zIndex: 0,
-    opacity: 0.3,
+    bottom: -60,
+    left: -40,
+    width: 280,
+    height: 280,
+    opacity: 0.5,
   },
   patternBottom: {
     width: "100%",
     height: "100%",
-    resizeMode: "cover",
+    resizeMode: "contain",
   },
-  languagePill: {
-    alignSelf: "flex-end",
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: "#eef2f6",
-    borderRadius: 999,
-    zIndex: 1,
-  },
-  languageText: {
-    color: navy,
-    fontWeight: "700",
+  header: {
+    alignItems: "center",
   },
   logo: {
-    alignSelf: "center",
     width: 140,
-    height: 60,
-    marginTop: 12,
+    height: 70,
+  },
+  langPill: {
+    position: "absolute",
+    right: 0,
+    top: 0,
+    backgroundColor: "#f1f5f9",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  langText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: navy,
+  },
+  card: {
+    backgroundColor: "#ffffff",
+    borderRadius: 36,
+    padding: 32,
+    shadowColor: navy,
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.12,
+    shadowRadius: 32,
+    elevation: 12,
+    borderWidth: 1,
+    borderColor: "#f8fafc",
+    gap: 28,
   },
   titleBlock: {
-    gap: 6,
-    zIndex: 1,
-  },
-  welcomeTitle: {
-    fontSize: 32,
-    fontWeight: "800",
-    color: navy,
-    marginTop: 24,
-  },
-  welcomeSubtitle: {
-    fontSize: 17,
-    color: body,
-    lineHeight: 24,
-  },
-  inputStack: {
-    gap: 14,
-    zIndex: 1,
-  },
-  phoneRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  countrySelector: {
-    height: 58,
-    minWidth: 96,
-    paddingHorizontal: 14,
-    borderRadius: 20,
-    backgroundColor: field,
-    borderWidth: 1,
-    borderColor: border,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  countryCode: {
-    color: navy,
-    fontWeight: "700",
-    fontSize: 16,
-  },
-  phoneInput: {
-    flex: 1,
-    height: 58,
-    borderRadius: 20,
-    backgroundColor: field,
-    borderWidth: 1,
-    borderColor: border,
-    paddingHorizontal: 16,
-    fontSize: 16,
-    color: navy,
-  },
-  passwordRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    height: 58,
-    borderRadius: 20,
-    backgroundColor: field,
-    borderWidth: 1,
-    borderColor: border,
-    paddingHorizontal: 14,
-  },
-  passwordInput: {
-    flex: 1,
-    fontSize: 16,
-    color: navy,
-  },
-  eyeButton: {
-    paddingHorizontal: 6,
-  },
-  helperRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    zIndex: 1,
-  },
-  rememberRow: {
-    flexDirection: "row",
     alignItems: "center",
     gap: 8,
   },
+  welcomeTitle: {
+    fontSize: 26,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+  },
+  welcomeSubtitle: {
+    fontSize: 15,
+    fontWeight: "500",
+  },
+  formGroup: {
+    gap: 20,
+  },
+  phoneInputWrap: {
+    height: 60,
+    borderRadius: 20,
+    backgroundColor: field,
+    borderWidth: 1.5,
+    borderColor: border,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 8,
+  },
+  countryBadge: {
+    backgroundColor: "#ffffff",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: "#f1f5f9",
+  },
+  countryText: {
+    fontWeight: "700",
+    color: navy,
+    fontSize: 13,
+  },
+  phoneInput: {
+    flex: 1,
+    height: "100%",
+    fontSize: 18,
+    fontWeight: "600",
+    color: navy,
+    letterSpacing: 0.5,
+  },
+  checkboxRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    justifyContent: "center",
+  },
   checkbox: {
-    width: 22,
-    height: 22,
+    width: 20,
+    height: 20,
     borderRadius: 6,
     borderWidth: 2,
     borderColor: navy,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#ffffff",
+    backgroundColor: "#fff",
   },
   checkboxChecked: {
     backgroundColor: navy,
     borderColor: navy,
   },
-  rememberText: {
+  checkboxText: {
     color: navy,
+    fontWeight: "600",
+    fontSize: 14,
+  },
+  primaryButton: {
+    height: 60,
+    borderRadius: 20,
+    backgroundColor: navy,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    shadowColor: navy,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  buttonPressed: {
+    transform: [{ scale: 0.98 }],
+    opacity: 0.9,
+  },
+  buttonDisabled: {
+    backgroundColor: "#e2e8f0",
+    shadowOpacity: 0,
+  },
+  primaryButtonText: {
+    color: "#fff",
+    fontSize: 17,
     fontWeight: "700",
   },
-  forgotLink: {
-    color: navy,
-    fontWeight: "700",
-    textDecorationLine: "underline",
+  buttonTextDisabled: {
+    color: "#94a3b8",
   },
-  guestLink: {
+  otpContainer: {
+    height: 60,
+    position: "relative",
+    justifyContent: "center",
+  },
+  otpHiddenInput: {
+    position: "absolute",
+    width: "100%",
+    height: "100%",
+    opacity: 0,
+    zIndex: 10, // Ensure it's on top
+  },
+  otpBoxesContainer: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    width: "100%",
+  },
+  otpBox: {
+    width: 46,
+    height: 60,
+    borderRadius: 14,
+    backgroundColor: field,
+    borderWidth: 1.5,
+    borderColor: border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  otpBoxActive: {
+    borderColor: primary,
+    backgroundColor: "#fff",
+    borderWidth: 2,
+    shadowColor: primary,
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    transform: [{ scale: 1.05 }],
+  },
+  otpBoxFilled: {
+    borderColor: navy,
+    backgroundColor: "#fff",
+  },
+  otpText: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: navy,
+  },
+  textLink: {
     alignItems: "center",
     paddingVertical: 8,
-    zIndex: 1,
+  },
+  textLinkContent: {
+    color: "#64748b",
+    fontWeight: "600",
+    fontSize: 14,
+  },
+  footer: {
+    alignItems: "center",
+  },
+  guestLink: {
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    opacity: 0.8,
   },
   guestText: {
     color: navy,
-    fontSize: 16,
-    fontWeight: "800",
-  },
-  actionButtons: {
-    flexDirection: "row",
-    gap: 12,
-    marginTop: 6,
-    zIndex: 1,
-  },
-  signUpButton: {
-    flex: 1,
-    height: 50,
-    borderRadius: 14,
-    backgroundColor: "transparent",
-    borderWidth: 2,
-    borderColor: "#2cdb9b",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  signUpText: {
-    color: "#2cdb9b",
-    fontWeight: "800",
     fontSize: 15,
+    fontWeight: "700",
+    opacity: 0.8,
   },
-  signInButton: {
-    flex: 1,
-    height: 50,
-    borderRadius: 14,
-    backgroundColor: "transparent",
+  toast: {
+    position: "absolute",
+    top: 60,
+    alignSelf: "center",
+    backgroundColor: "#0f231c",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 999,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    gap: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 10,
+    zIndex: 100,
   },
-  signInText: {
-    color: navy,
-    fontWeight: "800",
-    fontSize: 16,
-  },
-  signInButtonDisabled: {
-    backgroundColor: "#d6dde6",
-    borderWidth: 1,
-    borderColor: "#c4ccd7",
-  },
-  signInTextDisabled: {
-    color: "#7f8b99",
-  },
-  signInButtonActive: {
-    backgroundColor: "#2cdb9b",
-    borderWidth: 0,
-  },
-  signInTextActive: {
-    color: "#ffffff",
+  toastText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 13,
   },
 });
