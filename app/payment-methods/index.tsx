@@ -1,23 +1,55 @@
 import { useTheme } from "@/context/ThemeContext";
 import { PaymentCard, usePayment } from "@/context/payment/PaymentContext";
-import { Ionicons } from "@expo/vector-icons";
+import { FontAwesome5, Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { Stack, useRouter } from "expo-router";
 import React from "react";
 import {
     Alert,
-    FlatList,
+    LayoutAnimation,
+    Platform,
     Pressable,
     SafeAreaView,
     StyleSheet,
     Text,
+    UIManager,
     View
 } from "react-native";
+import Animated, {
+    LinearTransition,
+    interpolateColor,
+    useAnimatedStyle,
+    useDerivedValue,
+    withTiming
+} from "react-native-reanimated";
+
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+const AnimatedText = Animated.createAnimatedComponent(Text);
+const AnimatedView = Animated.createAnimatedComponent(View);
+// Casting to any to avoid strict prop typing issues with Animated.createAnimatedComponent and vector-icons
+const AnimatedIonicons = Animated.createAnimatedComponent(Ionicons) as any;
+const AnimatedFontAwesome5 = Animated.createAnimatedComponent(FontAwesome5) as any;
+const AnimatedMaterialCommunityIcons = Animated.createAnimatedComponent(MaterialCommunityIcons) as any;
+
+if (Platform.OS === 'android') {
+    if (UIManager.setLayoutAnimationEnabledExperimental) {
+        UIManager.setLayoutAnimationEnabledExperimental(true);
+    }
+}
 
 export default function PaymentMethodsScreen() {
     const router = useRouter();
     const { colors } = useTheme();
     const { cards, removeCard, setDefaultCard } = usePayment();
+
+    const sortedCards = React.useMemo(() => {
+        return [...cards].sort((a, b) => (b.isDefault ? 1 : 0) - (a.isDefault ? 1 : 0));
+    }, [cards]);
+
+    const handleSetDefault = async (id: string) => {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        await setDefaultCard(id);
+    };
 
     const handleRemove = (id: string) => {
         Alert.alert(
@@ -29,40 +61,6 @@ export default function PaymentMethodsScreen() {
             ]
         );
     };
-
-    const renderItem = ({ item }: { item: PaymentCard }) => (
-        <View style={[styles.cardItem, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <View style={styles.cardInfo}>
-                <View style={[styles.iconContainer, { backgroundColor: colors.backgroundSecondary }]}>
-                    <Ionicons name="card" size={24} color={colors.primary} />
-                </View>
-                <View style={styles.textContainer}>
-                    <Text style={[styles.cardNumber, { color: colors.text }]}>
-                        •••• •••• •••• {item.number.slice(-4)}
-                    </Text>
-                    <Text style={[styles.expiry, { color: colors.textSecondary }]}>
-                        Expires {item.expiry}
-                    </Text>
-                </View>
-            </View>
-
-            <View style={styles.actions}>
-                {item.isDefault ? (
-                    <View style={[styles.defaultBadge, { backgroundColor: colors.primary + '20' }]}>
-                        <Text style={[styles.defaultText, { color: colors.primary }]}>Default</Text>
-                    </View>
-                ) : (
-                    <Pressable onPress={() => setDefaultCard(item.id)}>
-                        <Text style={[styles.actionText, { color: colors.primary }]}>Set Default</Text>
-                    </Pressable>
-                )}
-
-                <Pressable onPress={() => handleRemove(item.id)} style={styles.deleteBtn}>
-                    <Ionicons name="trash-outline" size={20} color={colors.danger} />
-                </Pressable>
-            </View>
-        </View>
-    );
 
     return (
         <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
@@ -76,11 +74,19 @@ export default function PaymentMethodsScreen() {
             />
 
             <View style={styles.content}>
-                <FlatList
-                    data={cards}
-                    renderItem={renderItem}
+                <Animated.FlatList
+                    data={sortedCards}
+                    renderItem={({ item }) => (
+                        <CardItem
+                            item={item}
+                            colors={colors}
+                            onSetDefault={handleSetDefault}
+                            onRemove={handleRemove}
+                        />
+                    )}
                     keyExtractor={(item) => item.id}
                     contentContainerStyle={styles.listContent}
+                    itemLayoutAnimation={LinearTransition}
                     ListEmptyComponent={
                         <View style={styles.emptyContainer}>
                             <Ionicons name="wallet-outline" size={64} color={colors.textTertiary} />
@@ -109,6 +115,127 @@ export default function PaymentMethodsScreen() {
         </SafeAreaView>
     );
 }
+
+const CardItem = ({
+    item,
+    colors,
+    onSetDefault,
+    onRemove
+}: {
+    item: PaymentCard,
+    colors: any,
+    onSetDefault: (id: string) => void,
+    onRemove: (id: string) => void
+}) => {
+    const isDefault = item.isDefault;
+    const progress = useDerivedValue(() => {
+        return withTiming(isDefault ? 1 : 0, { duration: 300 });
+    }, [isDefault]);
+
+    const containerStyle = useAnimatedStyle(() => {
+        const backgroundColor = interpolateColor(
+            progress.value,
+            [0, 1],
+            [colors.card, colors.primary]
+        );
+        const borderColor = interpolateColor(
+            progress.value,
+            [0, 1],
+            [colors.border, colors.primary]
+        );
+        return { backgroundColor, borderColor };
+    });
+
+    const textStyle = useAnimatedStyle(() => {
+        const color = interpolateColor(
+            progress.value,
+            [0, 1],
+            [colors.text, '#ffffff']
+        );
+        return { color };
+    });
+
+    const subTextStyle = useAnimatedStyle(() => {
+        const color = interpolateColor(
+            progress.value,
+            [0, 1],
+            [colors.textSecondary, 'rgba(255,255,255,0.8)']
+        );
+        return { color };
+    });
+
+    const iconContainerStyle = useAnimatedStyle(() => {
+        const backgroundColor = interpolateColor(
+            progress.value,
+            [0, 1],
+            [colors.backgroundSecondary, 'rgba(255,255,255,0.2)']
+        );
+        return { backgroundColor };
+    });
+
+    const iconStyle = useAnimatedStyle(() => {
+        const color = interpolateColor(
+            progress.value,
+            [0, 1],
+            [colors.text, '#ffffff']
+        );
+        return { color };
+    });
+
+    // Icon component that accepts animated props
+    const CardIcon = () => {
+        const iconProps = { size: 24, style: iconStyle };
+        // We need to pass the animated style to the icon directly
+        // Since we can't easily conditionally render animated components with animated props inside logic nicely,
+        // we'll use a slightly different approach or just render specific ones.
+        // Actually, easiest is to use the Animated components created above.
+
+        switch (item.type) {
+            case 'visa': return <AnimatedFontAwesome5 name="cc-visa" size={24} style={iconStyle} />;
+            case 'mastercard': return <AnimatedFontAwesome5 name="cc-mastercard" size={24} style={iconStyle} />;
+            case 'amex': return <AnimatedFontAwesome5 name="cc-amex" size={24} style={iconStyle} />;
+            case 'discover': return <AnimatedFontAwesome5 name="cc-discover" size={24} style={iconStyle} />;
+            default: return <AnimatedMaterialCommunityIcons name="credit-card-chip-outline" size={24} style={iconStyle} />;
+        }
+    };
+
+    return (
+        <AnimatedView
+            layout={LinearTransition}
+            style={[styles.cardItem, containerStyle]}
+        >
+            <View style={styles.cardInfo}>
+                <AnimatedView style={[styles.iconContainer, iconContainerStyle]}>
+                    <CardIcon />
+                </AnimatedView>
+                <View style={styles.textContainer}>
+                    <AnimatedText style={[styles.cardNumber, textStyle]}>
+                        •••• •••• •••• {item.number.slice(-4)}
+                    </AnimatedText>
+                    <AnimatedText style={[styles.expiry, subTextStyle]}>
+                        Expires {item.expiry}
+                    </AnimatedText>
+                </View>
+            </View>
+
+            <View style={styles.actions}>
+                {isDefault ? (
+                    <View style={[styles.defaultBadge, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
+                        <Text style={[styles.defaultText, { color: '#fff' }]}>Default</Text>
+                    </View>
+                ) : (
+                    <Pressable onPress={() => onSetDefault(item.id)}>
+                        <Text style={[styles.actionText, { color: colors.primary }]}>Set Default</Text>
+                    </Pressable>
+                )}
+
+                <Pressable onPress={() => onRemove(item.id)} style={styles.deleteBtn}>
+                    <AnimatedIonicons name="trash-outline" size={20} style={iconStyle} />
+                </Pressable>
+            </View>
+        </AnimatedView>
+    );
+};
 
 const styles = StyleSheet.create({
     safeArea: { flex: 1 },

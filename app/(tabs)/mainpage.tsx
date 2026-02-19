@@ -3,7 +3,7 @@ import ChargingWidget from "@/components/ChargingWidget";
 import SocketErrorModal from "@/components/SocketErrorModal";
 import { useUser } from "@/context/UserContext";
 import { useChargingSimulation } from "@/hooks/useChargingSimulation";
-import { getRegisteredVehicles, getStationDetails, getStations, startChargingSession, stopChargingSession } from "@/services/api";
+import { getRegisteredVehicles, getStationDetails, startChargingSession, stopChargingSession } from "@/services/api";
 import { getAccessToken } from "@/services/tokenStorage";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -95,6 +95,7 @@ export default function MapScreen() {
   const meterWsRef = useRef<WebSocket | null>(null);
   const meterBaseWhRef = useRef<number | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttempts = useRef(0);
 
   // Start'tan dönen session uuid; Stop'ta kullanılır
   const activeChargeSessionUuidRef = useRef<string | null>(null);
@@ -143,6 +144,39 @@ export default function MapScreen() {
     }
   };
 
+
+  const sendBoundingBoxUpdate = useCallback((region: Region) => {
+    if (meterWsRef.current?.readyState === WebSocket.OPEN) {
+      const minLon = region.longitude - region.longitudeDelta / 2;
+      const maxLon = region.longitude + region.longitudeDelta / 2;
+      const minLat = region.latitude - region.latitudeDelta / 2;
+      const maxLat = region.latitude + region.latitudeDelta / 2;
+
+      const payload = {
+        type: "update_bounding_box",
+        min_lat: minLat,
+        max_lat: maxLat,
+        min_lng: minLon,
+        max_lng: maxLon
+      };
+      // console.log("🔌 WS SEND BBOX:", JSON.stringify(payload));
+      meterWsRef.current.send(JSON.stringify(payload));
+    }
+  }, []);
+
+  // Debounced version of sendBoundingBoxUpdate
+  // Debounced version of sendBoundingBoxUpdate
+  const sendBoundingBoxUpdateDebounced = useMemo(() => {
+    let timeoutId: ReturnType<typeof setTimeout>;
+    return (region: Region) => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        sendBoundingBoxUpdate(region);
+      }, 500); // 500ms debounce
+    };
+  }, [sendBoundingBoxUpdate]);
+
+
   const connectMeterValuesSocket = useCallback(async (isReconnect = false) => {
     try {
       const token = await getAccessToken();
@@ -167,97 +201,211 @@ export default function MapScreen() {
       const scheme = (apiUrl || "").startsWith("https") ? "wss" : "ws";
       const host =
         typeof apiUrl === "string" ? new URL(apiUrl).host : "efish-backend.uptecra.com";
-      const wsUrl = `${scheme}://${host}/ws/meter-values/?token=${encodeURIComponent(token)}`;
-      const ws = new WebSocket(wsUrl);
+
+      // Method 1: No token in Query Param, use Header
+      const wsUrl = `${scheme}://${host}/ws/meter-values/`;
+
+      // @ts-ignore - React Native WebSocket accepts options as 3rd arg
+      const ws = new WebSocket(wsUrl, [], {
+        headers: {
+          Origin: `https://${host}`,
+          Authorization: `Bearer ${token}`
+        },
+      });
 
       ws.onopen = () => {
         console.log("Meter values WebSocket connected:", wsUrl);
         meterBaseWhRef.current = null;
+        reconnectAttempts.current = 0; // Reset attempts on successful connection
       };
 
       ws.onmessage = (event) => {
-        console.log("Meter values message raw:", event.data);
+        // console.log("🔌 WS RECV:", event.data);
         try {
           const data = JSON.parse(event.data);
-          let payload: any = {};
 
-          if (data && typeof data === "object") {
-            // Backend: type "socket_status" -> data.status "Charging", data.power, data.counter
-            if (data.type === "socket_status" && data.data && typeof data.data === "object") {
-              const d = data.data;
-              const isCharging = (d.status || "").toLowerCase() === "charging";
-              const powerKw = typeof d.power === "number" ? d.power : parseFloat(d.power);
-              const counterKwh = typeof d.counter === "number" ? d.counter : parseFloat(d.counter);
-              payload = {
-                power_kw: isCharging ? (Number.isFinite(powerKw) ? powerKw : 1) : 0,
-                charged_kwh: Number.isFinite(counterKwh) ? counterKwh : undefined,
-                cost: typeof d.cost === "number" ? d.cost : undefined,
-              };
-              if (!isCharging) {
-                charging.updateFromMeterValues({ power_kw: 0, charged_kwh: payload.charged_kwh, cost: payload.cost } as any);
-                return;
-              }
+          if (data.type === "connection_established") {
+            console.log("WS Connection Established:", data.message);
+            // Send initial bbox if available
+            if (currentRegion.current) {
+              sendBoundingBoxUpdate(currentRegion.current);
             }
-            // Simple backend payload (flat soc, power_kw, energy_kwh)
-            else if (
-              data.soc != null ||
-              data.batteryLevel != null ||
-              data.power_kw != null ||
-              data.power != null ||
-              data.energy_kwh != null ||
-              data.charged_kwh != null
-            ) {
-              payload = {
-                batteryLevel: data.batteryLevel ?? data.soc,
-                power_kw: data.power_kw ?? data.power,
-                charged_kwh: data.charged_kwh ?? data.energy_kwh,
-                cost: data.cost,
-                duration_sec: data.duration_sec ?? data.duration,
-              };
-            }
-            // Raw OCPP-style MeterValues payload
-            else if (Array.isArray(data.meterValue)) {
-              const mv = data.meterValue[0];
-              const sv = Array.isArray(mv?.sampledValue) ? mv.sampledValue : [];
-              let soc: number | undefined;
-              let powerW: number | undefined;
-              let energyWh: number | undefined;
+            return;
+          }
 
-              sv.forEach((s: any) => {
-                if (s.measurand === "SoC") {
-                  soc = Number(s.value);
-                } else if (s.measurand === "Power.Active.Import") {
-                  powerW = Number(s.value);
-                } else if (s.measurand === "Energy.Active.Import.Register") {
-                  energyWh = Number(s.value);
+          if (data.type === "charge_areas_update") {
+            if (Array.isArray(data.charge_areas)) {
+              const stations = data.charge_areas.map((s: any) => {
+                const lat = Number(s.lat);
+                const lng = Number(s.lng);
+
+                // Calculate total available sockets from socket_stats
+                // Example stats: {"AC": {"available": 0, "total": 1}, "HPC": {"available": 1, "total": 1}}
+                let availableCount = 0;
+                let totalCount = 0;
+                if (s.socket_stats) {
+                  Object.values(s.socket_stats).forEach((stat: any) => {
+                    availableCount += (stat.available || 0);
+                    totalCount += (stat.total || 0);
+                  });
                 }
+
+                // If no specific connectors list is sent, we can mock it or leave it empty
+                // The map mostly needs location, status, type, and available count.
+                // Detail view fetches full details separately.
+
+                return {
+                  id: s.id,
+                  uuid: s.uuid,
+                  name: s.name,
+                  latitude: lat,
+                  longitude: lng,
+                  type: s.type, // "AC", "HPC", etc.
+                  powerKw: s.max_power,
+                  status: (s.status || "").toLowerCase(),
+                  isEfish: true, // Assuming these are all efish for now
+                  is_public: s.is_public,
+                  is_24h: s.is_24h,
+                  address: '',
+                  socket_stats: s.socket_stats,
+                  // We don't have full connector list in this update, but that's okay for the map pin
+                  connectors: []
+                };
               });
 
-              let chargedKwh: number | undefined;
-              if (typeof energyWh === "number" && !Number.isNaN(energyWh)) {
-                if (meterBaseWhRef.current == null) {
-                  meterBaseWhRef.current = energyWh;
-                }
-                chargedKwh = Math.max(0, (energyWh - meterBaseWhRef.current) / 1000);
-              }
+              setStationsList(stations);
+            }
+            return;
+          }
 
-              payload = {
-                batteryLevel: soc,
-                power_kw: typeof powerW === "number" && !Number.isNaN(powerW) ? powerW / 1000 : undefined,
-                charged_kwh: chargedKwh,
+          if (data.type === "charge_area_detail") {
+            const detailData = data.data;
+            if (detailData) {
+              // Convert to our app's internal format if needed, mainly lat/lng are string in JSON
+              const formattedDetail = {
+                ...detailData,
+                latitude: parseFloat(detailData.lat),
+                longitude: parseFloat(detailData.lng),
+                connectors: detailData.charge_points // Map your charge_points to connectors or keep as is? App seems to use 'connectors' in some places, but DetailView might use raw data.
               };
+              setStationDetails(formattedDetail);
+              setIsFetchingDetails(false);
+            }
+            return;
+          }
+
+          if (data.type === "socket_status") {
+            const statusData = data.data;
+            console.log("🔌 SOCKET CHANGE RECEIVED:", JSON.stringify(statusData, null, 2));
+            if (statusData) {
+              // 1. Update StationDetails (if open)
+              setStationDetails((currentDetails: any) => {
+                if (!currentDetails || !currentDetails.charge_points) return currentDetails;
+
+                let hasChange = false;
+                const updatedPoints = currentDetails.charge_points.map((cp: any) => {
+                  if (!cp.sockets) return cp;
+                  const updatedSockets = cp.sockets.map((s: any) => {
+                    if (s.uuid === statusData.uuid) {
+                      hasChange = true;
+                      return {
+                        ...s,
+                        status: statusData.status,
+                        status_display: statusData.status,
+                      };
+                    }
+                    return s;
+                  });
+                  if (updatedSockets !== cp.sockets) {
+                    // Check if any socket changed actually? 
+                    // logic above creates new array if map runs, but elements only change if uuid matches.
+                    // Actually cp.sockets.map returns new array always.
+                    // We need to be careful about reference equality if we want to rely on 'hasChange' solely?
+                    // But I set hasChange = true inside.
+                    return { ...cp, sockets: updatedSockets };
+                  }
+                  return cp;
+                });
+
+                return hasChange ? { ...currentDetails, charge_points: updatedPoints } : currentDetails;
+              });
+
+              // 2. Update Map Markers
+              if (currentRegion.current) {
+                sendBoundingBoxUpdateDebounced(currentRegion.current);
+              }
+            }
+            // Fallthrough to generic logic below
+          }
+
+
+          // Handle generic meter values / socket status for Active Charging Session
+          let payload: any = {};
+          let rawData = data;
+
+          // Normalize if wrapped in "data"
+          if (data.type === "socket_status" || data.type === "meter_values" || data.type === "charge_session") {
+            rawData = data.data || {};
+          }
+
+          // Backend: type "socket_status" -> data.status "Charging", data.power, data.counter
+          if (data.type === "socket_status" || (rawData.status && rawData.power)) {
+            // ... existing charging widget update logic ... 
+            // We reuse the parsing logic you already had, just ensuring it handles the new format which is cleaner.
+            // The new 'socket_status' for a *specific* socket (global update) might not belong to *my* session.
+            // We should verify if this socket update is relevant to MY active session if possible.
+            // But existing logic seemed to assume any 'socket_status' *with power/counter* meant my session?
+            // No, the new 'socket_status' is broadcasted. 
+            // IMPORTANT: We must filter 'socket_status' to only update 'charging' simulation/widget 
+            // IF it matches our session or we are just showing "A socket is charging".
+
+            // The specification says "meter_values" is "sadece sarj yapan kullaniciya ozel".
+            // So "meter_values" is the source of truth for the active session widget.
+            // "socket_status" is for the map/details.
+            // I will separate them to prevent map updates from confusing the charging widget.
+          }
+
+          if (data.type === "meter_values" || data.type === "charge_session") {
+            console.log("🔌 METER VALUES RECEIVED:", JSON.stringify(data, null, 2));
+            const d = rawData;
+            const isCharging = (d.status || "").toLowerCase() === "charging" || !d.isCompleted;
+
+            // Spec: energy is Wh -> /1000 for kWh
+            // Spec: power is W -> /1000 for kW
+            // Spec: total_energy is kWh already.
+
+            // Prioritize "total_energy" from message if available
+            let chargedKwh = undefined;
+            if (d.total_energy != null) {
+              chargedKwh = parseFloat(String(d.total_energy));
+            } else if (d.energy != null) {
+              // If total not sent, maybe calculate from start meter?
+              // But usually total_energy is sent.
+              // Fallback: energy(Wh) / 1000
+              chargedKwh = d.energy / 1000;
+            }
+
+            const powerKw = d.power != null ? d.power / 1000 : 0;
+            const batteryLevel = d.soc ?? null;
+
+            payload = {
+              power_kw: powerKw,
+              charged_kwh: chargedKwh,
+              cost: d.price != null && d.total_energy != null ? (d.price * d.total_energy) : undefined, // estimation
+              batteryLevel: batteryLevel,
+              // duration_sec? Not in spec explicit fields, maybe calculate client side or optional
+            };
+
+            if (Object.keys(payload).length > 0) {
+              charging.updateFromMeterValues({
+                batteryLevel: payload.batteryLevel,
+                power_kw: payload.power_kw,
+                charged_kwh: payload.charged_kwh,
+                cost: payload.cost
+              } as any);
             }
           }
 
-          if (payload && Object.keys(payload).length > 0) {
-            charging.updateFromMeterValues({
-              batteryLevel: payload.batteryLevel,
-              power_kw: payload.power_kw,
-              charged_kwh: payload.charged_kwh,
-              cost: payload.cost,
-              duration_sec: payload.duration_sec,
-            } as any);
-          }
         } catch (e) {
           console.log("Failed to parse meter values message", e);
         }
@@ -270,9 +418,22 @@ export default function MapScreen() {
       ws.onclose = (event) => {
         console.log("Meter values WebSocket closed:", event.code, event.reason);
         meterWsRef.current = null;
+
+        // Stop reconnecting if we get a 403 Forbidden
+        if (event.reason && event.reason.includes("403")) {
+          console.warn("WebSocket Auth Failed (403). Stopping reconnect loop.");
+          return;
+        }
+
         // Uygulama açıkken sürekli dinleyebilmek için kapanınca yeniden bağlan (giriş yapmış kullanıcı için)
         if (user && !reconnectTimeoutRef.current) {
-          const delay = isReconnect ? 5000 : 3000;
+          reconnectAttempts.current += 1;
+          const attempt = reconnectAttempts.current;
+          // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s... max 30s
+          const delay = isReconnect ? Math.min(30000, 1000 * Math.pow(2, attempt - 1)) : 1000;
+
+          console.log(`WebSocket Reconnecting in ${delay}ms (Attempt ${attempt})`);
+
           reconnectTimeoutRef.current = setTimeout(() => {
             reconnectTimeoutRef.current = null;
             connectMeterValuesSocket(true);
@@ -290,7 +451,7 @@ export default function MapScreen() {
         }, 5000);
       }
     }
-  }, [charging.updateFromMeterValues, user]);
+  }, [charging.updateFromMeterValues, user, sendBoundingBoxUpdate]);
 
   const handleStopCharging = useCallback(async () => {
     const uuid = activeChargeSessionUuidRef.current;
@@ -361,15 +522,33 @@ export default function MapScreen() {
 
   const handleFetchDetails = async (uuid: string) => {
     setIsFetchingDetails(true);
-    try {
-      const data = await getStationDetails(uuid);
-      setStationDetails(data);
-      // Expand sheet if needed?
-      // bottomSheetRef.current?.expand();
-    } catch (e) {
-      console.error("Fetch details error", e);
-    } finally {
-      setIsFetchingDetails(false);
+    // If WS is open, send request
+    if (meterWsRef.current?.readyState === WebSocket.OPEN) {
+      console.log("Requesting details via WS for:", uuid);
+      meterWsRef.current.send(JSON.stringify({
+        type: "get_charge_area_detail",
+        uuid: uuid
+      }));
+      // We don't await here, we wait for 'charge_area_detail' message
+      // Timeout fallback? 
+      // For now assume it works. State 'isFetchingDetails' will stay true until message received.
+      // Add a safety timeout to clear loader?
+      setTimeout(() => {
+        setIsFetchingDetails((current) => {
+          if (current) return false; // turn off if still on
+          return current;
+        });
+      }, 5000);
+    } else {
+      // Fallback to HTTP if WS not connected
+      try {
+        const data = await getStationDetails(uuid);
+        setStationDetails(data);
+      } catch (e) {
+        console.error("Fetch details error", e);
+      } finally {
+        setIsFetchingDetails(false);
+      }
     }
   };
 
@@ -381,7 +560,7 @@ export default function MapScreen() {
   ]);
   const [onlyEfish, setOnlyEfish] = useState(true);
   const [showPublic, setShowPublic] = useState(true);
-  const [showNearby, setShowNearby] = useState(true);
+  const [showFavorites, setShowFavorites] = useState(false);
   const [userLocation, setUserLocation] =
     useState<Location.LocationObject | null>(null);
   const [locationPermission, setLocationPermission] = useState<boolean>(false);
@@ -396,6 +575,18 @@ export default function MapScreen() {
 
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const toastAnim = useRef(new Animated.Value(-100)).current;
+
+  // Header Slide Down Animation
+  const headerAnim = useRef(new Animated.Value(-150)).current;
+
+  useEffect(() => {
+    Animated.spring(headerAnim, {
+      toValue: 0,
+      useNativeDriver: true,
+      speed: 12,
+      bounciness: 6,
+    }).start();
+  }, []);
 
   useEffect(() => {
     if (params.showLoginSuccess === "true") {
@@ -549,31 +740,13 @@ export default function MapScreen() {
     };
   }, []);
 
-  const fetchStations = async (region: Region, types: StationType[]) => {
-    try {
-      const minLon = region.longitude - region.longitudeDelta / 2;
-      const maxLon = region.longitude + region.longitudeDelta / 2;
-      const minLat = region.latitude - region.latitudeDelta / 2;
-      const maxLat = region.latitude + region.latitudeDelta / 2;
-
-      const bbox = `${minLon},${minLat},${maxLon},${maxLat}`;
-      // Pass the current type filters to the API
-      const data = await getStations(bbox, types);
-
-      if (Array.isArray(data)) {
-        setStationsList(data);
-      }
-    } catch (error: any) {
-      console.error("Failed to fetch stations", error);
-    }
-  };
 
   // Keep track of current region to refetch when filters change
   const currentRegion = useRef<Region>(initialRegion);
 
   const onRegionChangeComplete = (region: Region) => {
     currentRegion.current = region;
-    fetchStations(region, typeFilters);
+    sendBoundingBoxUpdate(region);
 
     if (userLocation) {
       const dist = getDistanceFromLatLonInKm(
@@ -586,10 +759,10 @@ export default function MapScreen() {
     }
   };
 
-  // Re-fetch when filters change
+  // Re-fetch when filters change (send update over socket)
   useEffect(() => {
-    fetchStations(currentRegion.current, typeFilters);
-  }, [typeFilters]);
+    sendBoundingBoxUpdate(currentRegion.current);
+  }, [typeFilters, sendBoundingBoxUpdate]);
 
   const handleRecenter = () => {
     if (userLocation && mapRef.current) {
@@ -716,15 +889,7 @@ export default function MapScreen() {
     []
   );
 
-  const sortedTypes = useMemo(() => {
-    const base: StationType[] = ["HPC", "DC", "AC"];
-    return [...base].sort((a, b) => {
-      const aSel = typeFilters.includes(a);
-      const bSel = typeFilters.includes(b);
-      if (aSel !== bSel) return aSel ? -1 : 1;
-      return a.localeCompare(b);
-    });
-  }, [typeFilters]);
+
 
   const { types, toggles } = useMemo(() => {
     const types = (["HPC", "DC", "AC"] as StationType[]).map((type) => {
@@ -740,6 +905,18 @@ export default function MapScreen() {
     });
 
     const toggles = [
+      {
+        key: "favorites",
+        label: "",
+        color: "#ff4d4d", // Red/Pink for heart
+        icon: "heart",
+        active: showFavorites,
+        kind: "toggle" as const,
+        onPress: () => {
+          withAnimation();
+          setShowFavorites((v) => !v);
+        },
+      },
       {
         key: "onlyEfish",
         label: "Only efish",
@@ -764,22 +941,11 @@ export default function MapScreen() {
           setShowPublic((v) => !v);
         },
       },
-      {
-        key: "nearby",
-        label: "Nearby",
-        color: "#2cdb9b",
-        icon: "locate",
-        active: showNearby,
-        kind: "toggle" as const,
-        onPress: () => {
-          withAnimation();
-          setShowNearby((v) => !v);
-        },
-      },
+
     ];
 
     return { types, toggles };
-  }, [typeFilters, onlyEfish, showPublic, showNearby]);
+  }, [typeFilters, onlyEfish, showPublic, showFavorites]);
 
   return (
     <View style={[styles.page, { backgroundColor: colors.background }]}>
@@ -972,95 +1138,128 @@ export default function MapScreen() {
         </MapView>
 
         <View style={[styles.overlay, { paddingTop: topInset }]}>
-          <View style={styles.topRow}>
-            <View style={[styles.searchCard, { backgroundColor: colors.card, shadowColor: colors.shadow, borderColor: colors.border }]}>
-              <TextInput
-                placeholder="Search location..."
-                placeholderTextColor={colors.textTertiary}
-                value={search}
-                onChangeText={setSearch}
-                style={[styles.searchInput, { backgroundColor: "transparent", color: colors.text }]}
-              />
-            </View>
-            {user ? (
-              <Pressable style={[styles.bell, { backgroundColor: colors.card, shadowColor: colors.shadow, borderColor: colors.border }]}>
-                <Ionicons
-                  name="notifications-outline"
-                  size={22}
-                  color={colors.text}
+          {/* Main Header Card Container */}
+          <Animated.View style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            marginHorizontal: 4,
+            paddingTop: topInset,
+            paddingBottom: 4, // Smaller bottom padding
+            backgroundColor: isDark ? "rgba(30, 30, 30, 0.85)" : "rgba(255, 255, 255, 0.95)", // Semi-transparent for glass effect
+            borderBottomLeftRadius: 40,
+            borderBottomRightRadius: 40,
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 4 }, // Reduced shadow
+            shadowOpacity: 0.1,
+            shadowRadius: 12,
+            elevation: 8,
+            zIndex: 10,
+            transform: [{ translateY: headerAnim }]
+          }}>
+            {/* Row 1: Search & Bell/Login */}
+            <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, marginBottom: 12 }}>
+              <View style={{
+                flex: 1,
+                height: 48, // Slightly taller
+                backgroundColor: isDark ? "#333" : "#fff", // Use white in light mode for contrast
+                borderRadius: 99,
+                justifyContent: 'center',
+                borderWidth: 1,
+                borderColor: isDark ? "#444" : "#e0e0e0", // Subtle borde
+              }}>
+                <TextInput
+                  placeholder="Search"
+                  placeholderTextColor={colors.textTertiary}
+                  value={search}
+                  onChangeText={setSearch}
+                  style={{
+                    flex: 1,
+                    paddingHorizontal: 16,
+                    fontSize: 16,
+                    color: colors.text
+                  }}
                 />
-              </Pressable>
-            ) : (
-              <Pressable
-                onPress={() => {
-                  if (router.canDismiss()) {
-                    router.dismissAll();
-                  }
-                  router.replace("/");
-                }}
-                style={[
-                  styles.bell,
-                  {
-                    width: 'auto',
+              </View>
+
+              {user ? (
+                <Pressable style={{
+                  width: 48, // Match height
+                  height: 48,
+                  borderRadius: 99,
+                  backgroundColor: isDark ? "#333" : "#fff",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderWidth: 1,
+                  borderColor: isDark ? "#444" : "#e0e0e0",
+                }}>
+                  <Ionicons
+                    name="notifications-outline"
+                    size={24}
+                    color={colors.text}
+                  />
+                </Pressable>
+              ) : (
+                <Pressable
+                  onPress={() => {
+                    if (router.canDismiss()) {
+                      router.dismissAll();
+                    }
+                    router.replace("/");
+                  }}
+                  style={{
+                    height: 48,
                     paddingHorizontal: 16,
                     backgroundColor: colors.primary,
-                    borderColor: colors.primary,
-                  }
-                ]}
-              >
-                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 13 }}>Log In</Text>
-              </Pressable>
-            )}
-          </View>
+                    borderRadius: 14,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    shadowColor: colors.primary,
+                    shadowOffset: { width: 0, height: 4 },
+                    shadowOpacity: 0.3,
+                    shadowRadius: 8,
+                    elevation: 4,
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "700", fontSize: 13 }}>Log In</Text>
+                </Pressable>
+              )}
+            </View>
+            {/* Row 2: Filters */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingBottom: 12 }}
+            >
+              {/* Types Chips */}
+              {types.map((item) => (
+                <FilterChip
+                  key={item.key}
+                  label={item.label}
+                  color={item.color}
+                  active={item.active}
+                  lightningCount={item.lightningCount}
+                  onPress={item.onPress}
+                  colors={colors}
+                  compact
+                />
+              ))}
 
-          {/* Filter Row (Always visible now) */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filterRow}
-          >
-            <View>
-              <View style={styles.filterLabelWrap}>
-                <Text style={[styles.filterLabel, { color: colors.textSecondary }]}>Station Types</Text>
-              </View>
-              <View style={{ flexDirection: "row", gap: 10 }}>
-                {types.map((item) => (
-                  <FilterChip
-                    key={item.key}
-                    label={item.label}
-                    color={item.color}
-                    active={item.active}
-                    lightningCount={item.lightningCount}
-                    onPress={item.onPress}
-                    colors={colors}
-                  />
-                ))}
-              </View>
-            </View>
-            <View style={[styles.filterDivider, { backgroundColor: colors.border }]} />
-            <View>
-              <Text style={[styles.filterLabel, { color: colors.textSecondary }]}>Types</Text>
-              <View
-                style={{
-                  flexDirection: "row",
-                  gap: 10,
-                  alignItems: "baseline",
-                  justifyContent: "flex-end",
-                }}
-              >
-                {toggles.map((item) => (
-                  <TogglePill
-                    key={item.key}
-                    label={item.label}
-                    icon={item.icon}
-                    active={item.active}
-                    onPress={item.onPress}
-                    colors={colors}
-                  />
-                ))}
-              </View>
-            </View>
-          </ScrollView>
+              {/* Toggles Chips (Favorites, Public, Efish) */}
+              {toggles.map((item) => (
+                <TogglePill
+                  key={item.key}
+                  label={item.label}
+                  icon={item.icon}
+                  active={item.active}
+                  onPress={item.onPress}
+                  colors={colors}
+                  compact
+                />
+              ))}
+            </ScrollView>
+          </Animated.View>
 
           {/* Charging Widget (Floating below filters) */}
           {charging.isActive && charging.isMinimized && (
@@ -1195,17 +1394,7 @@ export default function MapScreen() {
               </View>
             ) : selectedStation && (
               <>
-                <View style={{ flexDirection: "row", justifyContent: "flex-end" }}><Pressable
-                  onPress={closeSheet}
-                  hitSlop={10}
-                  style={{
-                    padding: 4,
-                    backgroundColor: isDark ? "#252525ff" : "#f0f2f5",
-                    borderRadius: 20
-                  }}
-                >
-                  <Ionicons name="close" size={20} color={colors.text} />
-                </Pressable></View>
+
                 <View style={styles.sheetHeader}>
 
                   <View style={{ flex: 1, marginRight: 10 }}>
@@ -1222,26 +1411,38 @@ export default function MapScreen() {
                           shadowOpacity: 0.8,
                           shadowRadius: 6,
                         }} />
-                        <Text
-                          style={[
-                            styles.stationName,
-                            isDark ? styles.stationNameDark : styles.stationNameLight,
-                            { flex: 1 }
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {stationDetails?.name || selectedStation.name}
-                        </Text>
-                        {/* Address Toggle Chevron */}
+                        <View style={{ flexDirection: 'row' }}>
+                          <Text
+                            style={[
+                              styles.stationName,
+                              isDark ? styles.stationNameDark : styles.stationNameLight]}
+                          >
+                            {stationDetails?.name || selectedStation.name}
+                          </Text>
+                          {/* Address Toggle Chevron */}
+                          <Pressable
+                            onPress={() => {
+                              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                              setShowAddress(!showAddress);
+                            }}
+                            hitSlop={10}
+                            style={{ padding: 4 }}
+                          >
+                            <Ionicons name={showAddress ? "chevron-up" : "chevron-down"} size={20} color={colors.textSecondary} />
+                          </Pressable>
+                        </View>
+                      </View>
+                      <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
                         <Pressable
-                          onPress={() => {
-                            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                            setShowAddress(!showAddress);
-                          }}
+                          onPress={closeSheet}
                           hitSlop={10}
-                          style={{ padding: 4 }}
+                          style={{
+                            padding: 4,
+                            backgroundColor: isDark ? "#252525ff" : "#f0f2f5",
+                            borderRadius: 20
+                          }}
                         >
-                          <Ionicons name={showAddress ? "chevron-up" : "chevron-down"} size={20} color={colors.textSecondary} />
+                          <Ionicons name="close" size={20} color={colors.text} />
                         </Pressable>
                       </View>
                     </View>
@@ -1509,7 +1710,7 @@ export default function MapScreen() {
         </Modal>
 
       </View>
-    </View>
+    </View >
   );
 }
 
@@ -1520,6 +1721,7 @@ type FilterChipProps = {
   active: boolean;
   onPress: () => void;
   lightningCount?: number;
+  compact?: boolean;
 };
 
 function FilterChip({
@@ -1529,6 +1731,7 @@ function FilterChip({
   onPress,
   lightningCount,
   colors,
+  compact,
 }: FilterChipProps & { colors: any }) {
   const anim = React.useRef(new Animated.Value(active ? 1 : 0)).current;
 
@@ -1552,14 +1755,6 @@ function FilterChip({
     inputRange: [0, 1],
     outputRange: [color, "#ffffff"],
   });
-  const subColor = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [colors.textSecondary, "#ffffff"],
-  });
-  const dotColor = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [color, "#ffffff"],
-  });
 
   return (
     <Pressable onPress={onPress}>
@@ -1570,13 +1765,16 @@ function FilterChip({
             backgroundColor: bg,
             borderColor: border,
             shadowOpacity: active ? 0.12 : 0.06,
+            paddingHorizontal: compact ? 10 : 14,
+            paddingVertical: compact ? 6 : 9,
+            gap: compact ? 4 : 6,
           },
         ]}
       >
         <View>
           <View style={{ flexDirection: "row", alignItems: "center" }}>
             {lightningCount ? (
-              <View style={{ flexDirection: "row", marginRight: 6 }}>
+              <View style={{ flexDirection: "row", marginRight: compact ? 4 : 6 }}>
                 {Array.from({ length: lightningCount }).map((_, idx) => (
                   <View
                     key={idx}
@@ -1587,14 +1785,14 @@ function FilterChip({
                   >
                     <Ionicons
                       name="flash"
-                      size={14}
+                      size={compact ? 12 : 14}
                       color={active ? "#ffffff" : color}
                     />
                   </View>
                 ))}
               </View>
             ) : null}
-            <Animated.Text style={[styles.chipText, { color: textColor }]}>
+            <Animated.Text style={[styles.chipText, { color: textColor, fontSize: compact ? 12 : 13 }]}>
               {label}
             </Animated.Text>
           </View>
@@ -1609,9 +1807,10 @@ type TogglePillProps = {
   icon: any;
   active: boolean;
   onPress: () => void;
+  compact?: boolean;
 };
 
-function TogglePill({ label, icon, active, onPress, colors }: TogglePillProps & { colors: any }) {
+function TogglePill({ label, icon, active, onPress, colors, compact }: TogglePillProps & { colors: any }) {
   const anim = React.useRef(new Animated.Value(active ? 1 : 0)).current;
 
   useEffect(() => {
@@ -1638,10 +1837,6 @@ function TogglePill({ label, icon, active, onPress, colors }: TogglePillProps & 
     inputRange: [0, 1],
     outputRange: [colors.backgroundSecondary, colors.card],
   });
-  const iconColor = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [colors.text, colors.primary],
-  });
 
   return (
     <Pressable onPress={onPress}>
@@ -1652,20 +1847,23 @@ function TogglePill({ label, icon, active, onPress, colors }: TogglePillProps & 
             backgroundColor: bg,
             borderColor: border,
             shadowOpacity: active ? 0.1 : 0.06,
+            paddingHorizontal: compact ? 10 : 12,
+            paddingVertical: compact ? 6 : 8,
+            gap: compact ? 4 : 6,
           },
         ]}
       >
-        <Animated.View style={[styles.toggleIcon, { backgroundColor: iconBg }]}>
+        <Animated.View style={[styles.toggleIcon, { backgroundColor: iconBg, width: compact ? 18 : 20, height: compact ? 18 : 20 }]}>
           <Animated.View>
             <Ionicons
               name={icon}
-              size={14}
+              size={compact ? 12 : 14}
               color={active ? colors.primary : colors.text}
             />
           </Animated.View>
         </Animated.View>
         <Animated.Text
-          style={[styles.toggleText, { color: textColor }]}
+          style={[styles.toggleText, { color: textColor, fontSize: compact ? 12 : 13 }]}
         >
           {label}
         </Animated.Text>
@@ -1710,8 +1908,8 @@ const styles = StyleSheet.create({
   },
   overlay: {
     position: "absolute",
-    left: 12,
-    right: 12,
+    left: 0, // Reset to 0
+    right: 0, // Reset to 0
     gap: 10,
   },
   topRow: {
@@ -1752,6 +1950,7 @@ const styles = StyleSheet.create({
     gap: 8,
     flexWrap: "wrap",
   },
+
   bell: {
     width: 46,
     height: 46,
@@ -1911,6 +2110,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    paddingTop: 20
   },
   stationName: {
     fontSize: 20,
@@ -2067,17 +2267,17 @@ const styles = StyleSheet.create({
   },
   recenterBtn: {
     flexDirection: "row",
-    alignItems: "center",
     backgroundColor: "#ffffff",
     paddingVertical: 10,
     paddingHorizontal: 16,
-    borderRadius: 24,
+    borderRadius: 999,
+    width: 60,
+    height: 60,
+    alignItems: "center",
+    justifyContent: "center",
     gap: 8,
-    shadowColor: "#000",
-    shadowOpacity: 0.15,
-    shadowOffset: { width: 0, height: 6 },
-    shadowRadius: 12,
-    elevation: 8,
+    borderWidth: 1,
+    borderColor: "#e6e6e6",
   },
   recenterText: {
     fontWeight: "700",

@@ -7,37 +7,40 @@ import { HapticTab } from "@/components/haptic-tab";
 import { useTheme } from "@/context/ThemeContext";
 
 export default function TabLayout() {
-  const { colors } = useTheme();
+  const { colors, themeScheme } = useTheme();
   const router = useRouter();
+
+  const isDark = themeScheme === 'dark';
 
   return (
     <Tabs
       initialRouteName="mainpage"
       screenOptions={{
-        tabBarActiveTintColor: colors.tabIconSelected,
-        tabBarInactiveTintColor: colors.tabIconDefault,
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textSecondary,
         tabBarStyle: {
           position: "absolute",
-          left: 12,
-          right: 12,
-          bottom: 16,
-          height: 70,
-          borderRadius: 999,
-          paddingVertical: 42,
-          marginBottom: 24,
-          marginHorizontal: 12,
-          backgroundColor: colors.card,
+          bottom: 0,
+          left: 0,
+          right: 0,
+          backgroundColor: isDark ? "rgba(30, 30, 30, 0.85)" : "rgba(255, 255, 255, 0.95)", // Semi-transparent for glass effect
           borderTopWidth: 0,
-          shadowColor: colors.shadow,
-          shadowOpacity: 0.14,
-          shadowOffset: { width: 0, height: 14 },
-          shadowRadius: 24,
-          elevation: 18,
+          elevation: 0, // Remove heavy shadow for cleaner look
+          shadowColor: "#000",
+          shadowOffset: { width: 0, height: -2 },
+          shadowOpacity: 0.03, // Very subtle shadow
+          shadowRadius: 8,
+          height: 96, // Taller and spacious
+          paddingTop: 16,
+          paddingBottom: 34, // Safe area
+          borderTopLeftRadius: 40, // More rounded
+          borderTopRightRadius: 40,
+          marginHorizontal: 4
         },
-        tabBarItemStyle: { paddingVertical: 6 },
+        tabBarItemStyle: { paddingVertical: 4 },
         headerShown: false,
         tabBarButton: HapticTab,
-        tabBarLabelStyle: { fontWeight: "800", fontSize: 12 },
+        tabBarLabelStyle: { fontWeight: "600", fontSize: 12, marginTop: 2 },
       }}
     >
       <Tabs.Screen
@@ -67,8 +70,8 @@ export default function TabLayout() {
             backgroundColor: colors.background,
           },
           headerTintColor: colors.text,
-          tabBarIcon: ({ color }) => (
-            <Ionicons size={26} name="flash" color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons size={28} name={focused ? "flash" : "flash-outline"} color={color} />
           ),
         })}
       />
@@ -85,27 +88,26 @@ export default function TabLayout() {
           tabBarIcon: ({ focused }) => (
             <View
               style={{
-                width: focused ? 72 : 64,
-                height: focused ? 72 : 64,
-                borderRadius: 999,
-                backgroundColor: "transparent",
+                width: 54,
+                height: 54,
+                borderRadius: 27,
+                backgroundColor: focused ? colors.primary : colors.card,
                 alignItems: "center",
                 justifyContent: "center",
-                shadowColor: colors.shadow,
-                shadowOpacity: focused ? 0.12 : 0.06,
-                shadowOffset: { width: 0, height: 8 },
-                shadowRadius: 12,
-                elevation: focused ? 8 : 2,
-                transform: [{ translateY: -25 }],
+                shadowColor: focused ? colors.primary : "#000",
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: focused ? 0.3 : 0.05,
+                shadowRadius: 8,
+                elevation: focused ? 6 : 2,
               }}
             >
               <Image
                 source={require("@/assets/images/efishjuste.png")}
                 style={{
-                  width: 65,
-                  height: 65,
+                  width: 38,
+                  height: 38,
                   resizeMode: "contain",
-                  borderRadius: 999,
+                  tintColor: focused ? "#fff" : undefined,
                 }}
               />
             </View>
@@ -132,11 +134,11 @@ export default function TabLayout() {
             backgroundColor: colors.background,
           },
           headerTintColor: colors.text,
-          tabBarIcon: ({ color }) => (
-            <Ionicons size={26} name="person-circle" color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons size={28} name={focused ? "person-circle" : "person-circle-outline"} color={color} />
           ),
         })}
       />
-    </Tabs>
+    </Tabs >
   );
 }

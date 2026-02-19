@@ -195,7 +195,7 @@ export type UserProfile = {
 };
 
 export const getProfile = async () => {
-    const response = await api.get("/api/v1/web/users/me/");
+    const response = await api.get("/api/v1/web/profile/");
     console.log("getProfile response:", JSON.stringify(response.data, null, 2));
 
     // Handle different response structures
