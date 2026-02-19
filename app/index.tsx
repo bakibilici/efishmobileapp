@@ -3,11 +3,13 @@ import { useUser } from "@/context/UserContext";
 import { sendOtp, setAuthToken, verifyOtp } from "@/services/api";
 import { saveTokens } from "@/services/tokenStorage";
 import { Ionicons } from "@expo/vector-icons";
+import * as Sentry from "@sentry/react-native";
 import { usePathname, useRouter } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
+  Button,
   Image,
   KeyboardAvoidingView,
   LayoutAnimation,
@@ -19,7 +21,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  View
+  View,
 } from "react-native";
 
 const navy = "#0f2f4f";
@@ -76,8 +78,6 @@ export default function LoginScreen() {
     ]).start();
   }, []);
 
-
-
   const pathname = usePathname(); // Add usePathname hook
 
   // Auto-redirect if already logged in AND we are on the login screen
@@ -93,7 +93,10 @@ export default function LoginScreen() {
     }
   }, [user, isUserLoading, pathname]);
 
-  const isPhoneValid = useMemo(() => phone.replace(/\D/g, "").length >= 10, [phone]);
+  const isPhoneValid = useMemo(
+    () => phone.replace(/\D/g, "").length >= 10,
+    [phone],
+  );
   const isOtpValid = useMemo(() => otp.length === 6, [otp]);
 
   const showToast = (message: string) => {
@@ -142,7 +145,10 @@ export default function LoginScreen() {
       const fullPhone = countryCode.replace("+", "") + cleanPhone;
 
       const response = await verifyOtp(fullPhone, otp);
-      console.log("verifyOtp FULL response:", JSON.stringify(response, null, 2));
+      console.log(
+        "verifyOtp FULL response:",
+        JSON.stringify(response, null, 2),
+      );
 
       setIsLoading(false);
 
@@ -153,8 +159,8 @@ export default function LoginScreen() {
           params: {
             phone_number: cleanPhone,
             phone_code: countryCode.replace("+", ""),
-            registered_token: response.registered_token // Pass the token
-          }
+            registered_token: response.registered_token, // Pass the token
+          },
         });
       } else {
         // Login Success
@@ -163,13 +169,14 @@ export default function LoginScreen() {
         console.log("response.access_token:", response.access_token);
 
         // Try both response.data.access_token and response.access_token
-        const accessToken = response.data?.access_token || response.access_token;
-        const refreshToken = response.data?.refresh_token || response.refresh_token;
+        const accessToken =
+          response.data?.access_token || response.access_token;
+        const refreshToken =
+          response.data?.refresh_token || response.refresh_token;
         const userData = response.data?.user || response.user;
 
         console.log("accessToken found:", !!accessToken);
         console.log("refreshToken found:", !!refreshToken);
-
 
         if (accessToken && refreshToken) {
           console.log("Saving tokens...");
@@ -181,7 +188,7 @@ export default function LoginScreen() {
           console.log("Tokens saved!");
 
           // Small delay to ensure SecureStore write completes
-          await new Promise(resolve => setTimeout(resolve, 100));
+          await new Promise((resolve) => setTimeout(resolve, 100));
 
           if (userData) {
             console.log("Setting user from response:", userData);
@@ -199,10 +206,9 @@ export default function LoginScreen() {
         }
         router.replace({
           pathname: "/(tabs)/mainpage",
-          params: { showLoginSuccess: "true" }
+          params: { showLoginSuccess: "true" },
         });
       }
-
     } catch (error: any) {
       setIsLoading(false);
       const msg = error.response?.data?.message || "Invalid verification code";
@@ -221,8 +227,12 @@ export default function LoginScreen() {
   };
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
-      <StatusBar barStyle={themeScheme === 'dark' ? 'light-content' : 'dark-content'} />
+    <SafeAreaView
+      style={[styles.safeArea, { backgroundColor: colors.background }]}
+    >
+      <StatusBar
+        barStyle={themeScheme === "dark" ? "light-content" : "dark-content"}
+      />
 
       {/* Background Patterns */}
       <View pointerEvents="none" style={styles.patternTopWrapper}>
@@ -250,13 +260,20 @@ export default function LoginScreen() {
           <Animated.View
             style={[
               styles.contentWrap,
-              { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
+              { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
             ]}
           >
             {/* Header / Logo */}
             <View style={styles.header}>
-              <View style={[styles.langPill, { backgroundColor: colors.backgroundSecondary }]}>
-                <Text style={[styles.langText, { color: colors.text }]}>EN</Text>
+              <View
+                style={[
+                  styles.langPill,
+                  { backgroundColor: colors.backgroundSecondary },
+                ]}
+              >
+                <Text style={[styles.langText, { color: colors.text }]}>
+                  EN
+                </Text>
               </View>
               <Image
                 source={require("@/assets/images/efishlogo.png")}
@@ -266,46 +283,79 @@ export default function LoginScreen() {
             </View>
 
             {/* Main Card */}
-            <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.cardBorder, shadowColor: colors.shadow }]}>
+            <View
+              style={[
+                styles.card,
+                {
+                  backgroundColor: colors.card,
+                  borderColor: colors.cardBorder,
+                  shadowColor: colors.shadow,
+                },
+              ]}
+            >
               <View style={styles.titleBlock}>
                 <Text style={[styles.welcomeTitle, { color: colors.text }]}>
                   {step === "PHONE" ? "Welcome Back" : "Verify It's You"}
                 </Text>
-                <Text style={[styles.welcomeSubtitle, { color: colors.textSecondary }]}>
+                <Text
+                  style={[
+                    styles.welcomeSubtitle,
+                    { color: colors.textSecondary },
+                  ]}
+                >
                   {step === "PHONE"
                     ? "Enter your mobile number"
-                    : `Enter code sent to ${countryCode} ${phone}`
-                  }
+                    : `Enter code sent to ${countryCode} ${phone}`}
                 </Text>
               </View>
 
               {step === "PHONE" ? (
                 <View style={styles.formGroup}>
-                  <View style={[styles.phoneInputWrap, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
+                  <View
+                    style={[
+                      styles.phoneInputWrap,
+                      {
+                        backgroundColor: colors.inputBackground,
+                        borderColor: colors.inputBorder,
+                      },
+                    ]}
+                  >
                     <Pressable
-                      style={[styles.countryBadge, { backgroundColor: colors.card, borderColor: colors.border }]}
+                      style={[
+                        styles.countryBadge,
+                        {
+                          backgroundColor: colors.card,
+                          borderColor: colors.border,
+                        },
+                      ]}
                       onPress={() => setShowCountryPicker(!showCountryPicker)}
                     >
-                      <Text style={[styles.countryText, { color: colors.text }]}>TR {countryCode}</Text>
+                      <Text
+                        style={[styles.countryText, { color: colors.text }]}
+                      >
+                        TR {countryCode}
+                      </Text>
                     </Pressable>
                     {/* Simple Picker Modal Overlay - keeping it inside mainly for simplicity or use absolute */}
                     {showCountryPicker && (
-                      <View style={{
-                        position: 'absolute',
-                        top: 50,
-                        left: 0,
-                        backgroundColor: colors.card,
-                        borderRadius: 12,
-                        padding: 4,
-                        elevation: 10,
-                        shadowColor: colors.shadow,
-                        shadowOpacity: 0.1,
-                        shadowRadius: 10,
-                        zIndex: 100,
-                        borderWidth: 1,
-                        borderColor: colors.border
-                      }}>
-                        {["+90", "+1", "+44", "+49"].map(code => (
+                      <View
+                        style={{
+                          position: "absolute",
+                          top: 50,
+                          left: 0,
+                          backgroundColor: colors.card,
+                          borderRadius: 12,
+                          padding: 4,
+                          elevation: 10,
+                          shadowColor: colors.shadow,
+                          shadowOpacity: 0.1,
+                          shadowRadius: 10,
+                          zIndex: 100,
+                          borderWidth: 1,
+                          borderColor: colors.border,
+                        }}
+                      >
+                        {["+90", "+1", "+44", "+49"].map((code) => (
                           <Pressable
                             key={code}
                             style={{ padding: 10 }}
@@ -314,7 +364,11 @@ export default function LoginScreen() {
                               setShowCountryPicker(false);
                             }}
                           >
-                            <Text style={{ fontWeight: '600', color: colors.text }}>{code}</Text>
+                            <Text
+                              style={{ fontWeight: "600", color: colors.text }}
+                            >
+                              {code}
+                            </Text>
                           </Pressable>
                         ))}
                       </View>
@@ -331,28 +385,70 @@ export default function LoginScreen() {
                     />
                   </View>
 
-                  <View style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'flex-start' }}>
+                  <View
+                    style={{
+                      display: "flex",
+                      flexDirection: "row",
+                      alignItems: "flex-start",
+                      justifyContent: "flex-start",
+                    }}
+                  >
                     <Pressable
                       onPress={() => setKeepSignedIn((prev) => !prev)}
                       style={styles.checkboxRow}
                     >
-                      <View style={[
-                        styles.checkbox,
-                        { borderColor: themeScheme === 'dark' && keepSignedIn ? colors.primary : colors.text },
-                        keepSignedIn && { backgroundColor: themeScheme === 'dark' ? colors.primary : colors.text }
-                      ]}>
-                        {keepSignedIn && <Ionicons name="checkmark" size={12} color={themeScheme === 'dark' ? "#000" : colors.card} />}
+                      <View
+                        style={[
+                          styles.checkbox,
+                          {
+                            borderColor:
+                              themeScheme === "dark" && keepSignedIn
+                                ? colors.primary
+                                : colors.text,
+                          },
+                          keepSignedIn && {
+                            backgroundColor:
+                              themeScheme === "dark"
+                                ? colors.primary
+                                : colors.text,
+                          },
+                        ]}
+                      >
+                        {keepSignedIn && (
+                          <Ionicons
+                            name="checkmark"
+                            size={12}
+                            color={
+                              themeScheme === "dark" ? "#000" : colors.card
+                            }
+                          />
+                        )}
                       </View>
-                      <Text style={[styles.checkboxText, { color: colors.text }]}>Keep me signed in</Text>
+                      <Text
+                        style={[styles.checkboxText, { color: colors.text }]}
+                      >
+                        Keep me signed in
+                      </Text>
                     </Pressable>
                   </View>
 
                   <Pressable
                     style={({ pressed }) => [
                       styles.primaryButton,
-                      { backgroundColor: themeScheme === 'dark' ? colors.primary : navy },
-                      !isPhoneValid && [styles.buttonDisabled, { backgroundColor: themeScheme === 'dark' ? colors.cardBorder : "#e2e8f0" }],
-                      pressed && styles.buttonPressed
+                      {
+                        backgroundColor:
+                          themeScheme === "dark" ? colors.primary : navy,
+                      },
+                      !isPhoneValid && [
+                        styles.buttonDisabled,
+                        {
+                          backgroundColor:
+                            themeScheme === "dark"
+                              ? colors.cardBorder
+                              : "#e2e8f0",
+                        },
+                      ],
+                      pressed && styles.buttonPressed,
                     ]}
                     onPress={handleContinue}
                     disabled={!isPhoneValid || isLoading}
@@ -361,8 +457,24 @@ export default function LoginScreen() {
                       <ActivityIndicator color={colors.primaryText} />
                     ) : (
                       <>
-                        <Text style={[styles.primaryButtonText, { color: colors.primaryText }, !isPhoneValid && { color: colors.textTertiary }]}>Continue</Text>
-                        <Ionicons name="arrow-forward" size={18} color={isPhoneValid ? colors.primaryText : colors.textTertiary} />
+                        <Text
+                          style={[
+                            styles.primaryButtonText,
+                            { color: colors.primaryText },
+                            !isPhoneValid && { color: colors.textTertiary },
+                          ]}
+                        >
+                          Continue
+                        </Text>
+                        <Ionicons
+                          name="arrow-forward"
+                          size={18}
+                          color={
+                            isPhoneValid
+                              ? colors.primaryText
+                              : colors.textTertiary
+                          }
+                        />
                       </>
                     )}
                   </Pressable>
@@ -396,16 +508,36 @@ export default function LoginScreen() {
                           key={idx}
                           style={[
                             styles.otpBox,
-                            { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder },
-                            otp.length === idx && [styles.otpBoxActive, { borderColor: colors.primary, backgroundColor: colors.card, shadowColor: colors.primary }],
-                            otp.length > idx && [styles.otpBoxFilled, { borderColor: colors.text, backgroundColor: colors.card }]
+                            {
+                              backgroundColor: colors.inputBackground,
+                              borderColor: colors.inputBorder,
+                            },
+                            otp.length === idx && [
+                              styles.otpBoxActive,
+                              {
+                                borderColor: colors.primary,
+                                backgroundColor: colors.card,
+                                shadowColor: colors.primary,
+                              },
+                            ],
+                            otp.length > idx && [
+                              styles.otpBoxFilled,
+                              {
+                                borderColor: colors.text,
+                                backgroundColor: colors.card,
+                              },
+                            ],
                           ]}
                         >
-                          <Text style={[
-                            styles.otpText,
-                            { color: colors.text },
-                            otp.length === idx && { color: colors.primary }
-                          ]}>{otp[idx] || ""}</Text>
+                          <Text
+                            style={[
+                              styles.otpText,
+                              { color: colors.text },
+                              otp.length === idx && { color: colors.primary },
+                            ]}
+                          >
+                            {otp[idx] || ""}
+                          </Text>
                         </View>
                       ))}
                     </View>
@@ -414,9 +546,20 @@ export default function LoginScreen() {
                   <Pressable
                     style={({ pressed }) => [
                       styles.primaryButton,
-                      { backgroundColor: themeScheme === 'dark' ? colors.primary : navy },
-                      (otp.length !== 6 || isLoading) && [styles.buttonDisabled, { backgroundColor: themeScheme === 'dark' ? colors.cardBorder : "#e2e8f0" }],
-                      pressed && styles.buttonPressed
+                      {
+                        backgroundColor:
+                          themeScheme === "dark" ? colors.primary : navy,
+                      },
+                      (otp.length !== 6 || isLoading) && [
+                        styles.buttonDisabled,
+                        {
+                          backgroundColor:
+                            themeScheme === "dark"
+                              ? colors.cardBorder
+                              : "#e2e8f0",
+                        },
+                      ],
+                      pressed && styles.buttonPressed,
                     ]}
                     onPress={handleVerify}
                     disabled={otp.length !== 6 || isLoading}
@@ -424,11 +567,22 @@ export default function LoginScreen() {
                     {isLoading ? (
                       <ActivityIndicator color="#fff" />
                     ) : (
-                      <Text style={[styles.primaryButtonText, { color: colors.primaryText }, otp.length !== 6 && styles.buttonTextDisabled]}>Verify & Login</Text>
+                      <Text
+                        style={[
+                          styles.primaryButtonText,
+                          { color: colors.primaryText },
+                          otp.length !== 6 && styles.buttonTextDisabled,
+                        ]}
+                      >
+                        Verify & Login
+                      </Text>
                     )}
                   </Pressable>
 
-                  <Pressable onPress={handleBackToPhone} style={styles.textLink}>
+                  <Pressable
+                    onPress={handleBackToPhone}
+                    style={styles.textLink}
+                  >
                     <Text style={styles.textLinkContent}>Change Number</Text>
                   </Pressable>
                 </View>
@@ -437,24 +591,46 @@ export default function LoginScreen() {
 
             {/* Footer */}
             <View style={styles.footer}>
-              <Pressable onPress={handleContinueAsGuest} style={styles.guestLink}>
-                <Text style={[styles.guestText, { color: colors.text }]}>Continue as Guest</Text>
+              <Pressable
+                onPress={handleContinueAsGuest}
+                style={styles.guestLink}
+              >
+                <Text style={[styles.guestText, { color: colors.text }]}>
+                  Continue as Guest
+                </Text>
               </Pressable>
+
+              {__DEV__ && (
+                <View style={{ marginTop: 20 }}>
+                  <Button
+                    title="Try Sentry Error!"
+                    onPress={() => {
+                      Sentry.captureException(new Error("First error"));
+                    }}
+                    color={colors.primary}
+                  />
+                  <Button
+                    title="Give Feedback"
+                    onPress={() => {
+                      Sentry.showFeedbackWidget();
+                    }}
+                    color={colors.primary}
+                  />
+                </View>
+              )}
             </View>
           </Animated.View>
         </KeyboardAvoidingView>
-      </ScrollView >
+      </ScrollView>
 
       {/* Custom Toast */}
-      {
-        toast.visible && (
-          <View style={styles.toast}>
-            <Ionicons name="information-circle" size={20} color="#fff" />
-            <Text style={styles.toastText}>{toast.message}</Text>
-          </View>
-        )
-      }
-    </SafeAreaView >
+      {toast.visible && (
+        <View style={styles.toast}>
+          <Ionicons name="information-circle" size={20} color="#fff" />
+          <Text style={styles.toastText}>{toast.message}</Text>
+        </View>
+      )}
+    </SafeAreaView>
   );
 }
 
@@ -470,7 +646,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 24,
-    justifyContent: 'center',
+    justifyContent: "center",
   },
   contentWrap: {
     gap: 32,

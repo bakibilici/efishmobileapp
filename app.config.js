@@ -13,7 +13,7 @@ export default ({ config }) => ({
     bundleIdentifier: "com.efish.app",
     config: {
       googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY,
-    }
+    },
   },
   android: {
     package: "com.efish.app",
@@ -21,19 +21,19 @@ export default ({ config }) => ({
       backgroundColor: "#E6F4FE",
       foregroundImage: "./assets/images/android-icon-foreground.png",
       backgroundImage: "./assets/images/android-icon-background.png",
-      monochromeImage: "./assets/images/android-icon-monochrome.png"
+      monochromeImage: "./assets/images/android-icon-monochrome.png",
     },
     config: {
       googleMaps: {
-        apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY
-      }
+        apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY,
+      },
     },
     edgeToEdgeEnabled: true,
-    predictiveBackGestureEnabled: false
+    predictiveBackGestureEnabled: false,
   },
   web: {
     output: "static",
-    favicon: "./assets/images/favicon.png"
+    favicon: "./assets/images/favicon.png",
   },
   plugins: [
     "expo-router",
@@ -45,20 +45,29 @@ export default ({ config }) => ({
         resizeMode: "contain",
         backgroundColor: "#ffffff",
         dark: {
-          backgroundColor: "#000000"
-        }
-      }
+          backgroundColor: "#000000",
+        },
+      },
     ],
-    "expo-secure-store"
+    [
+      "@sentry/react-native/expo",
+      {
+        url: "https://sentry.io/",
+        note: "Use environment variables for these in CI/CD if possible",
+        project: "efish-mobile",
+        organization: "uptecra-teknoloji-anonim-sirke",
+      },
+    ],
+    "expo-secure-store",
   ],
   experiments: {
     typedRoutes: true,
-    reactCompiler: true
+    reactCompiler: true,
   },
   extra: {
     router: {},
     eas: {
-      projectId: "dde787c2-163e-4c08-b52a-c24b6e4673ce"
-    }
-  }
+      projectId: "dde787c2-163e-4c08-b52a-c24b6e4673ce",
+    },
+  },
 });

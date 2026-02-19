@@ -5,7 +5,8 @@ import {
   ThemeProvider,
 } from "@react-navigation/native";
 import { useFonts } from "expo-font";
-import { Stack } from "expo-router";
+import { Stack, useRouter } from "expo-router";
+import { Accelerometer } from "expo-sensors";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
@@ -13,14 +14,93 @@ import { Text, TextInput } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import "react-native-reanimated";
 
-import { ThemeProvider as AppThemeProvider, useTheme } from "@/context/ThemeContext";
+import {
+  ThemeProvider as AppThemeProvider,
+  useTheme,
+} from "@/context/ThemeContext";
 import { UserProvider, useUser } from "@/context/UserContext";
 import { PaymentProvider } from "@/context/payment/PaymentContext";
-import { useRouter } from "expo-router";
+import * as Sentry from "@sentry/react-native";
+
+Sentry.init({
+  dsn: "https://96fccd63cdc72c7b4aa5e0a3874f44e8@o4510855506624512.ingest.de.sentry.io/4510905892405328",
+  environment: __DEV__ ? "development" : "production",
+
+  // Adds more context data to events (IP address, cookies, user, etc.)
+  // For more information, visit: https://docs.sentry.io/platforms/react-native/data-management/data-collected/
+  sendDefaultPii: true,
+
+  // Enable Logs
+  enableLogs: true,
+
+  // Configure Session Replay
+  replaysSessionSampleRate: 0.1,
+  replaysOnErrorSampleRate: 1,
+  integrations: [
+    Sentry.mobileReplayIntegration(),
+    Sentry.feedbackIntegration(),
+  ],
+
+  // uncomment the line below to enable Spotlight (https://spotlightjs.com)
+  // spotlight: __DEV__,
+});
 
 SplashScreen.preventAutoHideAsync();
 
-export default function RootLayout() {
+const SHAKE_THRESHOLD = 1.5; // g-force threshold for a single spike
+const SHAKE_COUNT_NEEDED = 2; // number of shakes required
+const SHAKE_WINDOW = 1500; // shakes must occur within this window (ms)
+const SHAKE_COOLDOWN = 3000; // cooldown after trigger (ms)
+const SHAKE_MIN_GAP = 200; // min ms between two counted shakes
+
+function useShakeDetector() {
+  const shakeTimestamps = useRef<number[]>([]);
+  const lastTriggerTime = useRef(0);
+  const wasAboveThreshold = useRef(false);
+
+  useEffect(() => {
+    Accelerometer.setUpdateInterval(80);
+
+    const subscription = Accelerometer.addListener(({ x, y, z }) => {
+      const totalForce = Math.sqrt(x * x + y * y + z * z);
+      const now = Date.now();
+
+      // Cooldown check
+      if (now - lastTriggerTime.current < SHAKE_COOLDOWN) return;
+
+      // Detect a shake "peak" — only count when crossing above threshold
+      if (totalForce > SHAKE_THRESHOLD && !wasAboveThreshold.current) {
+        wasAboveThreshold.current = true;
+
+        const lastTs =
+          shakeTimestamps.current[shakeTimestamps.current.length - 1] ?? 0;
+
+        // Only count if enough time passed since the last spike (avoids double-counting)
+        if (now - lastTs > SHAKE_MIN_GAP) {
+          // Remove old timestamps outside the window
+          shakeTimestamps.current = shakeTimestamps.current.filter(
+            (t) => now - t < SHAKE_WINDOW,
+          );
+          shakeTimestamps.current.push(now);
+
+          if (shakeTimestamps.current.length >= SHAKE_COUNT_NEEDED) {
+            shakeTimestamps.current = [];
+            lastTriggerTime.current = now;
+            Sentry.showFeedbackWidget();
+          }
+        }
+      } else if (totalForce <= SHAKE_THRESHOLD) {
+        wasAboveThreshold.current = false;
+      }
+    });
+
+    return () => subscription.remove();
+  }, []);
+}
+
+export default Sentry.wrap(function RootLayout() {
+  useShakeDetector();
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <UserProvider>
@@ -32,7 +112,7 @@ export default function RootLayout() {
       </UserProvider>
     </GestureHandlerRootView>
   );
-}
+});
 
 function RootLayoutNav() {
   const { themeScheme } = useTheme();
@@ -60,7 +140,8 @@ function RootLayoutNav() {
     };
 
     if (!TextWithDefault.defaultProps) TextWithDefault.defaultProps = {};
-    if (!TextInputWithDefault.defaultProps) TextInputWithDefault.defaultProps = {};
+    if (!TextInputWithDefault.defaultProps)
+      TextInputWithDefault.defaultProps = {};
 
     TextWithDefault.defaultProps.style = [
       TextWithDefault.defaultProps.style,
@@ -93,9 +174,7 @@ function RootLayoutNav() {
 
   return (
     <BottomSheetModalProvider>
-      <ThemeProvider
-        value={themeScheme === "dark" ? DarkTheme : DefaultTheme}
-      >
+      <ThemeProvider value={themeScheme === "dark" ? DarkTheme : DefaultTheme}>
         <Stack>
           <Stack.Screen name="index" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
@@ -104,7 +183,7 @@ function RootLayoutNav() {
             options={{
               presentation: "transparentModal",
               headerShown: false,
-              animation: 'slide_from_bottom',
+              animation: "slide_from_bottom",
             }}
           />
           <Stack.Screen
@@ -116,7 +195,7 @@ function RootLayoutNav() {
             options={{ presentation: "modal", headerShown: false }}
           />
         </Stack>
-        <StatusBar style={themeScheme === 'dark' ? 'light' : 'dark'} />
+        <StatusBar style={themeScheme === "dark" ? "light" : "dark"} />
       </ThemeProvider>
     </BottomSheetModalProvider>
   );

@@ -1,6 +1,7 @@
 import { useTheme } from "@/context/ThemeContext";
 import { useUser } from "@/context/UserContext";
 import { Ionicons } from "@expo/vector-icons";
+import * as Sentry from "@sentry/react-native";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
@@ -12,7 +13,7 @@ import {
   StyleSheet,
   Text,
   TouchableWithoutFeedback,
-  View
+  View,
 } from "react-native";
 
 export default function ProfileScreen() {
@@ -21,61 +22,99 @@ export default function ProfileScreen() {
   const { colors, themePreference, setThemePreference } = useTheme();
 
   const handleLogout = async () => {
-    Alert.alert(
-      "Log Out",
-      "Are you sure you want to log out?",
-      [
-        {
-          text: "Cancel",
-          style: "cancel",
+    Alert.alert("Log Out", "Are you sure you want to log out?", [
+      {
+        text: "Cancel",
+        style: "cancel",
+      },
+      {
+        text: "Log Out",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await logout();
+          } catch (error) {
+            console.error("Logout failed", error);
+          }
         },
-        {
-          text: "Log Out",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              await logout();
-            } catch (error) {
-              console.error("Logout failed", error);
-            }
-          },
-        },
-      ]
-    );
+      },
+    ]);
   };
 
-  const displayName = user ? `${user.first_name} ${user.last_name}` : "Guest User";
+  const displayName = user
+    ? `${user.first_name} ${user.last_name}`
+    : "Guest User";
   const displayEmail = user
-    ? (user.email || (user.phone_number?.length === 10
-      ? `+${user.phone_code} (${user.phone_number.slice(0, 3)}) ${user.phone_number.slice(3, 6)} ${user.phone_number.slice(6)}`
-      : `+${user.phone_code} ${user.phone_number}`))
+    ? user.email ||
+      (user.phone_number?.length === 10
+        ? `+${user.phone_code} (${user.phone_number.slice(0, 3)}) ${user.phone_number.slice(3, 6)} ${user.phone_number.slice(6)}`
+        : `+${user.phone_code} ${user.phone_number}`)
     : "guest@efish.app";
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
+    <SafeAreaView
+      style={[styles.safeArea, { backgroundColor: colors.background }]}
+    >
       <ScrollView
         contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}
       >
         {/* Header Profile Card */}
         {/* Header Profile Card */}
-        <View style={[styles.profileCard, { backgroundColor: colors.backgroundSecondary }]}>
+        <View
+          style={[
+            styles.profileCard,
+            { backgroundColor: colors.backgroundSecondary },
+          ]}
+        >
           {user ? (
             <>
               <View style={styles.avatarContainer}>
-                <View style={[styles.avatarGradient, { backgroundColor: colors.primary }]}>
-                  <Ionicons name="person" size={36} color={colors.primaryText} />
+                <View
+                  style={[
+                    styles.avatarGradient,
+                    { backgroundColor: colors.primary },
+                  ]}
+                >
+                  <Ionicons
+                    name="person"
+                    size={36}
+                    color={colors.primaryText}
+                  />
                 </View>
-                <View style={[styles.editBadge, { backgroundColor: colors.icon, borderColor: colors.backgroundSecondary }]}>
+                <View
+                  style={[
+                    styles.editBadge,
+                    {
+                      backgroundColor: colors.icon,
+                      borderColor: colors.backgroundSecondary,
+                    },
+                  ]}
+                >
                   <Ionicons name="pencil" size={12} color="#fff" />
                 </View>
               </View>
-              <Text style={[styles.name, { color: colors.text }]}>{displayName}</Text>
-              <Text style={[styles.email, { color: colors.textSecondary }]}>{displayEmail}</Text>
+              <Text style={[styles.name, { color: colors.text }]}>
+                {displayName}
+              </Text>
+              <Text style={[styles.email, { color: colors.textSecondary }]}>
+                {displayEmail}
+              </Text>
             </>
           ) : (
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', paddingHorizontal: 10, marginBottom: 10 }}>
-              <Text style={[styles.name, { color: colors.text }]}>Guest User</Text>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                width: "100%",
+                paddingHorizontal: 10,
+                marginBottom: 10,
+              }}
+            >
+              <Text style={[styles.name, { color: colors.text }]}>
+                Guest User
+              </Text>
               <Pressable
                 onPress={() => {
                   if (router.canDismiss()) {
@@ -87,28 +126,52 @@ export default function ProfileScreen() {
                   backgroundColor: colors.primary,
                   paddingHorizontal: 20,
                   paddingVertical: 8,
-                  borderRadius: 20
+                  borderRadius: 20,
                 }}
               >
-                <Text style={{ color: colors.primaryText, fontWeight: '700', fontSize: 13 }}>Log In</Text>
+                <Text
+                  style={{
+                    color: colors.primaryText,
+                    fontWeight: "700",
+                    fontSize: 13,
+                  }}
+                >
+                  Log In
+                </Text>
               </Pressable>
             </View>
           )}
 
           <View style={[styles.statsRow, { borderTopColor: colors.border }]}>
             <View style={styles.statItem}>
-              <Text style={[styles.statNumber, { color: colors.text }]}>24</Text>
-              <Text style={[styles.statLabel, { color: colors.textTertiary }]}>Sessions</Text>
+              <Text style={[styles.statNumber, { color: colors.text }]}>
+                24
+              </Text>
+              <Text style={[styles.statLabel, { color: colors.textTertiary }]}>
+                Sessions
+              </Text>
             </View>
-            <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
+            <View
+              style={[styles.statDivider, { backgroundColor: colors.border }]}
+            />
             <View style={styles.statItem}>
-              <Text style={[styles.statNumber, { color: colors.text }]}>342</Text>
-              <Text style={[styles.statLabel, { color: colors.textTertiary }]}>kWh</Text>
+              <Text style={[styles.statNumber, { color: colors.text }]}>
+                342
+              </Text>
+              <Text style={[styles.statLabel, { color: colors.textTertiary }]}>
+                kWh
+              </Text>
             </View>
-            <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
+            <View
+              style={[styles.statDivider, { backgroundColor: colors.border }]}
+            />
             <View style={styles.statItem}>
-              <Text style={[styles.statNumber, { color: colors.text }]}>₺2.8k</Text>
-              <Text style={[styles.statLabel, { color: colors.textTertiary }]}>Spent</Text>
+              <Text style={[styles.statNumber, { color: colors.text }]}>
+                ₺2.8k
+              </Text>
+              <Text style={[styles.statLabel, { color: colors.textTertiary }]}>
+                Spent
+              </Text>
             </View>
           </View>
         </View>
@@ -117,7 +180,9 @@ export default function ProfileScreen() {
         {/* Settings Groups */}
         {user && (
           <>
-            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>Account</Text>
+            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
+              Account
+            </Text>
             <View style={[styles.group, { backgroundColor: colors.card }]}>
               <SettingsItem
                 icon="person-outline"
@@ -156,7 +221,9 @@ export default function ProfileScreen() {
           </>
         )}
 
-        <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>Preferences</Text>
+        <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
+          Preferences
+        </Text>
         <View style={[styles.group, { backgroundColor: colors.card }]}>
           <SettingsItem
             icon="notifications-outline"
@@ -177,13 +244,25 @@ export default function ProfileScreen() {
             preference={themePreference}
             onChange={setThemePreference}
             colors={colors}
+          />
+          <SettingsItem
+            icon="chatbox-ellipses-outline"
+            title="Give Feedback"
+            subtitle="Report a bug or suggest a feature"
+            color="#FF9500" // Orange color often used for feedback/warnings
             isLast
+            onPress={() => {
+              Sentry.showFeedbackWidget();
+            }}
+            colors={colors}
           />
         </View>
 
         {user && (
           <>
-            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>Security</Text>
+            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
+              Security
+            </Text>
             <View style={[styles.group, { backgroundColor: colors.card }]}>
               <SettingsItem
                 icon="shield-checkmark-outline"
@@ -219,7 +298,9 @@ export default function ProfileScreen() {
           </View>
         )}
 
-        <Text style={[styles.version, { color: colors.textTertiary }]}>efish v1.0.0 (Build 124)</Text>
+        <Text style={[styles.version, { color: colors.textTertiary }]}>
+          efish v1.0.0 (Build 124)
+        </Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -229,12 +310,12 @@ function AppearanceSelector({
   preference,
   onChange,
   colors,
-  isLast
+  isLast,
 }: {
-  preference: 'system' | 'light' | 'dark',
-  onChange: (v: 'system' | 'light' | 'dark') => void,
-  colors: any,
-  isLast?: boolean
+  preference: "system" | "light" | "dark";
+  onChange: (v: "system" | "light" | "dark") => void;
+  colors: any;
+  isLast?: boolean;
 }) {
   const [modalVisible, setModalVisible] = useState(false);
 
@@ -248,7 +329,9 @@ function AppearanceSelector({
           styles.itemContainer,
           { backgroundColor: colors.card, borderBottomColor: colors.border },
           isLast && styles.itemLast,
-          pressed && { backgroundColor: colors.highlight || colors.backgroundSecondary }
+          pressed && {
+            backgroundColor: colors.highlight || colors.backgroundSecondary,
+          },
         ]}
       >
         <View style={styles.itemContent}>
@@ -256,12 +339,23 @@ function AppearanceSelector({
             <Ionicons name="moon-outline" size={20} color="#fff" />
           </View>
           <View style={styles.itemTextContainer}>
-            <Text style={[styles.itemTitle, { color: colors.text }]}>Appearance</Text>
+            <Text style={[styles.itemTitle, { color: colors.text }]}>
+              Appearance
+            </Text>
             <View style={styles.rightContainer}>
-              <Text style={[styles.itemValue, { color: colors.textSecondary, marginRight: 8 }]}>
+              <Text
+                style={[
+                  styles.itemValue,
+                  { color: colors.textSecondary, marginRight: 8 },
+                ]}
+              >
                 {getLabel(preference)}
               </Text>
-              <Ionicons name="chevron-forward" size={16} color={colors.textTertiary} />
+              <Ionicons
+                name="chevron-forward"
+                size={16}
+                color={colors.textTertiary}
+              />
             </View>
           </View>
         </View>
@@ -276,34 +370,51 @@ function AppearanceSelector({
         <TouchableWithoutFeedback onPress={() => setModalVisible(false)}>
           <View style={styles.modalOverlay}>
             <TouchableWithoutFeedback>
-              <View style={[styles.modalContent, { backgroundColor: colors.card }]}>
-                <Text style={[styles.modalTitle, { color: colors.text }]}>Select Appearance</Text>
-                {(['system', 'light', 'dark'] as const).map((opt, index, arr) => (
-                  <Pressable
-                    key={opt}
-                    onPress={() => {
-                      onChange(opt);
-                      setModalVisible(false);
-                    }}
-                    style={({ pressed }) => [
-                      styles.modalOption,
-                      { borderBottomColor: colors.border },
-                      index === arr.length - 1 && styles.noBorder,
-                      pressed && { backgroundColor: colors.backgroundSecondary }
-                    ]}
-                  >
-                    <Text style={[
-                      styles.modalOptionText,
-                      { color: colors.text },
-                      preference === opt && { color: colors.primary, fontWeight: '700' }
-                    ]}>
-                      {getLabel(opt)}
-                    </Text>
-                    {preference === opt && (
-                      <Ionicons name="checkmark" size={20} color={colors.primary} />
-                    )}
-                  </Pressable>
-                ))}
+              <View
+                style={[styles.modalContent, { backgroundColor: colors.card }]}
+              >
+                <Text style={[styles.modalTitle, { color: colors.text }]}>
+                  Select Appearance
+                </Text>
+                {(["system", "light", "dark"] as const).map(
+                  (opt, index, arr) => (
+                    <Pressable
+                      key={opt}
+                      onPress={() => {
+                        onChange(opt);
+                        setModalVisible(false);
+                      }}
+                      style={({ pressed }) => [
+                        styles.modalOption,
+                        { borderBottomColor: colors.border },
+                        index === arr.length - 1 && styles.noBorder,
+                        pressed && {
+                          backgroundColor: colors.backgroundSecondary,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.modalOptionText,
+                          { color: colors.text },
+                          preference === opt && {
+                            color: colors.primary,
+                            fontWeight: "700",
+                          },
+                        ]}
+                      >
+                        {getLabel(opt)}
+                      </Text>
+                      {preference === opt && (
+                        <Ionicons
+                          name="checkmark"
+                          size={20}
+                          color={colors.primary}
+                        />
+                      )}
+                    </Pressable>
+                  ),
+                )}
               </View>
             </TouchableWithoutFeedback>
           </View>
@@ -324,7 +435,7 @@ function SettingsItem({
   hideChevron,
   destructive,
   onPress,
-  colors
+  colors,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   title: string;
@@ -346,7 +457,9 @@ function SettingsItem({
         { backgroundColor: colors.card, borderBottomColor: colors.border },
         isFirst && styles.itemFirst,
         isLast && styles.itemLast,
-        pressed && { backgroundColor: colors.highlight || colors.backgroundSecondary }, // Fallback logic
+        pressed && {
+          backgroundColor: colors.highlight || colors.backgroundSecondary,
+        }, // Fallback logic
       ]}
     >
       <View style={styles.itemContent}>
@@ -357,16 +470,32 @@ function SettingsItem({
         <View style={styles.itemTextContainer}>
           <View style={styles.titleContainer}>
             <Text
-              style={[styles.itemTitle, { color: colors.text }, destructive && { color: colors.danger }]}
+              style={[
+                styles.itemTitle,
+                { color: colors.text },
+                destructive && { color: colors.danger },
+              ]}
             >
               {title}
             </Text>
-            {subtitle && <Text style={[styles.itemSubtitle, { color: colors.textTertiary }]}>{subtitle}</Text>}
+            {subtitle && (
+              <Text
+                style={[styles.itemSubtitle, { color: colors.textTertiary }]}
+              >
+                {subtitle}
+              </Text>
+            )}
           </View>
 
           {!destructive && (
             <View style={styles.rightContainer}>
-              {value && <Text style={[styles.itemValue, { color: colors.textSecondary }]}>{value}</Text>}
+              {value && (
+                <Text
+                  style={[styles.itemValue, { color: colors.textSecondary }]}
+                >
+                  {value}
+                </Text>
+              )}
               {!hideChevron && (
                 <Ionicons
                   name="chevron-forward"
@@ -472,7 +601,7 @@ const styles = StyleSheet.create({
     paddingLeft: 14,
     minHeight: 60,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e2e8f0',
+    borderBottomColor: "#e2e8f0",
   },
   itemFirst: {
     borderTopLeftRadius: 16,
@@ -535,9 +664,9 @@ const styles = StyleSheet.create({
 
   // Appearance Selector
   segmentContainer: {
-    flexDirection: 'row',
-    backgroundColor: 'transparent',
-    gap: 4
+    flexDirection: "row",
+    backgroundColor: "transparent",
+    gap: 4,
   },
   segmentBtn: {
     paddingVertical: 6,
@@ -546,17 +675,17 @@ const styles = StyleSheet.create({
   },
   segmentText: {
     fontSize: 13,
-    fontWeight: '500'
+    fontWeight: "500",
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
   },
   modalContent: {
-    width: '100%',
+    width: "100%",
     maxWidth: 320,
     borderRadius: 20,
     padding: 20,
@@ -571,19 +700,19 @@ const styles = StyleSheet.create({
   },
   modalTitle: {
     fontSize: 18,
-    fontWeight: '700',
+    fontWeight: "700",
     marginBottom: 16,
-    textAlign: 'center'
+    textAlign: "center",
   },
   modalOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingVertical: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   modalOptionText: {
     fontSize: 16,
-    fontWeight: '500'
+    fontWeight: "500",
   },
 });
