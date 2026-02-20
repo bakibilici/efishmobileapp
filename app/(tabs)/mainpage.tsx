@@ -8,6 +8,7 @@ import { getAccessToken } from "@/services/tokenStorage";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import {
+  BottomSheetFlatList,
   BottomSheetModal,
   BottomSheetScrollView
 } from "@gorhom/bottom-sheet";
@@ -31,11 +32,9 @@ import {
   Animated,
   DeviceEventEmitter,
   LayoutAnimation,
-  Modal,
   Platform,
   Pressable,
   Image as RNImage,
-  ScrollView,
   StatusBar,
   StyleSheet,
   Text,
@@ -52,6 +51,7 @@ import Svg, { Circle, Path } from "react-native-svg";
 import { Station, StationType } from "@/constants/stations";
 import { Colors } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
+import { Flash, Notification, Setting4 } from "iconsax-react-native";
 
 const typeColors: Record<StationType, string> = {
   HPC: "#7C4DFF",
@@ -370,6 +370,11 @@ export default function MapScreen() {
             const d = rawData;
             const isCharging = (d.status || "").toLowerCase() === "charging" || !d.isCompleted;
 
+            // Capture the charge session UUID if broadcasted, to allow stopping it after app restart
+            if (d.uuid || d.charge_session_uuid) {
+              activeChargeSessionUuidRef.current = d.uuid || d.charge_session_uuid;
+            }
+
             // Spec: energy is Wh -> /1000 for kWh
             // Spec: power is W -> /1000 for kW
             // Spec: total_energy is kWh already.
@@ -391,9 +396,9 @@ export default function MapScreen() {
             payload = {
               power_kw: powerKw,
               charged_kwh: chargedKwh,
-              cost: d.price != null && d.total_energy != null ? (d.price * d.total_energy) : undefined, // estimation
+              cost: d.price != null && d.total_energy != null ? (d.price * d.total_energy) : undefined,
               batteryLevel: batteryLevel,
-              // duration_sec? Not in spec explicit fields, maybe calculate client side or optional
+              started_at: d.started_at
             };
 
             if (Object.keys(payload).length > 0) {
@@ -401,7 +406,8 @@ export default function MapScreen() {
                 batteryLevel: payload.batteryLevel,
                 power_kw: payload.power_kw,
                 charged_kwh: payload.charged_kwh,
-                cost: payload.cost
+                cost: payload.cost,
+                started_at: payload.started_at
               } as any);
             }
           }
@@ -466,7 +472,7 @@ export default function MapScreen() {
       activeChargeSessionUuidRef.current = null;
       charging.stopSimulation();
     }
-  }, [charging.stopSimulation]);
+  }, [charging]);
 
   const handleVehicleSelect = async (vehicle: any) => {
     if (!targetSocketUuid) return;
@@ -560,7 +566,7 @@ export default function MapScreen() {
   ]);
   const [onlyEfish, setOnlyEfish] = useState(true);
   const [showPublic, setShowPublic] = useState(true);
-  const [showFavorites, setShowFavorites] = useState(false);
+  const [showFavorites, setShowFavorites] = useState(true); // Default to true as requested
   const [userLocation, setUserLocation] =
     useState<Location.LocationObject | null>(null);
   const [locationPermission, setLocationPermission] = useState<boolean>(false);
@@ -571,22 +577,54 @@ export default function MapScreen() {
   const { colors, themeScheme } = useTheme();
   const isDark = themeScheme === 'dark';
 
+  const [isFiltersVisible, setIsFiltersVisible] = useState(false);
+  const filterDrawerAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(filterDrawerAnim, {
+      toValue: isFiltersVisible ? 1 : 0,
+      duration: 250,
+      useNativeDriver: false, // height cannot use native driver
+    }).start();
+  }, [isFiltersVisible]);
+
+  const toggleFilters = () => {
+    setIsFiltersVisible(!isFiltersVisible);
+  };
+
   // Login Success Toast
 
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const toastAnim = useRef(new Animated.Value(-100)).current;
 
+  useEffect(() => {
+    if (charging.isActive && !charging.isMinimized) {
+      // Small delay to ensure ref is ready
+      const timer = setTimeout(() => {
+        chargingBottomSheetRef.current?.present();
+      }, 50);
+      return () => clearTimeout(timer);
+    } else {
+      chargingBottomSheetRef.current?.dismiss();
+    }
+  }, [charging.isActive, charging.isMinimized]);
+
   // Header Slide Down Animation
-  const headerAnim = useRef(new Animated.Value(-150)).current;
+  const headerAnim = useRef(new Animated.Value(-200)).current;
 
   useEffect(() => {
+    // If charging screen is full-screen (not minimized), slide header up and away
+    const isBottomSheetOpen = charging.isActive && !charging.isMinimized;
     Animated.spring(headerAnim, {
-      toValue: 0,
+      toValue: isBottomSheetOpen ? -200 : 0,
       useNativeDriver: true,
       speed: 12,
       bounciness: 6,
     }).start();
-  }, []);
+
+    // Tell _layout.tsx to hide/show the tab bar
+    DeviceEventEmitter.emit('toggleBottomSheet', isBottomSheetOpen);
+  }, [charging.isActive, charging.isMinimized]);
 
   useEffect(() => {
     if (params.showLoginSuccess === "true") {
@@ -670,7 +708,14 @@ export default function MapScreen() {
 
   const bottomSheetRef = useRef<BottomSheetModal>(null);
   const mapRef = useRef<MapView>(null);
-  const snapPoints = useMemo(() => ["45%", "85%"], []);
+  const snapPoints = useMemo(() => ["25%", "50%", "90%"], []);
+
+  const typeListBottomSheetRef = useRef<BottomSheetModal>(null);
+  const typeListSnapPoints = useMemo(() => ["10%", "50%", "90%"], []);
+  const [bottomSheetSelectedType, setBottomSheetSelectedType] = useState<StationType | null>(null);
+
+  const chargingBottomSheetRef = useRef<BottomSheetModal>(null);
+  const chargingSnapPoints = useMemo(() => ["95%"], []);
 
   useEffect(() => {
     if (
@@ -906,18 +951,6 @@ export default function MapScreen() {
 
     const toggles = [
       {
-        key: "favorites",
-        label: "",
-        color: "#ff4d4d", // Red/Pink for heart
-        icon: "heart",
-        active: showFavorites,
-        kind: "toggle" as const,
-        onPress: () => {
-          withAnimation();
-          setShowFavorites((v) => !v);
-        },
-      },
-      {
         key: "onlyEfish",
         label: "Only efish",
         color: "#2cdb9b",
@@ -932,7 +965,7 @@ export default function MapScreen() {
       {
         key: "public",
         label: "Public",
-        color: "#2cdb9b",
+        color: "#007aff", // iOS Blue
         icon: "globe",
         active: showPublic,
         kind: "toggle" as const,
@@ -941,7 +974,18 @@ export default function MapScreen() {
           setShowPublic((v) => !v);
         },
       },
-
+      {
+        key: "favorites",
+        label: "Favorites",
+        color: "#ff3b30", // iOS Red for heart
+        icon: "heart",
+        active: showFavorites,
+        kind: "toggle" as const,
+        onPress: () => {
+          withAnimation();
+          setShowFavorites((v) => !v);
+        },
+      },
     ];
 
     return { types, toggles };
@@ -1144,22 +1188,22 @@ export default function MapScreen() {
             top: 0,
             left: 0,
             right: 0,
-            marginHorizontal: 4,
             paddingTop: topInset,
             paddingBottom: 4, // Smaller bottom padding
             backgroundColor: isDark ? "rgba(30, 30, 30, 0.85)" : "rgba(255, 255, 255, 0.95)", // Semi-transparent for glass effect
-            borderBottomLeftRadius: 40,
-            borderBottomRightRadius: 40,
+            borderBottomLeftRadius: 10,
+            borderBottomRightRadius: 10,
             shadowColor: "#000",
             shadowOffset: { width: 0, height: 4 }, // Reduced shadow
             shadowOpacity: 0.1,
             shadowRadius: 12,
             elevation: 8,
             zIndex: 10,
-            transform: [{ translateY: headerAnim }]
+            transform: [{ translateY: headerAnim }],
+            overflow: 'hidden' // FIX: Ensure child content (chips) doesn't overflow rounded corners
           }}>
             {/* Row 1: Search & Bell/Login */}
-            <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, marginBottom: 12 }}>
+            <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, marginBottom: 12, alignItems: 'center' }}>
               <View style={{
                 flex: 1,
                 height: 48, // Slightly taller
@@ -1181,8 +1225,19 @@ export default function MapScreen() {
                     color: colors.text
                   }}
                 />
-              </View>
 
+              </View>
+              <Pressable
+                onPress={toggleFilters}
+                hitSlop={8}
+                style={{ padding: 4 }}
+              >
+                <Setting4
+                  size={22}
+                  color={isFiltersVisible ? colors.primary : colors.textSecondary}
+                  variant={isFiltersVisible ? "Bold" : "Outline"}
+                />
+              </Pressable>
               {user ? (
                 <Pressable style={{
                   width: 48, // Match height
@@ -1194,8 +1249,7 @@ export default function MapScreen() {
                   borderWidth: 1,
                   borderColor: isDark ? "#444" : "#e0e0e0",
                 }}>
-                  <Ionicons
-                    name="notifications-outline"
+                  <Notification
                     size={24}
                     color={colors.text}
                   />
@@ -1226,50 +1280,102 @@ export default function MapScreen() {
                 </Pressable>
               )}
             </View>
-            {/* Row 2: Filters */}
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingBottom: 12 }}
-            >
-              {/* Types Chips */}
-              {types.map((item) => (
-                <FilterChip
-                  key={item.key}
-                  label={item.label}
-                  color={item.color}
-                  active={item.active}
-                  lightningCount={item.lightningCount}
-                  onPress={item.onPress}
-                  colors={colors}
-                  compact
-                />
-              ))}
+            {/* Row 2: Filters (Animated Drawer) */}
+            <Animated.View style={{
+              height: filterDrawerAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, 90] // Enough height for exactly 2 lines + gaps
+              }),
+              opacity: filterDrawerAnim,
+              overflow: 'hidden',
+              paddingHorizontal: 16,
+              marginTop: 4,
+              gap: 12,
+            }}>
+              {/* Row 1: Types */}
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                {types.map((item) => (
+                  <FilterChip
+                    key={item.key}
+                    label={item.label}
+                    color={item.color}
+                    active={item.active}
+                    lightningCount={item.lightningCount}
+                    onPress={item.onPress}
+                    colors={colors}
+                    compact
+                    style={{ flex: 1 }}
+                  />
+                ))}
+              </View>
 
-              {/* Toggles Chips (Favorites, Public, Efish) */}
-              {toggles.map((item) => (
-                <TogglePill
-                  key={item.key}
-                  label={item.label}
-                  icon={item.icon}
-                  active={item.active}
-                  onPress={item.onPress}
-                  colors={colors}
-                  compact
-                />
-              ))}
-            </ScrollView>
+              {/* Row 2: Toggles (now rendering as FilterChips) */}
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                {toggles.map((item) => (
+                  <FilterChip
+                    key={item.key}
+                    label={item.label}
+                    color={item.color}
+                    active={item.active}
+                    icon={item.icon}
+                    onPress={item.onPress}
+                    colors={colors}
+                    compact
+                    style={{ flex: 1 }}
+                  />
+                ))}
+              </View>
+            </Animated.View>
+
+            {/* Solid Type Buttons when filters are CLOSED */}
+            {!isFiltersVisible && (
+              <View style={{ flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingBottom: 12, marginTop: 4 }}>
+                {(["HPC", "DC", "AC"] as StationType[]).map((t) => (
+                  <Pressable
+                    key={t}
+                    onPress={() => {
+                      setBottomSheetSelectedType(t);
+                      bottomSheetRef.current?.dismiss();
+                      typeListBottomSheetRef.current?.present();
+                      // Next tick snap to ensure 50% opens instead of 10%
+                      requestAnimationFrame(() => {
+                        typeListBottomSheetRef.current?.snapToIndex(1);
+                      });
+                      DeviceEventEmitter.emit('toggleBottomSheet', true);
+                    }}
+                    style={{
+                      flex: 1,
+                      backgroundColor: typeColors[t],
+                      paddingVertical: 10,
+                      borderRadius: 99,
+                      alignItems: 'center',
+                      flexDirection: 'row',
+                      justifyContent: 'center',
+                      gap: 4,
+                    }}
+                  >
+                    <Flash variant="Bold" size={16} color="#ffffff" />
+                    <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 13 }}>{t}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+
           </Animated.View>
 
-          {/* Charging Widget (Floating below filters) */}
-          {charging.isActive && charging.isMinimized && (
+        </View>
+
+        {/* Floating Charging Widget at Bottom */}
+        {charging.isActive && charging.isMinimized && (
+          <View style={styles.floatingWidgetContainer}>
             <ChargingWidget
               state={charging}
-              onExpand={charging.toggleMinimize}
+              onExpand={() => {
+                charging.toggleMinimize();
+              }}
             />
-          )}
-
-        </View>
+          </View>
+        )}
 
         {/* Re-center Button - Hide when widget is active to avoid clutter? Or keep? Keeping for now. */}
         {
@@ -1695,19 +1801,100 @@ export default function MapScreen() {
           onRepair={handleSocketRepair}
         />
 
-        {/* Full Screen Charging Modal */}
-        <Modal
-          visible={charging.isActive && !charging.isMinimized}
-          animationType="slide"
-          presentationStyle="fullScreen"
+        {/* Full Screen Charging Bottom Sheet */}
+        <BottomSheetModal
+          ref={chargingBottomSheetRef}
+          index={0}
+          snapPoints={chargingSnapPoints}
+          enablePanDownToClose={true}
+          style={{ zIndex: 999, elevation: 999 }}
+          onDismiss={() => {
+            // If swiped down by user (or dismissed any other way), state updates natively.
+            // Using setMinimized(true) instead of toggle prevents looping.
+            if (charging.isActive && !charging.isMinimized) {
+              charging.setMinimized(true);
+            }
+          }}
+          backgroundStyle={{ backgroundColor: isDark ? '#121212' : '#F2F2F7' }}
+          handleIndicatorStyle={{ backgroundColor: isDark ? '#333' : '#E5E5EA' }}
         >
-          <ChargingScreen
-            state={charging}
-            onMinimize={charging.toggleMinimize}
-            onStop={handleStopCharging}
-            onToggleDev={charging.setMode}
-          />
-        </Modal>
+          <BottomSheetScrollView contentContainerStyle={{ flexGrow: 1 }}>
+            <ChargingScreen
+              state={charging}
+              onMinimize={() => {
+                charging.setMinimized(true);
+              }}
+              onStop={() => {
+                charging.setMinimized(true);
+                handleStopCharging();
+              }}
+              onToggleDev={charging.setMode}
+            />
+          </BottomSheetScrollView>
+        </BottomSheetModal>
+
+        {/* Type List Bottom Sheet */}
+        <BottomSheetModal
+          ref={typeListBottomSheetRef}
+          index={1} // Default open to 50%
+          snapPoints={typeListSnapPoints}
+          enablePanDownToClose={false}
+          enableOverDrag={false}
+          backgroundStyle={{ backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF' }}
+          handleIndicatorStyle={{ backgroundColor: isDark ? '#333' : '#E5E5EA' }}
+        >
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, marginBottom: 12, marginTop: 8 }}>
+              <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text }}>
+                {bottomSheetSelectedType} Stations
+              </Text>
+              <Pressable
+                onPress={() => {
+                  typeListBottomSheetRef.current?.dismiss();
+                  DeviceEventEmitter.emit('toggleBottomSheet', false);
+                }}
+                style={{ padding: 4 }}
+              >
+                <Ionicons name="close" size={24} color={colors.textSecondary} />
+              </Pressable>
+            </View>
+            <BottomSheetFlatList
+              data={stationsList.filter(s => s.type === bottomSheetSelectedType)}
+              keyExtractor={(item: Station) => item.id}
+              bounces={false}
+              contentContainerStyle={{ gap: 12, paddingHorizontal: 16, paddingBottom: 24 }}
+              renderItem={({ item }: { item: Station }) => (
+                <Pressable
+                  onPress={() => {
+                    typeListBottomSheetRef.current?.dismiss();
+                    DeviceEventEmitter.emit('toggleBottomSheet', false);
+                    handleMarkerPress(item); // Focus on map and open details
+                  }}
+                  style={{
+                    backgroundColor: isDark ? '#2C2C2E' : '#F2F2F7',
+                    padding: 16,
+                    borderRadius: 16,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    borderWidth: 1,
+                    borderColor: isDark ? '#3A3A3C' : '#E5E5EA'
+                  }}
+                >
+                  <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: getStationColor(item.type), alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                    <Ionicons name="flash" size={20} color="#fff" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 16, fontWeight: '600', color: colors.text }}>{item.name}</Text>
+                    <Text style={{ fontSize: 14, color: colors.textSecondary, marginTop: 4 }}>
+                      {item.powerKw} kW • {item.distanceKm ? `${item.distanceKm} km` : ''}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+                </Pressable>
+              )}
+            />
+          </View>
+        </BottomSheetModal>
 
       </View>
     </View >
@@ -1721,7 +1908,9 @@ type FilterChipProps = {
   active: boolean;
   onPress: () => void;
   lightningCount?: number;
+  icon?: any;
   compact?: boolean;
+  style?: any;
 };
 
 function FilterChip({
@@ -1730,172 +1919,81 @@ function FilterChip({
   active,
   onPress,
   lightningCount,
+  icon,
   colors,
   compact,
+  style,
 }: FilterChipProps & { colors: any }) {
   const anim = React.useRef(new Animated.Value(active ? 1 : 0)).current;
 
   useEffect(() => {
-    Animated.timing(anim, {
+    Animated.spring(anim, {
       toValue: active ? 1 : 0,
-      duration: 200,
+      tension: 50,
+      friction: 7,
       useNativeDriver: false,
     }).start();
   }, [active, anim]);
 
+  // Use a subtle gray for inactive state.
+  const inactiveColor = "#9e9e9e";
+
   const bg = anim.interpolate({
     inputRange: [0, 1],
-    outputRange: [colors.card, color],
-  });
-  const border = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [colors.border, color],
+    outputRange: ["transparent", colors.card], // transparent when unselected, card when selected
   });
   const textColor = anim.interpolate({
     inputRange: [0, 1],
-    outputRange: [color, "#ffffff"],
+    outputRange: [inactiveColor, color], // gray when unselected, colored when selected
   });
 
   return (
-    <Pressable onPress={onPress}>
+    <Pressable onPress={onPress} style={style}>
       <Animated.View
         style={[
           styles.chip,
           {
             backgroundColor: bg,
-            borderColor: border,
-            shadowOpacity: active ? 0.12 : 0.06,
-            paddingHorizontal: compact ? 10 : 14,
-            paddingVertical: compact ? 6 : 9,
-            gap: compact ? 4 : 6,
+            width: '100%',
           },
         ]}
       >
-        <View>
-          <View style={{ flexDirection: "row", alignItems: "center" }}>
-            {lightningCount ? (
-              <View style={{ flexDirection: "row", marginRight: compact ? 4 : 6 }}>
-                {Array.from({ length: lightningCount }).map((_, idx) => (
-                  <View
-                    key={idx}
-                    style={{
-                      marginLeft: idx > 0 ? -9 : 0,
-                      zIndex: idx,
-                    }}
-                  >
-                    <Ionicons
-                      name="flash"
-                      size={compact ? 12 : 14}
-                      color={active ? "#ffffff" : color}
-                    />
-                  </View>
-                ))}
-              </View>
-            ) : null}
-            <Animated.Text style={[styles.chipText, { color: textColor, fontSize: compact ? 12 : 13 }]}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: 'center', borderWidth: 0.5, borderColor: "rgba(0, 0, 0, 0.1)", flex: 1, paddingVertical: 6, borderRadius: 99 }}>
+          {lightningCount ? (
+            <View style={{ flexDirection: "row", marginRight: label ? (compact ? 4 : 6) : 0 }}>
+              {Array.from({ length: lightningCount }).map((_, idx) => (
+                <View
+                  key={idx}
+                  style={{
+                    marginLeft: idx > 0 ? -9 : 0,
+                    zIndex: idx,
+                  }}
+                >
+                  <Ionicons
+                    name="flash"
+                    size={compact ? 16 : 16}
+                    color={active ? color : inactiveColor}
+                  />
+                </View>
+              ))}
+            </View>
+          ) : icon ? (
+            <Ionicons
+              name={icon}
+              size={compact ? 16 : 16}
+              color={active ? color : inactiveColor}
+              style={{ marginRight: label ? (compact ? 4 : 6) : 0 }}
+            />
+          ) : null}
+          {label && label.length > 0 ? (
+            <Animated.Text style={[styles.chipText, { color: textColor, fontSize: compact ? 15 : 15 }]}>
               {label}
             </Animated.Text>
-          </View>
+          ) : null}
         </View>
       </Animated.View>
     </Pressable>
   );
-}
-
-type TogglePillProps = {
-  label: string;
-  icon: any;
-  active: boolean;
-  onPress: () => void;
-  compact?: boolean;
-};
-
-function TogglePill({ label, icon, active, onPress, colors, compact }: TogglePillProps & { colors: any }) {
-  const anim = React.useRef(new Animated.Value(active ? 1 : 0)).current;
-
-  useEffect(() => {
-    Animated.timing(anim, {
-      toValue: active ? 1 : 0,
-      duration: 200,
-      useNativeDriver: false,
-    }).start();
-  }, [active, anim]);
-
-  const bg = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [colors.card, colors.primary],
-  });
-  const border = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [colors.border, colors.primary],
-  });
-  const textColor = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [colors.text, colors.primaryText],
-  });
-  const iconBg = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [colors.backgroundSecondary, colors.card],
-  });
-
-  return (
-    <Pressable onPress={onPress}>
-      <Animated.View
-        style={[
-          styles.toggle,
-          {
-            backgroundColor: bg,
-            borderColor: border,
-            shadowOpacity: active ? 0.1 : 0.06,
-            paddingHorizontal: compact ? 10 : 12,
-            paddingVertical: compact ? 6 : 8,
-            gap: compact ? 4 : 6,
-          },
-        ]}
-      >
-        <Animated.View style={[styles.toggleIcon, { backgroundColor: iconBg, width: compact ? 18 : 20, height: compact ? 18 : 20 }]}>
-          <Animated.View>
-            <Ionicons
-              name={icon}
-              size={compact ? 12 : 14}
-              color={active ? colors.primary : colors.text}
-            />
-          </Animated.View>
-        </Animated.View>
-        <Animated.Text
-          style={[styles.toggleText, { color: textColor, fontSize: compact ? 12 : 13 }]}
-        >
-          {label}
-        </Animated.Text>
-      </Animated.View>
-    </Pressable>
-  );
-}
-
-function formatStatus(status: Station["status"]) {
-  switch (status) {
-    case "available":
-      return "Available";
-    case "busy":
-      return "Busy";
-    case "charging":
-      return "Charging";
-    default:
-      return "Offline";
-  }
-}
-
-function getStatusDotStyle(status: Station["status"]) {
-  switch (status) {
-    case "available":
-      return { backgroundColor: "#2CDD9D" };
-    case "busy":
-      return { backgroundColor: "#FF8A1F" };
-    case "charging":
-      return { backgroundColor: "#4BACE4" };
-    default:
-      return { backgroundColor: "#9BA1A6" };
-  }
 }
 
 const styles = StyleSheet.create({
@@ -1982,13 +2080,6 @@ const styles = StyleSheet.create({
     color: "#0f231c",
     marginBottom: 4,
   },
-  filterDivider: {
-    width: 1,
-    height: 32,
-    backgroundColor: "#dfe4ec",
-    marginHorizontal: 6,
-    alignSelf: "center",
-  },
   marker: {
     paddingVertical: 6,
     paddingHorizontal: 10,
@@ -2046,8 +2137,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
     borderRadius: 999,
   },
   chipDot: {
@@ -2057,7 +2146,7 @@ const styles = StyleSheet.create({
   },
   chipText: {
     fontWeight: "700",
-    fontSize: 13,
+    fontSize: 16,
   },
   chipSub: {
     color: "#3b4a55",
@@ -2264,6 +2353,13 @@ const styles = StyleSheet.create({
     bottom: 120, // Enough to be above potential bottom sheet tab or bottom nav
     right: 20,
     zIndex: 50,
+  },
+  floatingWidgetContainer: {
+    position: 'absolute',
+    top: 180, // Safely below header + chips
+    left: 16,
+    right: 16,
+    zIndex: 60,
   },
   recenterBtn: {
     flexDirection: "row",

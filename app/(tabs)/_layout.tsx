@@ -1,16 +1,33 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { Tabs, useRouter } from "expo-router";
-import React from "react";
-import { Image, Pressable, View } from "react-native";
+import React, { useEffect, useRef } from "react";
+import { Animated, DeviceEventEmitter, Image, Pressable, View } from "react-native";
 
 import { HapticTab } from "@/components/haptic-tab";
 import { useTheme } from "@/context/ThemeContext";
+import { Profile, SmartCar } from "iconsax-react-native";
+
+
 
 export default function TabLayout() {
   const { colors, themeScheme } = useTheme();
   const router = useRouter();
 
   const isDark = themeScheme === 'dark';
+
+  const tabBarAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener('toggleBottomSheet', (isOpen: boolean) => {
+      Animated.timing(tabBarAnim, {
+        toValue: isOpen ? 150 : 0, // Slide down out of view
+        duration: 350,
+        useNativeDriver: true,
+      }).start();
+    });
+
+    return () => sub.remove();
+  }, [tabBarAnim]);
 
   return (
     <Tabs
@@ -31,16 +48,16 @@ export default function TabLayout() {
           shadowOpacity: 0.03, // Very subtle shadow
           shadowRadius: 8,
           height: 96, // Taller and spacious
-          paddingTop: 16,
+          paddingTop: 10,
           paddingBottom: 34, // Safe area
-          borderTopLeftRadius: 40, // More rounded
-          borderTopRightRadius: 40,
-          marginHorizontal: 4
+          borderTopLeftRadius: 10, // More rounded
+          borderTopRightRadius: 10,
+          transform: [{ translateY: tabBarAnim }]
         },
         tabBarItemStyle: { paddingVertical: 4 },
         headerShown: false,
         tabBarButton: HapticTab,
-        tabBarLabelStyle: { fontWeight: "600", fontSize: 12, marginTop: 2 },
+        tabBarLabelStyle: { fontWeight: "600", fontSize: 12, marginTop: 16 },
       }}
     >
       <Tabs.Screen
@@ -71,7 +88,7 @@ export default function TabLayout() {
           },
           headerTintColor: colors.text,
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons size={28} name={focused ? "flash" : "flash-outline"} color={color} />
+            <SmartCar size={28} variant={focused ? "Bold" : "Outline"} color={color} />
           ),
         })}
       />
@@ -99,13 +116,14 @@ export default function TabLayout() {
                 shadowOpacity: focused ? 0.3 : 0.05,
                 shadowRadius: 8,
                 elevation: focused ? 6 : 2,
+                overflow: "hidden",
               }}
             >
               <Image
                 source={require("@/assets/images/efishjuste.png")}
                 style={{
-                  width: 38,
-                  height: 38,
+                  width: 64,
+                  height: 64,
                   resizeMode: "contain",
                   tintColor: focused ? "#fff" : undefined,
                 }}
@@ -135,7 +153,7 @@ export default function TabLayout() {
           },
           headerTintColor: colors.text,
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons size={28} name={focused ? "person-circle" : "person-circle-outline"} color={color} />
+            <Profile size={28} variant={focused ? "Bold" : "Outline"} color={color} />
           ),
         })}
       />

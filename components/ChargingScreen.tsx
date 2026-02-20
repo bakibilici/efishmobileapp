@@ -2,7 +2,7 @@ import { useTheme } from '@/context/ThemeContext';
 import { ChargingMode, ChargingState } from '@/hooks/useChargingSimulation';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import React, { useEffect, useRef } from 'react';
-import { Dimensions, Easing, Image, Pressable, Animated as RNAnimated, SafeAreaView, StyleSheet, Text, View } from 'react-native';
+import { Dimensions, Easing, Image, Pressable, Animated as RNAnimated, StyleSheet, Text, View } from 'react-native';
 import Animated, { interpolateColor, useAnimatedProps, useDerivedValue, withTiming } from 'react-native-reanimated';
 import Svg, { Circle, Defs, G, Mask } from 'react-native-svg';
 
@@ -103,8 +103,8 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
     const isComplete = state.batteryLevel >= 100;
 
     return (
-        <View style={[styles.container, { backgroundColor: isDark ? '#121212' : '#F2F2F7' }]}>
-            <SafeAreaView style={{ flex: 1 }}>
+        <View style={styles.container}>
+            <View style={{ flex: 1, paddingBottom: 40 }}>
 
                 {/* Header */}
                 <View style={styles.header}>
@@ -115,27 +115,6 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                         </Text>
                     </View>
 
-                    <View style={{ flexDirection: 'row', gap: 12 }}>
-                        {/* Dev Toggle */}
-                        <Pressable
-                            onPress={() => {
-                                const nextMode = state.mode === 'AC' ? 'DC' : state.mode === 'DC' ? 'HPC' : 'AC';
-                                onToggleDev(nextMode);
-                            }}
-                            style={[
-                                styles.iconBtn,
-                                { backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border, width: 'auto', paddingHorizontal: 12 }
-                            ]}
-                        >
-                            <Text style={{ fontSize: 12, fontWeight: '700', color: colors.text }}>
-                                {state.mode}
-                            </Text>
-                        </Pressable>
-
-                        <Pressable onPress={onMinimize} style={[styles.iconBtn, { backgroundColor: colors.card }]}>
-                            <Ionicons name="chevron-down" size={24} color={colors.text} />
-                        </Pressable>
-                    </View>
                 </View>
 
                 {/* Main Content */}
@@ -280,6 +259,10 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
 
                 {/* Footer Action */}
                 <View style={styles.footer}>
+
+                    <Pressable onPress={onMinimize} style={[styles.iconBtn, { backgroundColor: colors.card }]}>
+                        <Ionicons name="chevron-down" size={24} color={colors.text} />
+                    </Pressable>
                     <Pressable
                         onPress={onStop}
                         style={({ pressed }) => [
@@ -291,7 +274,7 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                     </Pressable>
                 </View>
 
-            </SafeAreaView>
+            </View>
         </View>
     );
 }
@@ -453,21 +436,20 @@ const styles = StyleSheet.create({
 
     // Footer
     footer: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: 12,
         paddingHorizontal: 20,
         paddingBottom: 20,
     },
     stopBtn: {
-        width: '100%',
-        height: 56,
+        flex: 1,
+        height: 50,
         borderRadius: 18,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: '#FF3B30',
-        shadowColor: "#FF3B30",
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.25,
-        shadowRadius: 16,
-        elevation: 6,
     },
     stopBtnText: {
         color: '#fff',

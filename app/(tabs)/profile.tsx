@@ -46,9 +46,9 @@ export default function ProfileScreen() {
     : "Guest User";
   const displayEmail = user
     ? user.email ||
-      (user.phone_number?.length === 10
-        ? `+${user.phone_code} (${user.phone_number.slice(0, 3)}) ${user.phone_number.slice(3, 6)} ${user.phone_number.slice(6)}`
-        : `+${user.phone_code} ${user.phone_number}`)
+    (user.phone_number?.length === 10
+      ? `+${user.phone_code} (${user.phone_number.slice(0, 3)}) ${user.phone_number.slice(3, 6)} ${user.phone_number.slice(6)}`
+      : `+${user.phone_code} ${user.phone_number}`)
     : "guest@efish.app";
 
   return (
@@ -59,8 +59,6 @@ export default function ProfileScreen() {
         contentContainerStyle={styles.container}
         showsVerticalScrollIndicator={false}
       >
-        {/* Header Profile Card */}
-        {/* Header Profile Card */}
         <View
           style={[
             styles.profileCard,
@@ -516,7 +514,6 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   container: { paddingBottom: 40 },
 
-  // Profile Card
   profileCard: {
     alignItems: "center",
     paddingVertical: 32,

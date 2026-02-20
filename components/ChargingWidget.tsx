@@ -2,7 +2,7 @@ import { useTheme } from '@/context/ThemeContext';
 import { ChargingState } from '@/hooks/useChargingSimulation';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useRef } from 'react';
-import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 type ChargingWidgetProps = {
     state: ChargingState;
@@ -10,45 +10,50 @@ type ChargingWidgetProps = {
 };
 
 export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps) {
-    const { colors } = useTheme();
-    const progressAnim = useRef(new Animated.Value(state.batteryLevel)).current; // For smooth bar
+    const { colors, themeScheme } = useTheme();
+    const isDark = themeScheme === 'dark';
+    const progressAnim = useRef(new Animated.Value(state.batteryLevel)).current;
+    const entranceAnim = useRef(new Animated.Value(0)).current;
 
-    // Update progress bar smoothly when battery changes
+    // Entrance Animation on Mount
+    useEffect(() => {
+        Animated.timing(entranceAnim, {
+            toValue: 1,
+            duration: 350,
+            useNativeDriver: true,
+        }).start();
+    }, []);
+
+    // Update progress bar smoothly
     useEffect(() => {
         Animated.timing(progressAnim, {
             toValue: state.batteryLevel,
-            duration: 500,
-            useNativeDriver: false, // width property
+            duration: 800,
+            useNativeDriver: false,
         }).start();
     }, [state.batteryLevel]);
-
-    const isHPC = state.mode === 'HPC';
-    // const isDC = state.mode === 'DC'; // not strictly needed if we check isHPC inside getTheme else-if
 
     const getTheme = () => {
         if (state.mode === 'AC') {
             return {
-                bg: 'rgba(75, 172, 228, 0.15)', // AC Blue #4BACE4
+                bg: 'rgba(75, 172, 228, 0.15)',
                 iconBg: '#4BACE4',
-                iconColor: '#fff',
                 borderColor: '#4BACE4',
                 accent: '#4BACE4',
                 lightningCount: 1
             };
-        } else if (isHPC) {
+        } else if (state.mode === 'HPC') {
             return {
-                bg: 'rgba(124, 77, 255, 0.15)', // HPC Purple #7C4DFF (Matches Filter Chip)
+                bg: 'rgba(124, 77, 255, 0.15)',
                 iconBg: '#7C4DFF',
-                iconColor: '#fff',
                 borderColor: '#7C4DFF',
                 accent: '#7C4DFF',
                 lightningCount: 3
             };
-        } else { // Standard DC
+        } else {
             return {
-                bg: 'rgba(255, 138, 31, 0.15)', // DC Orange #FF8A1F (Matches Filter Chip)
+                bg: 'rgba(255, 138, 31, 0.15)',
                 iconBg: '#FF8A1F',
-                iconColor: '#fff',
                 borderColor: '#FF8A1F',
                 accent: '#FF8A1F',
                 lightningCount: 2
@@ -59,141 +64,207 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
     const theme = getTheme();
 
     return (
-        <Pressable
-            onPress={onExpand}
-            style={[
-                styles.container,
-                {
-                    backgroundColor: colors.card, // Main card bg (white/dark)
-                    borderColor: theme.borderColor,
-                    borderWidth: 0.5,
-                }
-            ]}
-        >
-            <View style={styles.content}>
-                {/* Icon Box */}
-                <View style={[styles.iconContainer, { backgroundColor: theme.iconBg }]}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
-                        {Array.from({ length: theme.lightningCount }).map((_, idx) => (
-                            <View key={idx} style={{ marginLeft: idx > 0 ? -12 : 0, zIndex: idx }}>
-                                <Ionicons name="flash" size={18} color={theme.iconColor} />
-                            </View>
-                        ))}
-                    </View>
-                </View>
+        <Animated.View style={{
+            opacity: entranceAnim,
+            transform: [{
+                translateY: entranceAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-15, 0]
+                })
+            }],
+            width: '100%'
+        }}>
+            <Pressable
+                onPress={onExpand}
+                style={[
+                    styles.container,
+                    {
+                        backgroundColor: isDark ? 'rgba(40, 40, 40, 0.85)' : 'rgba(255, 255, 255, 0.9)',
+                        borderColor: theme.borderColor,
+                    }
+                ]}
+            >
+                <View style={styles.blurOverlay} />
 
-                {/* Info */}
-                <View style={styles.info}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                        <Text style={[styles.title, { color: colors.text }]}>
-                            {state.mode} Charging
+                <View style={styles.content}>
+                    {/* Icon Section */}
+                    <View style={[styles.iconWrapper, { backgroundColor: theme.bg }]}>
+                        <View style={[styles.iconContainer, { backgroundColor: theme.iconBg }]}>
+                            <View style={styles.lightningWrap}>
+                                {Array.from({ length: theme.lightningCount }).map((_, idx) => (
+                                    <View key={idx} style={{ marginLeft: idx > 0 ? -10 : 0, zIndex: idx }}>
+                                        <Ionicons name="flash" size={16} color="#fff" />
+                                    </View>
+                                ))}
+                            </View>
+                        </View>
+                    </View>
+
+                    {/* Info Section */}
+                    <View style={styles.info}>
+                        <View style={styles.titleRow}>
+                            <Text style={[styles.title, { color: colors.text }]}>
+                                {state.mode} Charging
+                            </Text>
+                            {state.mode === 'HPC' && (
+                                <View style={[styles.ultraBadge, { backgroundColor: theme.accent }]}>
+                                    <Text style={styles.ultraText}>ULTRA</Text>
+                                </View>
+                            )}
+                        </View>
+                        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+                            <Ionicons name="time-outline" size={12} /> {Math.floor(state.duration / 60)}m {state.duration % 60}s • {state.cost.toFixed(2)} ₺
                         </Text>
-                        {isHPC && (
-                            <View style={[styles.badge, { backgroundColor: theme.accent }]}>
-                                <Text style={styles.badgeText}>HPC</Text>
-                            </View>
-                        )}
                     </View>
-                    <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-                        {Math.floor(state.duration / 60)}m {state.duration % 60}s • {state.cost.toFixed(2)} ₺
-                    </Text>
+
+                    {/* Status Info */}
+                    <View style={styles.status}>
+                        <Text style={[styles.percent, { color: theme.accent }]}>
+                            {Math.floor(state.batteryLevel)}%
+                        </Text>
+                        <View style={styles.liveDot} />
+                    </View>
                 </View>
 
-                {/* Percentage */}
-                <View style={styles.status}>
-                    <Text style={[styles.percent, { color: theme.accent }]}>
-                        {Math.floor(state.batteryLevel)}%
-                    </Text>
+                {/* Progress Visual */}
+                <View style={styles.progressContainer}>
+                    <View style={[styles.progressBarBg, { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                        <Animated.View
+                            style={[
+                                styles.progressBarFill,
+                                {
+                                    backgroundColor: theme.accent,
+                                    width: progressAnim.interpolate({
+                                        inputRange: [0, 100],
+                                        outputRange: ['0%', '100%']
+                                    })
+                                }
+                            ]}
+                        >
+                            <View style={styles.progressShine} />
+                        </Animated.View>
+                    </View>
                 </View>
-            </View>
-
-            {/* Progress Bar Background */}
-            <View style={[styles.progressBarBg, { backgroundColor: colors.backgroundSecondary }]}>
-                {/* Active Progress */}
-                <Animated.View
-                    style={[
-                        styles.progressBarFill,
-                        {
-                            backgroundColor: theme.accent,
-                            width: progressAnim.interpolate({
-                                inputRange: [0, 100],
-                                outputRange: ['0%', '100%']
-                            })
-                        }
-                    ]}
-                />
-            </View>
-        </Pressable>
+            </Pressable>
+        </Animated.View>
     );
 }
 
 const styles = StyleSheet.create({
     container: {
-        borderRadius: 20, // More rounded modern look
-        marginBottom: 20,
-        paddingVertical: 14,
-        paddingHorizontal: 20,
-        // Softer shadow
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.1,
-        shadowRadius: 16,
-        elevation: 10,
+        borderRadius: 20,
+        padding: 16,
+        paddingBottom: 18,
+        marginBottom: 16,
+        borderWidth: 1,
+        overflow: 'hidden',
+        ...Platform.select({
+            ios: {
+                shadowColor: "#000",
+                shadowOffset: { width: 0, height: 8 },
+                shadowOpacity: 0.1,
+                shadowRadius: 16,
+            },
+            android: {
+                elevation: 6,
+            }
+        }),
+    },
+    blurOverlay: {
+        ...StyleSheet.absoluteFillObject,
     },
     content: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 16,
+        marginBottom: 14,
     },
-    iconContainer: {
-        width: 48,
-        height: 48,
-        borderRadius: 99, // circle
+    iconWrapper: {
+        width: 52,
+        height: 52,
+        borderRadius: 18,
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 14,
     },
-    info: {
-        flex: 1,
+    iconContainer: {
+        width: 38,
+        height: 38,
+        borderRadius: 12,
+        alignItems: 'center',
         justifyContent: 'center',
     },
-    title: {
-        fontWeight: '700',
-        fontSize: 17,
-        letterSpacing: -0.5,
+    lightningWrap: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
     },
-    badge: {
+    info: {
+        flex: 1,
+    },
+    titleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    title: {
+        fontWeight: '800',
+        fontSize: 16,
+        letterSpacing: -0.3,
+    },
+    ultraBadge: {
         paddingHorizontal: 6,
         paddingVertical: 2,
         borderRadius: 6,
     },
-    badgeText: {
+    ultraText: {
         color: '#fff',
-        fontSize: 10,
-        fontWeight: '800',
+        fontSize: 9,
+        fontWeight: '900',
     },
     subtitle: {
-        fontSize: 14,
-        fontWeight: '500',
+        fontSize: 13,
+        fontWeight: '600',
         marginTop: 2,
+        opacity: 0.8,
     },
     status: {
         alignItems: 'flex-end',
         justifyContent: 'center',
     },
     percent: {
-        fontWeight: '800',
-        fontSize: 22,
+        fontWeight: '900',
+        fontSize: 24,
         letterSpacing: -1,
     },
+    liveDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: '#2CDD9D',
+        marginTop: 4,
+    },
+    progressContainer: {
+        width: '100%',
+    },
     progressBarBg: {
-        height: 8,
-        borderRadius: 4,
+        height: 6, // Thinner, sharper
+        borderRadius: 3,
         width: '100%',
         overflow: 'hidden',
     },
     progressBarFill: {
         height: '100%',
-        borderRadius: 4,
+        borderRadius: 5,
+        justifyContent: 'center',
+    },
+    progressShine: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(255,255,255,0.2)',
+        width: '30%',
+        transform: [{ skewX: '-20deg' }],
     }
 });
