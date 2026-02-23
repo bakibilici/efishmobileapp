@@ -9,6 +9,11 @@ export default ({ config }) => ({
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
   ios: {
+    "infoPlist": {
+      ITSAppUsesNonExemptEncryption: false,
+      NSMicrophoneUsageDescription: "Ses kaydı için mikrofon erişimi gerekiyor.",
+      NSSpeechRecognitionUsageDescription: "Konuşmayı yazıya çevirmek için izin gerekiyor."
+    },
     supportsTablet: true,
     bundleIdentifier: "com.efish.app",
     config: {
@@ -59,6 +64,8 @@ export default ({ config }) => ({
       },
     ],
     "expo-secure-store",
+    "@react-native-voice/voice",
+    "expo-localization",
   ],
   experiments: {
     typedRoutes: true,

@@ -13,6 +13,7 @@ export type ChargingState = {
     duration: number; // seconds
     startTime: number | null;
     startedAt: string | null; // ISO string from backend
+    startSoc: number | null; // Initial battery level when charging started
     // Estimates for DC
     estTime80: number | null; // minutes remaining to 80%
     estTime100: number | null; // minutes remaining to 100%
@@ -30,6 +31,7 @@ export const useChargingSimulation = () => {
         duration: 0,
         startTime: null,
         startedAt: null,
+        startSoc: null,
         estTime80: null,
         estTime100: null,
     });
@@ -51,15 +53,22 @@ export const useChargingSimulation = () => {
         duration?: number;
         duration_sec?: number;
         mode?: ChargingMode;
+        socket_type?: string; // HPC, DC, AC from backend
         started_at?: string;
+        start_soc?: number; // Initial battery level when charging started
     }) => {
         const batteryLevel = data.batteryLevel ?? data.soc ?? data.state_of_charge;
         const power = data.power_kw ?? data.power ?? 0;
         const chargedAmount = data.charged_kwh ?? data.chargedAmount ?? data.energy_kwh ?? 0;
         const cost = data.cost;
         const duration = data.duration ?? data.duration_sec;
-        const mode = data.mode ?? (power >= 150 ? 'HPC' : power >= 50 ? 'DC' : 'AC');
+        // Prefer socket_type from backend, then explicit mode, then power-based heuristic
+        const socketType = data.socket_type?.toUpperCase() as ChargingMode | undefined;
+        const mode: ChargingMode = socketType && ['HPC', 'DC', 'AC'].includes(socketType)
+            ? socketType
+            : data.mode ?? (power >= 150 ? 'HPC' : power >= 50 ? 'DC' : 'AC');
         const startedAt = data.started_at;
+        const startSoc = data.start_soc ?? null;
 
         const hasCharging = power > 0 || (batteryLevel != null && batteryLevel > 0);
 
@@ -78,6 +87,7 @@ export const useChargingSimulation = () => {
                     duration: duration ?? prev.duration,
                     startTime: prev.startTime ?? Date.now(),
                     startedAt: startedAt ?? prev.startedAt,
+                    startSoc: startSoc ?? prev.startSoc,
                     estTime80: null,
                     estTime100: null,
                 };
@@ -85,13 +95,14 @@ export const useChargingSimulation = () => {
             if (hasCharging) {
                 return {
                     ...prev,
-                    mode: data.mode ?? prev.mode,
+                    mode,
                     batteryLevel: batteryLevel ?? prev.batteryLevel,
                     power: power || prev.power,
                     chargedAmount: chargedAmount || prev.chargedAmount,
                     cost: cost ?? prev.cost,
                     duration: duration ?? prev.duration,
                     startedAt: startedAt ?? prev.startedAt,
+                    startSoc: startSoc ?? prev.startSoc,
                 };
             }
             return prev;
@@ -100,7 +111,7 @@ export const useChargingSimulation = () => {
         if (!hasCharging) {
             if (timerRef.current) clearInterval(timerRef.current);
             isLiveFromBackendRef.current = false;
-            setState(prev => (prev.isActive ? { ...prev, isActive: false, startTime: null, startedAt: null } : prev));
+            setState(prev => (prev.isActive ? { ...prev, isActive: false, startTime: null, startedAt: null, startSoc: null } : prev));
         }
     };
 
@@ -121,6 +132,7 @@ export const useChargingSimulation = () => {
             duration: 0,
             startTime: Date.now(),
             startedAt: null,
+            startSoc: null,
             estTime80: mode !== 'AC' ? 20 : null, // Faster estimates
             estTime100: mode !== 'AC' ? 40 : null,
         });
@@ -131,7 +143,7 @@ export const useChargingSimulation = () => {
         if (timerRef.current) {
             clearInterval(timerRef.current);
         }
-        setState(prev => ({ ...prev, isActive: false, startTime: null, startedAt: null }));
+        setState(prev => ({ ...prev, isActive: false, startTime: null, startedAt: null, startSoc: null }));
     };
 
     const toggleMinimize = () => {

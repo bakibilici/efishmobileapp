@@ -102,6 +102,12 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
 
     const isComplete = state.batteryLevel >= 100;
 
+    const modeColors: Record<string, string> = {
+        HPC: '#7C4DFF',
+        DC: '#FF8A1F',
+        AC: '#4BACE4',
+    };
+
     return (
         <View style={styles.container}>
             <View style={{ flex: 1, paddingBottom: 40 }}>
@@ -113,6 +119,9 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                         <Text style={[styles.headerTitle, { color: colors.text }]}>
                             {isComplete ? 'Charging Complete' : 'Charging...'}
                         </Text>
+                        <View style={[styles.modeBadge, { backgroundColor: modeColors[state.mode] || '#666' }]}>
+                            <Text style={styles.modeBadgeText}>{state.mode}</Text>
+                        </View>
                     </View>
 
                 </View>
@@ -185,7 +194,9 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                         <View style={styles.batteryRow}>
                             <View style={styles.batteryStat}>
                                 <Text style={[styles.bLabel, { color: colors.textSecondary }]}>Start</Text>
-                                <Text style={[styles.bValue, { color: colors.text }]}>23%</Text>
+                                <Text style={[styles.bValue, { color: colors.text }]}>
+                                    {state.startSoc != null ? `${state.startSoc}%` : '—'}
+                                </Text>
                             </View>
                             <View style={[styles.divider, { backgroundColor: colors.border }]} />
                             <View style={styles.batteryStat}>
@@ -299,6 +310,17 @@ const styles = StyleSheet.create({
     headerTitle: {
         fontSize: 20,
         fontWeight: '700',
+    },
+    modeBadge: {
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 10,
+    },
+    modeBadgeText: {
+        color: '#FFFFFF',
+        fontSize: 12,
+        fontWeight: '700',
+        letterSpacing: 0.5,
     },
     iconBtn: {
         width: 44,

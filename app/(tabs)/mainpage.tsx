@@ -12,6 +12,8 @@ import {
   BottomSheetModal,
   BottomSheetScrollView
 } from "@gorhom/bottom-sheet";
+import * as Haptics from 'expo-haptics';
+import * as Localization from "expo-localization";
 import * as Location from "expo-location";
 import {
   useFocusEffect,
@@ -31,6 +33,7 @@ import {
   Alert,
   Animated,
   DeviceEventEmitter,
+  Keyboard,
   LayoutAnimation,
   Platform,
   Pressable,
@@ -39,6 +42,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  TouchableWithoutFeedback,
   UIManager,
   View
 } from "react-native";
@@ -51,7 +55,8 @@ import Svg, { Circle, Path } from "react-native-svg";
 import { Station, StationType } from "@/constants/stations";
 import { Colors } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
-import { Flash, Notification, Setting4 } from "iconsax-react-native";
+import Voice from '@react-native-voice/voice';
+import { Flash, Microphone2, Notification, Setting4 } from "iconsax-react-native";
 
 const typeColors: Record<StationType, string> = {
   HPC: "#7C4DFF",
@@ -407,7 +412,9 @@ export default function MapScreen() {
                 power_kw: payload.power_kw,
                 charged_kwh: payload.charged_kwh,
                 cost: payload.cost,
-                started_at: payload.started_at
+                started_at: payload.started_at,
+                socket_type: d.socket_type, // HPC, DC, AC
+                start_soc: d.start_soc,     // Initial battery level
               } as any);
             }
           }
@@ -786,6 +793,50 @@ export default function MapScreen() {
   }, []);
 
 
+  const [isListening, setIsListening] = useState(false);
+
+  useEffect(() => {
+    Voice.onSpeechStart = () => setIsListening(true);
+    Voice.onSpeechEnd = () => setIsListening(false);
+    Voice.onSpeechError = (e) => {
+      // Gracefully handle "No speech detected" timeouts
+      const isNoSpeech = e.error?.message?.includes("No speech detected") || e.error?.code === "7";
+      if (!isNoSpeech) {
+        console.error("Speech Error:", e);
+      }
+      setIsListening(false);
+    };
+    Voice.onSpeechResults = (e) => {
+      if (e.value && e.value.length > 0) {
+        setSearch(e.value[0]);
+      }
+    };
+    Voice.onSpeechPartialResults = (e) => {
+      if (e.value && e.value.length > 0) {
+        setSearch(e.value[0]);
+      }
+    };
+
+    return () => {
+      Voice.destroy().then(Voice.removeAllListeners);
+    };
+  }, []);
+
+  const toggleListening = async () => {
+    try {
+      if (isListening) {
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        await Voice.stop();
+      } else {
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        const locale = Localization.getLocales()[0].languageTag || "tr-TR";
+        await Voice.start(locale);
+      }
+    } catch (e) {
+      console.error("Toggle Listening Error:", e);
+    }
+  };
+
   // Keep track of current region to refetch when filters change
   const currentRegion = useRef<Region>(initialRegion);
 
@@ -879,6 +930,7 @@ export default function MapScreen() {
   };
 
   const handleMarkerPress = (station: Station) => {
+    Keyboard.dismiss();
     setSelectedStation(station);
     setStationDetails(null); // Reset details
     setBottomSheetMode('details'); // Ensure we start in details mode
@@ -992,912 +1044,927 @@ export default function MapScreen() {
   }, [typeFilters, onlyEfish, showPublic, showFavorites]);
 
   return (
-    <View style={[styles.page, { backgroundColor: colors.background }]}>
-      <View style={styles.container}>
-        <MapView
-          ref={mapRef}
-          provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined}
-          style={StyleSheet.absoluteFillObject}
-          initialRegion={initialRegion}
-          showsUserLocation={locationPermission}
-          showsMyLocationButton={false}
-          userLocationPriority="high"
-          userLocationUpdateInterval={5000}
-          tintColor={colors.tint}
-          onRegionChangeComplete={onRegionChangeComplete}
-          userInterfaceStyle={themeScheme === 'dark' ? 'dark' : 'light'}
-          customMapStyle={themeScheme === 'dark' ? [
-            {
-              "elementType": "geometry",
-              "stylers": [{ "color": "#242f3e" }]
-            },
-            {
-              "elementType": "labels.text.fill",
-              "stylers": [{ "color": "#746855" }]
-            },
-            {
-              "elementType": "labels.text.stroke",
-              "stylers": [{ "color": "#242f3e" }]
-            },
-            {
-              "featureType": "administrative.locality",
-              "elementType": "labels.text.fill",
-              "stylers": [{ "color": "#d59563" }]
-            },
-            {
-              "featureType": "poi",
-              "elementType": "labels.text.fill",
-              "stylers": [{ "color": "#d59563" }]
-            },
-            {
-              "featureType": "poi.park",
-              "elementType": "geometry",
-              "stylers": [{ "color": "#263c3f" }]
-            },
-            {
-              "featureType": "poi.park",
-              "elementType": "labels.text.fill",
-              "stylers": [{ "color": "#6b9a76" }]
-            },
-            {
-              "featureType": "road",
-              "elementType": "geometry",
-              "stylers": [{ "color": "#38414e" }]
-            },
-            {
-              "featureType": "road",
-              "elementType": "geometry.stroke",
-              "stylers": [{ "color": "#212a37" }]
-            },
-            {
-              "featureType": "road",
-              "elementType": "labels.text.fill",
-              "stylers": [{ "color": "#9ca5b3" }]
-            },
-            {
-              "featureType": "road.highway",
-              "elementType": "geometry",
-              "stylers": [{ "color": "#746855" }]
-            },
-            {
-              "featureType": "road.highway",
-              "elementType": "geometry.stroke",
-              "stylers": [{ "color": "#1f2835" }]
-            },
-            {
-              "featureType": "road.highway",
-              "elementType": "labels.text.fill",
-              "stylers": [{ "color": "#f3d19c" }]
-            },
-            {
-              "featureType": "transit",
-              "elementType": "geometry",
-              "stylers": [{ "color": "#2f3948" }]
-            },
-            {
-              "featureType": "transit.station",
-              "elementType": "labels.text.fill",
-              "stylers": [{ "color": "#d59563" }]
-            },
-            {
-              "featureType": "water",
-              "elementType": "geometry",
-              "stylers": [{ "color": "#17263c" }]
-            },
-            {
-              "featureType": "water",
-              "elementType": "labels.text.fill",
-              "stylers": [{ "color": "#515c6d" }]
-            },
-            {
-              "featureType": "water",
-              "elementType": "labels.text.stroke",
-              "stylers": [{ "color": "#17263c" }]
-            }
-          ] : []}>
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
+      <View style={[styles.page, { backgroundColor: colors.background }]}>
+        <View style={styles.container}>
+          <MapView
+            ref={mapRef}
+            onPress={() => Keyboard.dismiss()}
+            provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined}
+            style={StyleSheet.absoluteFillObject}
+            initialRegion={initialRegion}
+            showsUserLocation={locationPermission}
+            showsMyLocationButton={false}
+            userLocationPriority="high"
+            userLocationUpdateInterval={5000}
+            tintColor={colors.tint}
+            onRegionChangeComplete={onRegionChangeComplete}
+            userInterfaceStyle={themeScheme === 'dark' ? 'dark' : 'light'}
+            customMapStyle={themeScheme === 'dark' ? [
+              {
+                "elementType": "geometry",
+                "stylers": [{ "color": "#242f3e" }]
+              },
+              {
+                "elementType": "labels.text.fill",
+                "stylers": [{ "color": "#746855" }]
+              },
+              {
+                "elementType": "labels.text.stroke",
+                "stylers": [{ "color": "#242f3e" }]
+              },
+              {
+                "featureType": "administrative.locality",
+                "elementType": "labels.text.fill",
+                "stylers": [{ "color": "#d59563" }]
+              },
+              {
+                "featureType": "poi",
+                "elementType": "labels.text.fill",
+                "stylers": [{ "color": "#d59563" }]
+              },
+              {
+                "featureType": "poi.park",
+                "elementType": "geometry",
+                "stylers": [{ "color": "#263c3f" }]
+              },
+              {
+                "featureType": "poi.park",
+                "elementType": "labels.text.fill",
+                "stylers": [{ "color": "#6b9a76" }]
+              },
+              {
+                "featureType": "road",
+                "elementType": "geometry",
+                "stylers": [{ "color": "#38414e" }]
+              },
+              {
+                "featureType": "road",
+                "elementType": "geometry.stroke",
+                "stylers": [{ "color": "#212a37" }]
+              },
+              {
+                "featureType": "road",
+                "elementType": "labels.text.fill",
+                "stylers": [{ "color": "#9ca5b3" }]
+              },
+              {
+                "featureType": "road.highway",
+                "elementType": "geometry",
+                "stylers": [{ "color": "#746855" }]
+              },
+              {
+                "featureType": "road.highway",
+                "elementType": "geometry.stroke",
+                "stylers": [{ "color": "#1f2835" }]
+              },
+              {
+                "featureType": "road.highway",
+                "elementType": "labels.text.fill",
+                "stylers": [{ "color": "#f3d19c" }]
+              },
+              {
+                "featureType": "transit",
+                "elementType": "geometry",
+                "stylers": [{ "color": "#2f3948" }]
+              },
+              {
+                "featureType": "transit.station",
+                "elementType": "labels.text.fill",
+                "stylers": [{ "color": "#d59563" }]
+              },
+              {
+                "featureType": "water",
+                "elementType": "geometry",
+                "stylers": [{ "color": "#17263c" }]
+              },
+              {
+                "featureType": "water",
+                "elementType": "labels.text.fill",
+                "stylers": [{ "color": "#515c6d" }]
+              },
+              {
+                "featureType": "water",
+                "elementType": "labels.text.stroke",
+                "stylers": [{ "color": "#17263c" }]
+              }
+            ] : []}>
 
-          {filteredStations.map((station) => {
-            const availableCount = station.socket_stats
-              ? Object.values(station.socket_stats).reduce((acc: number, curr: any) => acc + (curr.available || 0), 0)
-              : 0;
-            const stationColor = getStationColor(station.type);
+            {filteredStations.map((station) => {
+              const availableCount = station.socket_stats
+                ? Object.values(station.socket_stats).reduce((acc: number, curr: any) => acc + (curr.available || 0), 0)
+                : 0;
+              const stationColor = getStationColor(station.type);
 
-            return (
-              <Marker
-                key={station.id}
-                coordinate={{
-                  latitude: station.latitude,
-                  longitude: station.longitude,
-                }}
-                onPress={() => handleMarkerPress(station)}
-                anchor={{ x: 0.5, y: 1 }}
-                flat={false}
-                tracksViewChanges={true}
-              >
-                <View style={{ alignItems: 'center' }}>
-                  <View style={{ width: 40, height: 52 }}>
-                    <Svg width={40} height={52} viewBox="0 0 40 52">
-                      {/* Teardrop shape */}
-                      <Path
-                        d="M20 0C8.954 0 0 8.954 0 20c0 11.046 20 32 20 32s20-20.954 20-32C40 8.954 31.046 0 20 0z"
-                        fill={stationColor}
-                      />
-                      {/* White inner circle */}
-                      <Circle cx={20} cy={18} r={13} fill="#ffffff" />
-                    </Svg>
-                    {/* Logo overlay */}
+              return (
+                <Marker
+                  key={station.id}
+                  coordinate={{
+                    latitude: station.latitude,
+                    longitude: station.longitude,
+                  }}
+                  onPress={() => handleMarkerPress(station)}
+                  anchor={{ x: 0.5, y: 1 }}
+                  flat={false}
+                  tracksViewChanges={true}
+                >
+                  <View style={{ alignItems: 'center' }}>
+                    <View style={{ width: 40, height: 52 }}>
+                      <Svg width={40} height={52} viewBox="0 0 40 52">
+                        {/* Teardrop shape */}
+                        <Path
+                          d="M20 0C8.954 0 0 8.954 0 20c0 11.046 20 32 20 32s20-20.954 20-32C40 8.954 31.046 0 20 0z"
+                          fill={stationColor}
+                        />
+                        {/* White inner circle */}
+                        <Circle cx={20} cy={18} r={13} fill="#ffffff" />
+                      </Svg>
+                      {/* Logo overlay */}
+                      <View style={{
+                        position: "absolute",
+                        top: 6,
+                        left: 0,
+                        right: 0,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}>
+                        <RNImage
+                          source={require("@/assets/images/efishremovedbge.png")}
+                          style={{
+                            width: 24,
+                            height: 24,
+                          }}
+                          resizeMode="contain"
+                          tintColor={stationColor}
+                        />
+                      </View>
+                    </View>
+
+                    {/* Available Socket Badge */}
                     <View style={{
-                      position: "absolute",
-                      top: 6,
-                      left: 0,
-                      right: 0,
-                      alignItems: "center",
-                      justifyContent: "center",
+                      backgroundColor: stationColor,
+                      paddingHorizontal: 5,
+                      paddingVertical: 1,
+                      borderRadius: 12,
+                      borderWidth: 2,
+                      borderColor: '#fff',
+                      minWidth: 22,
+                      height: 22,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginTop: -10, // Pull up to overlap with pin tip
+                      zIndex: 2,
+                      elevation: 2,
+                      shadowColor: "#000",
+                      shadowOffset: { width: 0, height: 1 },
+                      shadowOpacity: 0.2,
+                      shadowRadius: 1,
                     }}>
-                      <RNImage
-                        source={require("@/assets/images/efishremovedbge.png")}
-                        style={{
-                          width: 24,
-                          height: 24,
-                        }}
-                        resizeMode="contain"
-                        tintColor={stationColor}
-                      />
+                      <Text style={{
+                        color: '#fff',
+                        fontSize: 11,
+                        fontWeight: '900',
+                        textAlign: 'center'
+                      }}>
+                        {availableCount}
+                      </Text>
                     </View>
                   </View>
+                </Marker>
+              )
+            })}
+          </MapView>
 
-                  {/* Available Socket Badge */}
-                  <View style={{
-                    backgroundColor: stationColor,
-                    paddingHorizontal: 5,
-                    paddingVertical: 1,
-                    borderRadius: 12,
-                    borderWidth: 2,
-                    borderColor: '#fff',
-                    minWidth: 22,
-                    height: 22,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    marginTop: -10, // Pull up to overlap with pin tip
-                    zIndex: 2,
-                    elevation: 2,
-                    shadowColor: "#000",
-                    shadowOffset: { width: 0, height: 1 },
-                    shadowOpacity: 0.2,
-                    shadowRadius: 1,
-                  }}>
-                    <Text style={{
-                      color: '#fff',
-                      fontSize: 11,
-                      fontWeight: '900',
-                      textAlign: 'center'
-                    }}>
-                      {availableCount}
-                    </Text>
-                  </View>
-                </View>
-              </Marker>
-            )
-          })}
-        </MapView>
-
-        <View style={[styles.overlay, { paddingTop: topInset }]}>
-          {/* Main Header Card Container */}
-          <Animated.View style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            paddingTop: topInset,
-            paddingBottom: 4, // Smaller bottom padding
-            backgroundColor: isDark ? "rgba(30, 30, 30, 0.85)" : "rgba(255, 255, 255, 0.95)", // Semi-transparent for glass effect
-            borderBottomLeftRadius: 10,
-            borderBottomRightRadius: 10,
-            shadowColor: "#000",
-            shadowOffset: { width: 0, height: 4 }, // Reduced shadow
-            shadowOpacity: 0.1,
-            shadowRadius: 12,
-            elevation: 8,
-            zIndex: 10,
-            transform: [{ translateY: headerAnim }],
-            overflow: 'hidden' // FIX: Ensure child content (chips) doesn't overflow rounded corners
-          }}>
-            {/* Row 1: Search & Bell/Login */}
-            <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, marginBottom: 12, alignItems: 'center' }}>
-              <View style={{
-                flex: 1,
-                height: 48, // Slightly taller
-                backgroundColor: isDark ? "#333" : "#fff", // Use white in light mode for contrast
-                borderRadius: 99,
-                justifyContent: 'center',
-                borderWidth: 1,
-                borderColor: isDark ? "#444" : "#e0e0e0", // Subtle borde
-              }}>
-                <TextInput
-                  placeholder="Search"
-                  placeholderTextColor={colors.textTertiary}
-                  value={search}
-                  onChangeText={setSearch}
-                  style={{
-                    flex: 1,
-                    paddingHorizontal: 16,
-                    fontSize: 16,
-                    color: colors.text
-                  }}
-                />
-
-              </View>
-              <Pressable
-                onPress={toggleFilters}
-                hitSlop={8}
-                style={{ padding: 4 }}
-              >
-                <Setting4
-                  size={22}
-                  color={isFiltersVisible ? colors.primary : colors.textSecondary}
-                  variant={isFiltersVisible ? "Bold" : "Outline"}
-                />
-              </Pressable>
-              {user ? (
-                <Pressable style={{
-                  width: 48, // Match height
-                  height: 48,
+          <View style={[styles.overlay, { paddingTop: topInset }]}>
+            {/* Main Header Card Container */}
+            <Animated.View style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              paddingTop: topInset,
+              paddingBottom: 4, // Smaller bottom padding
+              backgroundColor: isDark ? "rgba(30, 30, 30, 0.85)" : "rgba(255, 255, 255, 0.95)", // Semi-transparent for glass effect
+              borderBottomLeftRadius: 10,
+              borderBottomRightRadius: 10,
+              shadowColor: "#000",
+              shadowOffset: { width: 0, height: 4 }, // Reduced shadow
+              shadowOpacity: 0.1,
+              shadowRadius: 12,
+              elevation: 8,
+              zIndex: 10,
+              transform: [{ translateY: headerAnim }],
+              overflow: 'hidden' // FIX: Ensure child content (chips) doesn't overflow rounded corners
+            }}>
+              {/* Row 1: Search & Bell/Login */}
+              <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, marginBottom: 12, alignItems: 'center' }}>
+                <View style={{
+                  flex: 1,
+                  height: 48, // Slightly taller
+                  backgroundColor: isDark ? "#333" : "#fff", // Use white in light mode for contrast
                   borderRadius: 99,
-                  backgroundColor: isDark ? "#333" : "#fff",
-                  alignItems: "center",
-                  justifyContent: "center",
+                  justifyContent: 'center',
                   borderWidth: 1,
-                  borderColor: isDark ? "#444" : "#e0e0e0",
+                  borderColor: isDark ? "#444" : "#e0e0e0", // Subtle borde
                 }}>
-                  <Notification
-                    size={24}
-                    color={colors.text}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                    <TextInput
+                      placeholder="Search"
+                      placeholderTextColor={colors.textTertiary}
+                      value={search}
+                      onChangeText={setSearch}
+                      style={{
+                        flex: 1,
+                        paddingHorizontal: 16,
+                        fontSize: 16,
+                        color: colors.text
+                      }}
+                    />
+                    <Pressable
+                      onPress={toggleListening}
+                      style={{ paddingRight: 12 }}
+                    >
+                      <Microphone2
+                        size={20}
+                        color={isListening ? colors.primary : colors.textTertiary}
+                        variant={isListening ? "Bold" : "Outline"}
+                      />
+                    </Pressable>
+                  </View>
+
+                </View>
+                <Pressable
+                  onPress={toggleFilters}
+                  hitSlop={8}
+                  style={{ padding: 4 }}
+                >
+                  <Setting4
+                    size={22}
+                    color={isFiltersVisible ? colors.primary : colors.textSecondary}
+                    variant={isFiltersVisible ? "Bold" : "Outline"}
                   />
                 </Pressable>
-              ) : (
-                <Pressable
-                  onPress={() => {
-                    if (router.canDismiss()) {
-                      router.dismissAll();
-                    }
-                    router.replace("/");
-                  }}
-                  style={{
+                {user ? (
+                  <Pressable style={{
+                    width: 48, // Match height
                     height: 48,
-                    paddingHorizontal: 16,
-                    backgroundColor: colors.primary,
-                    borderRadius: 14,
+                    borderRadius: 99,
+                    backgroundColor: isDark ? "#333" : "#fff",
                     alignItems: "center",
                     justifyContent: "center",
-                    shadowColor: colors.primary,
-                    shadowOffset: { width: 0, height: 4 },
-                    shadowOpacity: 0.3,
-                    shadowRadius: 8,
-                    elevation: 4,
-                  }}
-                >
-                  <Text style={{ color: "#fff", fontWeight: "700", fontSize: 13 }}>Log In</Text>
-                </Pressable>
-              )}
-            </View>
-            {/* Row 2: Filters (Animated Drawer) */}
-            <Animated.View style={{
-              height: filterDrawerAnim.interpolate({
-                inputRange: [0, 1],
-                outputRange: [0, 90] // Enough height for exactly 2 lines + gaps
-              }),
-              opacity: filterDrawerAnim,
-              overflow: 'hidden',
-              paddingHorizontal: 16,
-              marginTop: 4,
-              gap: 12,
-            }}>
-              {/* Row 1: Types */}
-              <View style={{ flexDirection: 'row', gap: 10 }}>
-                {types.map((item) => (
-                  <FilterChip
-                    key={item.key}
-                    label={item.label}
-                    color={item.color}
-                    active={item.active}
-                    lightningCount={item.lightningCount}
-                    onPress={item.onPress}
-                    colors={colors}
-                    compact
-                    style={{ flex: 1 }}
-                  />
-                ))}
-              </View>
-
-              {/* Row 2: Toggles (now rendering as FilterChips) */}
-              <View style={{ flexDirection: 'row', gap: 10 }}>
-                {toggles.map((item) => (
-                  <FilterChip
-                    key={item.key}
-                    label={item.label}
-                    color={item.color}
-                    active={item.active}
-                    icon={item.icon}
-                    onPress={item.onPress}
-                    colors={colors}
-                    compact
-                    style={{ flex: 1 }}
-                  />
-                ))}
-              </View>
-            </Animated.View>
-
-            {/* Solid Type Buttons when filters are CLOSED */}
-            {!isFiltersVisible && (
-              <View style={{ flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingBottom: 12, marginTop: 4 }}>
-                {(["HPC", "DC", "AC"] as StationType[]).map((t) => (
-                  <Pressable
-                    key={t}
-                    onPress={() => {
-                      setBottomSheetSelectedType(t);
-                      bottomSheetRef.current?.dismiss();
-                      typeListBottomSheetRef.current?.present();
-                      // Next tick snap to ensure 50% opens instead of 10%
-                      requestAnimationFrame(() => {
-                        typeListBottomSheetRef.current?.snapToIndex(1);
-                      });
-                      DeviceEventEmitter.emit('toggleBottomSheet', true);
-                    }}
-                    style={{
-                      flex: 1,
-                      backgroundColor: typeColors[t],
-                      paddingVertical: 10,
-                      borderRadius: 99,
-                      alignItems: 'center',
-                      flexDirection: 'row',
-                      justifyContent: 'center',
-                      gap: 4,
-                    }}
-                  >
-                    <Flash variant="Bold" size={16} color="#ffffff" />
-                    <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 13 }}>{t}</Text>
+                    borderWidth: 1,
+                    borderColor: isDark ? "#444" : "#e0e0e0",
+                  }}>
+                    <Notification
+                      size={24}
+                      color={colors.text}
+                    />
                   </Pressable>
-                ))}
-              </View>
-            )}
-
-          </Animated.View>
-
-        </View>
-
-        {/* Floating Charging Widget at Bottom */}
-        {charging.isActive && charging.isMinimized && (
-          <View style={styles.floatingWidgetContainer}>
-            <ChargingWidget
-              state={charging}
-              onExpand={() => {
-                charging.toggleMinimize();
-              }}
-            />
-          </View>
-        )}
-
-        {/* Re-center Button - Hide when widget is active to avoid clutter? Or keep? Keeping for now. */}
-        {
-          showRecenter && !charging.isActive && (
-            <Animated.View
-              style={styles.recenterBtnWrapper}
-            >
-              <Pressable onPress={handleRecenter} style={[styles.recenterBtn, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
-                <FontAwesome5 name="location-arrow" size={22} color={colors.text} />
-              </Pressable>
-            </Animated.View>
-          )
-        }
-
-        <BottomSheetModal
-          ref={bottomSheetRef}
-          snapPoints={snapPoints}
-          onDismiss={closeSheet}
-          enablePanDownToClose
-          backdropComponent={renderBackdrop}
-          handleComponent={null}
-          backgroundStyle={{ backgroundColor: isDark ? "#161616" : "#ffffff" }}
-        >
-          <BottomSheetScrollView
-            contentContainerStyle={[
-              styles.sheetContent,
-              isDark ? styles.sheetContentDark : styles.sheetContentLight,
-            ]}
-          >
-            {bottomSheetMode === 'vehicle_select' ? (
-              <View style={{ minHeight: 300 }}>
-                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                    <Pressable
-                      onPress={() => setBottomSheetMode('details')}
-                      hitSlop={15}
-                      style={{
-                        padding: 4,
-                      }}
-                    >
-                      <Ionicons name="chevron-back" size={24} color={colors.text} />
-                    </Pressable>
-                    <Text style={[styles.stationName, isDark ? styles.stationNameDark : styles.stationNameLight, { fontSize: 18 }]}>
-                      Select Vehicle
-                    </Text>
-                  </View>
-
-                  <Pressable
-                    onPress={() => bottomSheetRef.current?.dismiss()}
-                    hitSlop={10}
-                    style={{
-                      padding: 4,
-                      backgroundColor: isDark ? "#252525ff" : "#f0f2f5",
-                      borderRadius: 20
-                    }}
-                  >
-                    <Ionicons name="close" size={20} color={colors.text} />
-                  </Pressable>
-                </View>
-
-                {isLoadingVehicles ? (
-                  <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 40 }} />
-                ) : myVehicles.length === 0 ? (
-                  <View style={{ alignItems: 'center', padding: 20, marginTop: 20 }}>
-                    <Text style={{ color: colors.textSecondary, marginBottom: 16 }}>No vehicles found.</Text>
-                    <Pressable
-                      onPress={() => {
-                        bottomSheetRef.current?.dismiss();
-                        router.push("/vehicles/add");
-                      }}
-                      style={{
-                        backgroundColor: colors.primary,
-                        paddingHorizontal: 20,
-                        paddingVertical: 10,
-                        borderRadius: 12
-                      }}
-                    >
-                      <Text style={{ color: '#fff', fontWeight: '700' }}>Add Vehicle</Text>
-                    </Pressable>
-                  </View>
                 ) : (
-                  <View style={{ gap: 12 }}>
-                    {myVehicles.map((v) => (
-                      <Pressable
-                        key={v.id || v.uuid}
-                        onPress={() => handleVehicleSelect(v)}
-                        style={({ pressed }) => [{
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          padding: 16,
-                          backgroundColor: colors.card,
-                          borderRadius: 16,
-                          borderWidth: 1,
-                          borderColor: colors.border,
-                          gap: 12,
-                        }, pressed && { opacity: 0.8 }]}
-                      >
-                        <View style={{
-                          width: 40,
-                          height: 40,
-                          borderRadius: 20,
-                          backgroundColor: colors.backgroundSecondary,
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}>
-                          <Ionicons name="car-sport" size={20} color={colors.primary} />
-                        </View>
-                        <View>
-                          <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text }}>
-                            {v.plate_number}
-                          </Text>
-                          <Text style={{ fontSize: 13, color: colors.textSecondary }}>
-                            {v.vehicle_name || `${v.vehicle_details?.brand || ''} ${v.vehicle_details?.model || ''}`}
-                          </Text>
-                        </View>
-                        <View style={{ flex: 1 }} />
-                        <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
-                      </Pressable>
-                    ))}
-                  </View>
+                  <Pressable
+                    onPress={() => {
+                      if (router.canDismiss()) {
+                        router.dismissAll();
+                      }
+                      router.replace("/");
+                    }}
+                    style={{
+                      height: 48,
+                      paddingHorizontal: 16,
+                      backgroundColor: colors.primary,
+                      borderRadius: 14,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      shadowColor: colors.primary,
+                      shadowOffset: { width: 0, height: 4 },
+                      shadowOpacity: 0.3,
+                      shadowRadius: 8,
+                      elevation: 4,
+                    }}
+                  >
+                    <Text style={{ color: "#fff", fontWeight: "700", fontSize: 13 }}>Log In</Text>
+                  </Pressable>
                 )}
               </View>
-            ) : selectedStation && (
-              <>
+              {/* Row 2: Filters (Animated Drawer) */}
+              <Animated.View style={{
+                height: filterDrawerAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 90] // Enough height for exactly 2 lines + gaps
+                }),
+                opacity: filterDrawerAnim,
+                overflow: 'hidden',
+                paddingHorizontal: 16,
+                marginTop: 4,
+                gap: 12,
+              }}>
+                {/* Row 1: Types */}
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  {types.map((item) => (
+                    <FilterChip
+                      key={item.key}
+                      label={item.label}
+                      color={item.color}
+                      active={item.active}
+                      lightningCount={item.lightningCount}
+                      onPress={item.onPress}
+                      colors={colors}
+                      compact
+                      style={{ flex: 1 }}
+                    />
+                  ))}
+                </View>
 
-                <View style={styles.sheetHeader}>
+                {/* Row 2: Toggles (now rendering as FilterChips) */}
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  {toggles.map((item) => (
+                    <FilterChip
+                      key={item.key}
+                      label={item.label}
+                      color={item.color}
+                      active={item.active}
+                      icon={item.icon}
+                      onPress={item.onPress}
+                      colors={colors}
+                      compact
+                      style={{ flex: 1 }}
+                    />
+                  ))}
+                </View>
+              </Animated.View>
 
-                  <View style={{ flex: 1, marginRight: 10 }}>
+              {/* Solid Type Buttons when filters are CLOSED */}
+              {!isFiltersVisible && (
+                <View style={{ flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingBottom: 12, marginTop: 4 }}>
+                  {(["HPC", "DC", "AC"] as StationType[]).map((t) => (
+                    <Pressable
+                      key={t}
+                      onPress={() => {
+                        setBottomSheetSelectedType(t);
+                        bottomSheetRef.current?.dismiss();
+                        typeListBottomSheetRef.current?.present();
+                        // Next tick snap to ensure 50% opens instead of 10%
+                        requestAnimationFrame(() => {
+                          typeListBottomSheetRef.current?.snapToIndex(1);
+                        });
+                        DeviceEventEmitter.emit('toggleBottomSheet', true);
+                      }}
+                      style={{
+                        flex: 1,
+                        backgroundColor: typeColors[t],
+                        paddingVertical: 10,
+                        borderRadius: 99,
+                        alignItems: 'center',
+                        flexDirection: 'row',
+                        justifyContent: 'center',
+                        gap: 4,
+                      }}
+                    >
+                      <Flash variant="Bold" size={16} color="#ffffff" />
+                      <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 13 }}>{t}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
 
-                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>{/* Status Light */}
-                        <View style={{
-                          width: 10,
-                          height: 10,
-                          borderRadius: 5,
-                          backgroundColor: selectedStation.status === "available" ? "#2cdb9b" : "#ff3b30",
-                          shadowColor: selectedStation.status === "available" ? "#2cdb9b" : "#ff3b30",
-                          shadowOffset: { width: 0, height: 0 },
-                          shadowOpacity: 0.8,
-                          shadowRadius: 6,
-                        }} />
-                        <View style={{ flexDirection: 'row' }}>
-                          <Text
-                            style={[
-                              styles.stationName,
-                              isDark ? styles.stationNameDark : styles.stationNameLight]}
-                          >
-                            {stationDetails?.name || selectedStation.name}
-                          </Text>
-                          {/* Address Toggle Chevron */}
+            </Animated.View>
+
+          </View>
+
+          {/* Floating Charging Widget at Bottom */}
+          {charging.isActive && charging.isMinimized && (
+            <View style={styles.floatingWidgetContainer}>
+              <ChargingWidget
+                state={charging}
+                onExpand={() => {
+                  charging.toggleMinimize();
+                }}
+              />
+            </View>
+          )}
+
+          {/* Re-center Button - Hide when widget is active to avoid clutter? Or keep? Keeping for now. */}
+          {
+            showRecenter && !charging.isActive && (
+              <Animated.View
+                style={styles.recenterBtnWrapper}
+              >
+                <Pressable onPress={handleRecenter} style={[styles.recenterBtn, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
+                  <FontAwesome5 name="location-arrow" size={22} color={colors.text} />
+                </Pressable>
+              </Animated.View>
+            )
+          }
+
+          <BottomSheetModal
+            ref={bottomSheetRef}
+            snapPoints={snapPoints}
+            onDismiss={closeSheet}
+            enablePanDownToClose
+            backdropComponent={renderBackdrop}
+            handleComponent={null}
+            backgroundStyle={{ backgroundColor: isDark ? "#161616" : "#ffffff" }}
+          >
+            <BottomSheetScrollView
+              contentContainerStyle={[
+                styles.sheetContent,
+                isDark ? styles.sheetContentDark : styles.sheetContentLight,
+              ]}
+            >
+              {bottomSheetMode === 'vehicle_select' ? (
+                <View style={{ minHeight: 300 }}>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                      <Pressable
+                        onPress={() => setBottomSheetMode('details')}
+                        hitSlop={15}
+                        style={{
+                          padding: 4,
+                        }}
+                      >
+                        <Ionicons name="chevron-back" size={24} color={colors.text} />
+                      </Pressable>
+                      <Text style={[styles.stationName, isDark ? styles.stationNameDark : styles.stationNameLight, { fontSize: 18 }]}>
+                        Select Vehicle
+                      </Text>
+                    </View>
+
+                    <Pressable
+                      onPress={() => bottomSheetRef.current?.dismiss()}
+                      hitSlop={10}
+                      style={{
+                        padding: 4,
+                        backgroundColor: isDark ? "#252525ff" : "#f0f2f5",
+                        borderRadius: 20
+                      }}
+                    >
+                      <Ionicons name="close" size={20} color={colors.text} />
+                    </Pressable>
+                  </View>
+
+                  {isLoadingVehicles ? (
+                    <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 40 }} />
+                  ) : myVehicles.length === 0 ? (
+                    <View style={{ alignItems: 'center', padding: 20, marginTop: 20 }}>
+                      <Text style={{ color: colors.textSecondary, marginBottom: 16 }}>No vehicles found.</Text>
+                      <Pressable
+                        onPress={() => {
+                          bottomSheetRef.current?.dismiss();
+                          router.push("/vehicles/add");
+                        }}
+                        style={{
+                          backgroundColor: colors.primary,
+                          paddingHorizontal: 20,
+                          paddingVertical: 10,
+                          borderRadius: 12
+                        }}
+                      >
+                        <Text style={{ color: '#fff', fontWeight: '700' }}>Add Vehicle</Text>
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <View style={{ gap: 12 }}>
+                      {myVehicles.map((v) => (
+                        <Pressable
+                          key={v.id || v.uuid}
+                          onPress={() => handleVehicleSelect(v)}
+                          style={({ pressed }) => [{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            padding: 16,
+                            backgroundColor: colors.card,
+                            borderRadius: 16,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            gap: 12,
+                          }, pressed && { opacity: 0.8 }]}
+                        >
+                          <View style={{
+                            width: 40,
+                            height: 40,
+                            borderRadius: 20,
+                            backgroundColor: colors.backgroundSecondary,
+                            alignItems: 'center',
+                            justifyContent: 'center'
+                          }}>
+                            <Ionicons name="car-sport" size={20} color={colors.primary} />
+                          </View>
+                          <View>
+                            <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text }}>
+                              {v.plate_number}
+                            </Text>
+                            <Text style={{ fontSize: 13, color: colors.textSecondary }}>
+                              {v.vehicle_name || `${v.vehicle_details?.brand || ''} ${v.vehicle_details?.model || ''}`}
+                            </Text>
+                          </View>
+                          <View style={{ flex: 1 }} />
+                          <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
+                        </Pressable>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              ) : selectedStation && (
+                <>
+
+                  <View style={styles.sheetHeader}>
+
+                    <View style={{ flex: 1, marginRight: 10 }}>
+
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>{/* Status Light */}
+                          <View style={{
+                            width: 10,
+                            height: 10,
+                            borderRadius: 5,
+                            backgroundColor: selectedStation.status === "available" ? "#2cdb9b" : "#ff3b30",
+                            shadowColor: selectedStation.status === "available" ? "#2cdb9b" : "#ff3b30",
+                            shadowOffset: { width: 0, height: 0 },
+                            shadowOpacity: 0.8,
+                            shadowRadius: 6,
+                          }} />
+                          <View style={{ flexDirection: 'row' }}>
+                            <Text
+                              style={[
+                                styles.stationName,
+                                isDark ? styles.stationNameDark : styles.stationNameLight]}
+                            >
+                              {stationDetails?.name || selectedStation.name}
+                            </Text>
+                            {/* Address Toggle Chevron */}
+                            <Pressable
+                              onPress={() => {
+                                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                                setShowAddress(!showAddress);
+                              }}
+                              hitSlop={10}
+                              style={{ padding: 4 }}
+                            >
+                              <Ionicons name={showAddress ? "chevron-up" : "chevron-down"} size={20} color={colors.textSecondary} />
+                            </Pressable>
+                          </View>
+                        </View>
+                        <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
                           <Pressable
-                            onPress={() => {
-                              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                              setShowAddress(!showAddress);
-                            }}
+                            onPress={closeSheet}
                             hitSlop={10}
-                            style={{ padding: 4 }}
+                            style={{
+                              padding: 4,
+                              backgroundColor: isDark ? "#252525ff" : "#f0f2f5",
+                              borderRadius: 20
+                            }}
                           >
-                            <Ionicons name={showAddress ? "chevron-up" : "chevron-down"} size={20} color={colors.textSecondary} />
+                            <Ionicons name="close" size={20} color={colors.text} />
                           </Pressable>
                         </View>
                       </View>
-                      <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
-                        <Pressable
-                          onPress={closeSheet}
-                          hitSlop={10}
-                          style={{
-                            padding: 4,
-                            backgroundColor: isDark ? "#252525ff" : "#f0f2f5",
-                            borderRadius: 20
-                          }}
-                        >
-                          <Ionicons name="close" size={20} color={colors.text} />
-                        </Pressable>
-                      </View>
                     </View>
                   </View>
-                </View>
 
-                {/* Chips Row */}
-                <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-                  {/* Type Chip */}
-                  <View style={{
-                    backgroundColor: getStationColor(selectedStation.type),
-                    paddingHorizontal: 10,
-                    paddingVertical: 5,
-                    borderRadius: 88,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 4
-                  }}>
-                    <Ionicons name="flash" size={16} color="#fff" />
-                    <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>{selectedStation.type} {selectedStation.powerKw} kW</Text>
-                  </View>
-
-                  {/* Public/Private Chip */}
-                  <View style={{
-                    backgroundColor: colors.card,
-                    paddingHorizontal: 10,
-                    paddingVertical: 5,
-                    borderRadius: 88,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 4,
-                    borderWidth: 1,
-                    borderColor: colors.border
-                  }}>
-                    <Ionicons name={selectedStation.is_public ? "lock-open" : "lock-closed"} size={16} color={colors.text} />
-                    <Text style={{ color: colors.text, fontSize: 12, fontWeight: "600" }}>
-                      {selectedStation.is_public !== undefined ? (selectedStation.is_public ? "Public" : "Private") : "Public"}
-                    </Text>
-                  </View>
-
-                  {/* 24h Chip */}
-                  <View style={{
-                    backgroundColor: colors.card,
-                    paddingHorizontal: 10,
-                    paddingVertical: 5,
-                    borderRadius: 88,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 4,
-                    borderWidth: 1,
-                    borderColor: colors.border
-                  }}>
-                    <Ionicons name="time" size={16} color={colors.text} />
-                    <Text style={{ color: colors.text, fontSize: 12, fontWeight: "600" }}>
-                      {selectedStation.is_24h ? "7/24 Available" : "Only work hours"}
-                    </Text>
-                  </View>
-
-
-                </View>
-                {/* Address Detail */}
-                {showAddress && (
-                  <View style={{ marginTop: 2 }}>
-                    <Text style={{ fontSize: 14, fontWeight: "600", color: colors.primary, marginBottom: 4 }}>Address</Text>
-                    <Text style={{ fontSize: 14, color: colors.text, lineHeight: 18 }}>
-                      {stationDetails?.address || "Address loading..."}
-                    </Text>
-                    {stationDetails.directions && (
-                      <View style={{
-                        marginTop: 2
-                      }}>
-                        <Text style={{ fontSize: 14, fontWeight: "600", color: colors.primary, marginBottom: 4, marginTop: 4 }}>Notes</Text>
-                        <Text style={{ color: colors.text, lineHeight: 20 }}>{stationDetails.directions}</Text>
-                      </View>
-                    )}
-                  </View>
-                )}
-                {/* Functionality Buttons */}
-                <View style={{ flexDirection: 'row', gap: 12, marginBottom: 24 }}>
-                  <Pressable
-                    onPress={openDirections}
-                    style={{
-                      flex: 1,
-                      backgroundColor: colors.primary,
-                      height: 48,
-                      borderRadius: 12,
-                      alignItems: 'center',
-                      justifyContent: 'center',
+                  {/* Chips Row */}
+                  <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                    {/* Type Chip */}
+                    <View style={{
+                      backgroundColor: getStationColor(selectedStation.type),
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                      borderRadius: 88,
                       flexDirection: 'row',
-                      gap: 8,
+                      alignItems: 'center',
+                      gap: 4
                     }}>
-                    <Ionicons name="navigate" size={20} color="#fff" />
-                    <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>Directions</Text>
-                  </Pressable>
-                </View>
-
-                {isFetchingDetails && !stationDetails ? (
-                  <View style={{ padding: 20, alignItems: 'center', minHeight: 100 }}>
-                    <ActivityIndicator size="small" color={colors.primary} />
-                    <Text style={{ marginTop: 10, color: colors.textTertiary }}>Loading details...</Text>
-                  </View>
-                ) : (
-                  stationDetails ? (
-                    <View>
-                      <Text style={[styles.filterLabel, { color: colors.text, marginBottom: 8, fontSize: 18, fontWeight: "700" }]}>Charge Points</Text>
-
-                      {stationDetails.charge_points?.map((cp: any) => (
-                        <View key={cp.id} style={{ marginBottom: 12 }}>
-                          <Text style={{ fontSize: 14, fontWeight: "500", color: colors.textSecondary, marginBottom: 8 }}>{cp.name} ({cp.status})</Text>
-                          {cp.sockets?.map((socket: any) => {
-                            const status = (socket.status_display || "").toLowerCase();
-
-                            // Colors based on status
-                            let statusColor = colors.border;
-                            if (status === "available") statusColor = "#4BACE4"; // Blue
-                            else if (status === "preparing") statusColor = "#2cdb9b"; // Green
-                            else if (status === "charging") statusColor = "#FFCC00"; // Yellow
-
-                            // Helper for Pulse Effect (simplified inline for now or use Lottie if needed)
-                            // We will use a simple opacity animation for Charging
-
-                            return (
-                              <View key={socket.id} style={{
-                                backgroundColor: colors.card,
-                                borderRadius: 12,
-                                padding: 16,
-                                marginBottom: 8,
-                                borderWidth: 1,
-                                borderColor: statusColor, // Border matches status color
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                                justifyContent: 'space-between'
-                              }}>
-                                <View>
-                                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                    <Ionicons name="flash" size={16} color={colors.text} />
-                                    <Text style={{ fontSize: 16, fontWeight: "700", color: colors.text }}>{socket.power} kW {socket.type}</Text>
-                                  </View>
-                                  <Text style={{ color: colors.textSecondary, marginTop: 4, fontSize: 13 }}>{socket.name}</Text>
-                                </View>
-                                <View style={{ alignItems: 'flex-end', gap: 6 }}>
-
-                                  {/* Status Actions & Display */}
-                                  {status === "available" ? (
-                                    <Pressable
-                                      onPress={() => setShowSocketError(true)} // Show "Not Plugged" modal
-                                      style={({ pressed }) => ({
-                                        backgroundColor: "#4BACE4", // Blue
-                                        paddingHorizontal: 14,
-                                        paddingVertical: 8,
-                                        borderRadius: 88,
-                                        opacity: pressed ? 0.8 : 1
-                                      })}
-                                    >
-                                      <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                                        <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>Available</Text>
-                                      </View>
-                                    </Pressable>
-                                  ) : status === "preparing" ? (
-                                    <Pressable
-                                      onPress={() => handleStartPress(socket.uuid)} // Standard Start Flow
-                                      style={({ pressed }) => ({
-                                        backgroundColor: "#2cdb9b", // Green
-                                        paddingHorizontal: 14,
-                                        paddingVertical: 8,
-                                        borderRadius: 88,
-                                        opacity: pressed ? 0.8 : 1
-                                      })}
-                                    >
-                                      <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                                        <Ionicons name="flash" size={16} color="#fff" />
-                                        <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>Start</Text>
-                                      </View>
-                                    </Pressable>
-                                  ) : status === "charging" ? (
-                                    <View
-                                      style={{
-                                        backgroundColor: "rgba(255, 204, 0, 0.15)", // Light Yellow bg
-                                        paddingHorizontal: 12,
-                                        paddingVertical: 6,
-                                        borderRadius: 88,
-                                        borderWidth: 1,
-                                        borderColor: "#FFCC00"
-                                      }}
-                                    >
-                                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                                        <Ionicons name="flash" size={14} color="#FFCC00" />
-                                        <Text style={{ color: "#FFCC00", fontWeight: "800", fontSize: 12 }}>Charging</Text>
-                                      </View>
-                                    </View>
-                                  ) : (
-                                    /* Fallback / Other statuses */
-                                    <Text style={{
-                                      fontSize: 14,
-                                      fontWeight: "700",
-                                      color: "#ffb74d"
-                                    }}>
-                                      {socket.status_display}
-                                    </Text>
-                                  )}
-
-                                  <Text style={{ color: colors.text, fontWeight: "600", fontSize: 13 }}>
-                                    {socket.price_info?.price} ₺ / kWh
-                                  </Text>
-                                </View>
-                              </View>
-                            )
-                          })}
-                        </View>
-                      ))}
+                      <Ionicons name="flash" size={16} color="#fff" />
+                      <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>{selectedStation.type} {selectedStation.powerKw} kW</Text>
                     </View>
-                  ) : null
-                )}
-              </>
-            )}
 
-          </BottomSheetScrollView>
-        </BottomSheetModal >
+                    {/* Public/Private Chip */}
+                    <View style={{
+                      backgroundColor: colors.card,
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                      borderRadius: 88,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 4,
+                      borderWidth: 1,
+                      borderColor: colors.border
+                    }}>
+                      <Ionicons name={selectedStation.is_public ? "lock-open" : "lock-closed"} size={16} color={colors.text} />
+                      <Text style={{ color: colors.text, fontSize: 12, fontWeight: "600" }}>
+                        {selectedStation.is_public !== undefined ? (selectedStation.is_public ? "Public" : "Private") : "Public"}
+                      </Text>
+                    </View>
 
-        {
-          showSuccessToast && (
-            <Animated.View style={{
-              position: 'absolute',
-              transform: [{ translateY: toastAnim }],
-              alignSelf: 'center',
-              backgroundColor: '#2CDD9D',
-              paddingHorizontal: 20,
-              paddingVertical: 12,
-              borderRadius: 999,
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 8,
-              shadowColor: "#000",
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: 0.15,
-              shadowRadius: 12,
-              elevation: 10,
-              zIndex: 100,
-            }}>
-              <Ionicons name="checkmark-circle" size={20} color="#0b2319" />
-              <Text style={{ color: "#0b2319", fontWeight: "700", fontSize: 13 }}>Successfully logged in!</Text>
-            </Animated.View>
-          )
-        }
+                    {/* 24h Chip */}
+                    <View style={{
+                      backgroundColor: colors.card,
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                      borderRadius: 88,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 4,
+                      borderWidth: 1,
+                      borderColor: colors.border
+                    }}>
+                      <Ionicons name="time" size={16} color={colors.text} />
+                      <Text style={{ color: colors.text, fontSize: 12, fontWeight: "600" }}>
+                        {selectedStation.is_24h ? "7/24 Available" : "Only work hours"}
+                      </Text>
+                    </View>
 
-        <SocketErrorModal
-          visible={showSocketError}
-          onClose={() => setShowSocketError(false)}
-          onRetry={handleSocketRetry}
-          onRepair={handleSocketRepair}
-        />
 
-        {/* Full Screen Charging Bottom Sheet */}
-        <BottomSheetModal
-          ref={chargingBottomSheetRef}
-          index={0}
-          snapPoints={chargingSnapPoints}
-          enablePanDownToClose={true}
-          style={{ zIndex: 999, elevation: 999 }}
-          onDismiss={() => {
-            // If swiped down by user (or dismissed any other way), state updates natively.
-            // Using setMinimized(true) instead of toggle prevents looping.
-            if (charging.isActive && !charging.isMinimized) {
-              charging.setMinimized(true);
-            }
-          }}
-          backgroundStyle={{ backgroundColor: isDark ? '#121212' : '#F2F2F7' }}
-          handleIndicatorStyle={{ backgroundColor: isDark ? '#333' : '#E5E5EA' }}
-        >
-          <BottomSheetScrollView contentContainerStyle={{ flexGrow: 1 }}>
-            <ChargingScreen
-              state={charging}
-              onMinimize={() => {
+                  </View>
+                  {/* Address Detail */}
+                  {showAddress && (
+                    <View style={{ marginTop: 2 }}>
+                      <Text style={{ fontSize: 14, fontWeight: "600", color: colors.primary, marginBottom: 4 }}>Address</Text>
+                      <Text style={{ fontSize: 14, color: colors.text, lineHeight: 18 }}>
+                        {stationDetails?.address || "Address loading..."}
+                      </Text>
+                      {stationDetails.directions && (
+                        <View style={{
+                          marginTop: 2
+                        }}>
+                          <Text style={{ fontSize: 14, fontWeight: "600", color: colors.primary, marginBottom: 4, marginTop: 4 }}>Notes</Text>
+                          <Text style={{ color: colors.text, lineHeight: 20 }}>{stationDetails.directions}</Text>
+                        </View>
+                      )}
+                    </View>
+                  )}
+                  {/* Functionality Buttons */}
+                  <View style={{ flexDirection: 'row', gap: 12, marginBottom: 24 }}>
+                    <Pressable
+                      onPress={openDirections}
+                      style={{
+                        flex: 1,
+                        backgroundColor: colors.primary,
+                        height: 48,
+                        borderRadius: 12,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexDirection: 'row',
+                        gap: 8,
+                      }}>
+                      <Ionicons name="navigate" size={20} color="#fff" />
+                      <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>Directions</Text>
+                    </Pressable>
+                  </View>
+
+                  {isFetchingDetails && !stationDetails ? (
+                    <View style={{ padding: 20, alignItems: 'center', minHeight: 100 }}>
+                      <ActivityIndicator size="small" color={colors.primary} />
+                      <Text style={{ marginTop: 10, color: colors.textTertiary }}>Loading details...</Text>
+                    </View>
+                  ) : (
+                    stationDetails ? (
+                      <View>
+                        <Text style={[styles.filterLabel, { color: colors.text, marginBottom: 8, fontSize: 18, fontWeight: "700" }]}>Charge Points</Text>
+
+                        {stationDetails.charge_points?.map((cp: any) => (
+                          <View key={cp.id} style={{ marginBottom: 12 }}>
+                            <Text style={{ fontSize: 14, fontWeight: "500", color: colors.textSecondary, marginBottom: 8 }}>{cp.name} ({cp.status})</Text>
+                            {cp.sockets?.map((socket: any) => {
+                              const status = (socket.status_display || "").toLowerCase();
+
+                              // Colors based on status
+                              let statusColor = colors.border;
+                              if (status === "available") statusColor = "#4BACE4"; // Blue
+                              else if (status === "preparing") statusColor = "#2cdb9b"; // Green
+                              else if (status === "charging") statusColor = "#FFCC00"; // Yellow
+
+                              // Helper for Pulse Effect (simplified inline for now or use Lottie if needed)
+                              // We will use a simple opacity animation for Charging
+
+                              return (
+                                <View key={socket.id} style={{
+                                  backgroundColor: colors.card,
+                                  borderRadius: 12,
+                                  padding: 16,
+                                  marginBottom: 8,
+                                  borderWidth: 1,
+                                  borderColor: statusColor, // Border matches status color
+                                  flexDirection: 'row',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between'
+                                }}>
+                                  <View>
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                      <Ionicons name="flash" size={16} color={colors.text} />
+                                      <Text style={{ fontSize: 16, fontWeight: "700", color: colors.text }}>{socket.power} kW {socket.type}</Text>
+                                    </View>
+                                    <Text style={{ color: colors.textSecondary, marginTop: 4, fontSize: 13 }}>{socket.name}</Text>
+                                  </View>
+                                  <View style={{ alignItems: 'flex-end', gap: 6 }}>
+
+                                    {/* Status Actions & Display */}
+                                    {status === "available" ? (
+                                      <Pressable
+                                        onPress={() => setShowSocketError(true)} // Show "Not Plugged" modal
+                                        style={({ pressed }) => ({
+                                          backgroundColor: "#4BACE4", // Blue
+                                          paddingHorizontal: 14,
+                                          paddingVertical: 8,
+                                          borderRadius: 88,
+                                          opacity: pressed ? 0.8 : 1
+                                        })}
+                                      >
+                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                          <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>Available</Text>
+                                        </View>
+                                      </Pressable>
+                                    ) : status === "preparing" ? (
+                                      <Pressable
+                                        onPress={() => handleStartPress(socket.uuid)} // Standard Start Flow
+                                        style={({ pressed }) => ({
+                                          backgroundColor: "#2cdb9b", // Green
+                                          paddingHorizontal: 14,
+                                          paddingVertical: 8,
+                                          borderRadius: 88,
+                                          opacity: pressed ? 0.8 : 1
+                                        })}
+                                      >
+                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                          <Ionicons name="flash" size={16} color="#fff" />
+                                          <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>Start</Text>
+                                        </View>
+                                      </Pressable>
+                                    ) : status === "charging" ? (
+                                      <View
+                                        style={{
+                                          backgroundColor: "rgba(255, 204, 0, 0.15)", // Light Yellow bg
+                                          paddingHorizontal: 12,
+                                          paddingVertical: 6,
+                                          borderRadius: 88,
+                                          borderWidth: 1,
+                                          borderColor: "#FFCC00"
+                                        }}
+                                      >
+                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                                          <Ionicons name="flash" size={14} color="#FFCC00" />
+                                          <Text style={{ color: "#FFCC00", fontWeight: "800", fontSize: 12 }}>Charging</Text>
+                                        </View>
+                                      </View>
+                                    ) : (
+                                      /* Fallback / Other statuses */
+                                      <Text style={{
+                                        fontSize: 14,
+                                        fontWeight: "700",
+                                        color: "#ffb74d"
+                                      }}>
+                                        {socket.status_display}
+                                      </Text>
+                                    )}
+
+                                    <Text style={{ color: colors.text, fontWeight: "600", fontSize: 13 }}>
+                                      {socket.price_info?.price} ₺ / kWh
+                                    </Text>
+                                  </View>
+                                </View>
+                              )
+                            })}
+                          </View>
+                        ))}
+                      </View>
+                    ) : null
+                  )}
+                </>
+              )}
+
+            </BottomSheetScrollView>
+          </BottomSheetModal >
+
+          {
+            showSuccessToast && (
+              <Animated.View style={{
+                position: 'absolute',
+                transform: [{ translateY: toastAnim }],
+                alignSelf: 'center',
+                backgroundColor: '#2CDD9D',
+                paddingHorizontal: 20,
+                paddingVertical: 12,
+                borderRadius: 999,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 8,
+                shadowColor: "#000",
+                shadowOffset: { width: 0, height: 4 },
+                shadowOpacity: 0.15,
+                shadowRadius: 12,
+                elevation: 10,
+                zIndex: 100,
+              }}>
+                <Ionicons name="checkmark-circle" size={20} color="#0b2319" />
+                <Text style={{ color: "#0b2319", fontWeight: "700", fontSize: 13 }}>Successfully logged in!</Text>
+              </Animated.View>
+            )
+          }
+
+          <SocketErrorModal
+            visible={showSocketError}
+            onClose={() => setShowSocketError(false)}
+            onRetry={handleSocketRetry}
+            onRepair={handleSocketRepair}
+          />
+
+          {/* Full Screen Charging Bottom Sheet */}
+          <BottomSheetModal
+            ref={chargingBottomSheetRef}
+            index={0}
+            snapPoints={chargingSnapPoints}
+            enablePanDownToClose={true}
+            style={{ zIndex: 999, elevation: 999 }}
+            onDismiss={() => {
+              // If swiped down by user (or dismissed any other way), state updates natively.
+              // Using setMinimized(true) instead of toggle prevents looping.
+              if (charging.isActive && !charging.isMinimized) {
                 charging.setMinimized(true);
-              }}
-              onStop={() => {
-                charging.setMinimized(true);
-                handleStopCharging();
-              }}
-              onToggleDev={charging.setMode}
-            />
-          </BottomSheetScrollView>
-        </BottomSheetModal>
-
-        {/* Type List Bottom Sheet */}
-        <BottomSheetModal
-          ref={typeListBottomSheetRef}
-          index={1} // Default open to 50%
-          snapPoints={typeListSnapPoints}
-          enablePanDownToClose={false}
-          enableOverDrag={false}
-          backgroundStyle={{ backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF' }}
-          handleIndicatorStyle={{ backgroundColor: isDark ? '#333' : '#E5E5EA' }}
-        >
-          <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, marginBottom: 12, marginTop: 8 }}>
-              <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text }}>
-                {bottomSheetSelectedType} Stations
-              </Text>
-              <Pressable
-                onPress={() => {
-                  typeListBottomSheetRef.current?.dismiss();
-                  DeviceEventEmitter.emit('toggleBottomSheet', false);
+              }
+            }}
+            backgroundStyle={{ backgroundColor: isDark ? '#121212' : '#F2F2F7' }}
+            handleIndicatorStyle={{ backgroundColor: isDark ? '#333' : '#E5E5EA' }}
+          >
+            <BottomSheetScrollView contentContainerStyle={{ flexGrow: 1 }}>
+              <ChargingScreen
+                state={charging}
+                onMinimize={() => {
+                  charging.setMinimized(true);
                 }}
-                style={{ padding: 4 }}
-              >
-                <Ionicons name="close" size={24} color={colors.textSecondary} />
-              </Pressable>
-            </View>
-            <BottomSheetFlatList
-              data={stationsList.filter(s => s.type === bottomSheetSelectedType)}
-              keyExtractor={(item: Station) => item.id}
-              bounces={false}
-              contentContainerStyle={{ gap: 12, paddingHorizontal: 16, paddingBottom: 24 }}
-              renderItem={({ item }: { item: Station }) => (
+                onStop={() => {
+                  charging.setMinimized(true);
+                  handleStopCharging();
+                }}
+                onToggleDev={charging.setMode}
+              />
+            </BottomSheetScrollView>
+          </BottomSheetModal>
+
+          {/* Type List Bottom Sheet */}
+          <BottomSheetModal
+            ref={typeListBottomSheetRef}
+            index={1} // Default open to 50%
+            snapPoints={typeListSnapPoints}
+            enablePanDownToClose={false}
+            enableOverDrag={false}
+            backgroundStyle={{ backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF' }}
+            handleIndicatorStyle={{ backgroundColor: isDark ? '#333' : '#E5E5EA' }}
+          >
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, marginBottom: 12, marginTop: 8 }}>
+                <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text }}>
+                  {bottomSheetSelectedType} Stations
+                </Text>
                 <Pressable
                   onPress={() => {
                     typeListBottomSheetRef.current?.dismiss();
                     DeviceEventEmitter.emit('toggleBottomSheet', false);
-                    handleMarkerPress(item); // Focus on map and open details
                   }}
-                  style={{
-                    backgroundColor: isDark ? '#2C2C2E' : '#F2F2F7',
-                    padding: 16,
-                    borderRadius: 16,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    borderWidth: 1,
-                    borderColor: isDark ? '#3A3A3C' : '#E5E5EA'
-                  }}
+                  style={{ padding: 4 }}
                 >
-                  <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: getStationColor(item.type), alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
-                    <Ionicons name="flash" size={20} color="#fff" />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 16, fontWeight: '600', color: colors.text }}>{item.name}</Text>
-                    <Text style={{ fontSize: 14, color: colors.textSecondary, marginTop: 4 }}>
-                      {item.powerKw} kW • {item.distanceKm ? `${item.distanceKm} km` : ''}
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+                  <Ionicons name="close" size={24} color={colors.textSecondary} />
                 </Pressable>
-              )}
-            />
-          </View>
-        </BottomSheetModal>
+              </View>
+              <BottomSheetFlatList
+                data={stationsList.filter(s => s.type === bottomSheetSelectedType)}
+                keyExtractor={(item: Station) => item.id}
+                bounces={false}
+                contentContainerStyle={{ gap: 12, paddingHorizontal: 16, paddingBottom: 24 }}
+                renderItem={({ item }: { item: Station }) => (
+                  <Pressable
+                    onPress={() => {
+                      typeListBottomSheetRef.current?.dismiss();
+                      DeviceEventEmitter.emit('toggleBottomSheet', false);
+                      handleMarkerPress(item); // Focus on map and open details
+                    }}
+                    style={{
+                      backgroundColor: isDark ? '#2C2C2E' : '#F2F2F7',
+                      padding: 16,
+                      borderRadius: 16,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      borderWidth: 1,
+                      borderColor: isDark ? '#3A3A3C' : '#E5E5EA'
+                    }}
+                  >
+                    <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: getStationColor(item.type), alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                      <Ionicons name="flash" size={20} color="#fff" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 16, fontWeight: '600', color: colors.text }}>{item.name}</Text>
+                      <Text style={{ fontSize: 14, color: colors.textSecondary, marginTop: 4 }}>
+                        {item.powerKw} kW • {item.distanceKm ? `${item.distanceKm} km` : ''}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
+                  </Pressable>
+                )}
+              />
+            </View>
+          </BottomSheetModal>
 
+        </View>
       </View>
-    </View >
+    </TouchableWithoutFeedback>
   );
 }
 
