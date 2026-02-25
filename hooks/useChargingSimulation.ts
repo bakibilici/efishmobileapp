@@ -39,7 +39,7 @@ export const useChargingSimulation = () => {
     const timerRef = useRef<any>(null);
     const isLiveFromBackendRef = useRef(false);
 
-    /** Update charging state from backend WebSocket meter values. When power > 0, widget is shown. */
+    /** Update charging state from backend WebSocket meter values. When power > 0 or session is active, widget is shown. */
     const updateFromMeterValues = (data: {
         batteryLevel?: number;
         soc?: number;
@@ -56,6 +56,7 @@ export const useChargingSimulation = () => {
         socket_type?: string; // HPC, DC, AC from backend
         started_at?: string;
         start_soc?: number; // Initial battery level when charging started
+        status?: string; // INITIATED, CHARGING, etc. from backend
     }) => {
         const batteryLevel = data.batteryLevel ?? data.soc ?? data.state_of_charge;
         const power = data.power_kw ?? data.power ?? 0;
@@ -70,7 +71,10 @@ export const useChargingSimulation = () => {
         const startedAt = data.started_at;
         const startSoc = data.start_soc ?? null;
 
-        const hasCharging = power > 0 || (batteryLevel != null && batteryLevel > 0);
+        // Consider session active if power > 0, batteryLevel is known, OR status indicates an active session
+        const activeStatuses = ['INITIATED', 'CHARGING', 'PREPARING', 'SUSPENDED'];
+        const isActiveStatus = data.status ? activeStatuses.includes(data.status.toUpperCase()) : false;
+        const hasCharging = power > 0 || (batteryLevel != null && batteryLevel > 0) || isActiveStatus;
 
         setState(prev => {
             if (hasCharging && !prev.isActive) {

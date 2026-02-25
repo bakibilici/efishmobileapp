@@ -4,7 +4,7 @@ import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import React, { useEffect, useRef } from 'react';
 import { Dimensions, Easing, Image, Pressable, Animated as RNAnimated, StyleSheet, Text, View } from 'react-native';
 import Animated, { interpolateColor, useAnimatedProps, useDerivedValue, withTiming } from 'react-native-reanimated';
-import Svg, { Circle, Defs, G, Mask } from 'react-native-svg';
+import Svg, { Circle, Defs, Mask } from 'react-native-svg';
 
 const { width } = Dimensions.get('window');
 const CIRCLE_SIZE = width * 0.75; // Large central circle
@@ -131,7 +131,11 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
 
                     {/* Circular Progress & Visual */}
                     <View style={styles.circleContainer}>
-                        <Svg width={CIRCLE_SIZE} height={CIRCLE_SIZE}>
+                        <Svg
+                            width={CIRCLE_SIZE}
+                            height={CIRCLE_SIZE}
+                            style={{ transform: [{ rotate: '-90deg' }] }}
+                        >
                             <Defs>
                                 <Mask id="dashMask">
                                     <Circle
@@ -140,7 +144,7 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                                         r={RADIUS}
                                         stroke="white"
                                         strokeWidth={STROKE_WIDTH}
-                                        strokeDasharray="2, 4" // Denser dashes
+                                        strokeDasharray="2, 4"
                                         fill="transparent"
                                     />
                                 </Mask>
@@ -158,19 +162,17 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                             />
 
                             {/* Progress (Masked to look dashed) */}
-                            <G rotation="-90" origin={`${CIRCLE_SIZE / 2}, ${CIRCLE_SIZE / 2}`}>
-                                <AnimatedCircle
-                                    cx={CIRCLE_SIZE / 2}
-                                    cy={CIRCLE_SIZE / 2}
-                                    r={RADIUS}
-                                    strokeWidth={STROKE_WIDTH}
-                                    strokeLinecap="butt"
-                                    fill="transparent"
-                                    strokeDasharray={CIRCUMFERENCE} // Full fill logic
-                                    mask="url(#dashMask)" // Applies the dash look
-                                    animatedProps={animatedProps}
-                                />
-                            </G>
+                            <AnimatedCircle
+                                cx={CIRCLE_SIZE / 2}
+                                cy={CIRCLE_SIZE / 2}
+                                r={RADIUS}
+                                strokeWidth={STROKE_WIDTH}
+                                strokeLinecap="butt"
+                                fill="transparent"
+                                strokeDasharray={`${CIRCUMFERENCE}`}
+                                mask="url(#dashMask)"
+                                animatedProps={animatedProps}
+                            />
                         </Svg>
 
                         {/* Centered Content: Car & Percentage */}

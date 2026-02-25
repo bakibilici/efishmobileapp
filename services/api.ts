@@ -212,10 +212,18 @@ export const getProfile = async () => {
   console.log("getProfile response:", JSON.stringify(response.data, null, 2));
 
   // Handle different response structures
-  if (response.data?.data) {
-    return response.data.data;
+  let profileData = response.data;
+  if (profileData?.data) {
+    profileData = profileData.data;
   }
-  return response.data;
+
+  // API returns paginated results: { count, next, previous, results: [...] }
+  // Extract the first (and typically only) profile from results
+  if (profileData?.results && Array.isArray(profileData.results)) {
+    return profileData.results[0] || null;
+  }
+
+  return profileData;
 };
 
 export const logout = async () => {

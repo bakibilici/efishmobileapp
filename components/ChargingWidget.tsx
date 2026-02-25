@@ -108,7 +108,7 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
                             </Text>
                             {state.mode === 'HPC' && (
                                 <View style={[styles.ultraBadge, { backgroundColor: theme.accent }]}>
-                                    <Text style={styles.ultraText}>ULTRA</Text>
+                                    <Text style={styles.ultraText}>FAST</Text>
                                 </View>
                             )}
                         </View>

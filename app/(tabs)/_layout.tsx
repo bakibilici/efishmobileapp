@@ -1,7 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { Tabs, useRouter } from "expo-router";
 import React, { useEffect, useRef } from "react";
-import { Animated, DeviceEventEmitter, Image, Pressable, View } from "react-native";
+import { Animated, DeviceEventEmitter, Image, Platform, Pressable, View } from "react-native";
 
 import { HapticTab } from "@/components/haptic-tab";
 import { useTheme } from "@/context/ThemeContext";
@@ -47,11 +47,11 @@ export default function TabLayout() {
           shadowOffset: { width: 0, height: -2 },
           shadowOpacity: 0.03, // Very subtle shadow
           shadowRadius: 8,
-          height: 96, // Taller and spacious
+          height: Platform.OS === 'ios' ? 106 : 96, // Taller and spacious
           paddingTop: 10,
-          paddingBottom: 34, // Safe area
-          borderTopLeftRadius: 10, // More rounded
-          borderTopRightRadius: 10,
+          paddingBottom: Platform.OS === 'ios' ? 34 : 0, // Safe area
+          borderTopLeftRadius: 24, // More rounded
+          borderTopRightRadius: 24,
           transform: [{ translateY: tabBarAnim }]
         },
         tabBarItemStyle: { paddingVertical: 4 },

@@ -591,15 +591,6 @@ export default function LoginScreen() {
 
             {/* Footer */}
             <View style={styles.footer}>
-              <Pressable
-                onPress={handleContinueAsGuest}
-                style={styles.guestLink}
-              >
-                <Text style={[styles.guestText, { color: colors.text }]}>
-                  Continue as Guest
-                </Text>
-              </Pressable>
-
               {__DEV__ && (
                 <View style={{ marginTop: 20 }}>
                   <Button
@@ -819,6 +810,7 @@ const styles = StyleSheet.create({
     height: 60,
     position: "relative",
     justifyContent: "center",
+    alignItems: "center",
   },
   otpHiddenInput: {
     position: "absolute",
@@ -830,10 +822,12 @@ const styles = StyleSheet.create({
   otpBoxesContainer: {
     flexDirection: "row",
     justifyContent: "space-between",
+    alignSelf: "center",
     width: "100%",
+    gap: 6,
   },
   otpBox: {
-    width: 46,
+    flex: 1,
     height: 60,
     borderRadius: 14,
     backgroundColor: field,

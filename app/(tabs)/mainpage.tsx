@@ -33,11 +33,11 @@ import {
   Alert,
   Animated,
   DeviceEventEmitter,
+  Image,
   Keyboard,
   LayoutAnimation,
   Platform,
   Pressable,
-  Image as RNImage,
   StatusBar,
   StyleSheet,
   Text,
@@ -47,7 +47,6 @@ import {
   View
 } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from "react-native-maps";
-import Svg, { Circle, Path } from "react-native-svg";
 
 // ... existing imports ...
 
@@ -57,6 +56,7 @@ import { Colors } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
 import Voice from '@react-native-voice/voice';
 import { Flash, Microphone2, Notification, Setting4 } from "iconsax-react-native";
+
 
 const typeColors: Record<StationType, string> = {
   HPC: "#7C4DFF",
@@ -71,11 +71,99 @@ const getStationColor = (type: string | null | undefined) => {
   return color || "#000000";
 };
 
+const pinImagesSelected: Record<string, any> = {
+  HPC: require("../../assets/images/hpcstationmappin.png"),
+  DC: require("../../assets/images/dcstationmappin.png"),
+  AC: require("../../assets/images/acstationmappin.png"),
+};
+
+const pinImagesUnselected: Record<string, any> = {
+  HPC: require("../../assets/images/hpcmappinunselected.png"),
+  DC: require("../../assets/images/dcmappinunselected.png"),
+  AC: require("../../assets/images/acmappinunselected.png"),
+};
+
+// Keep old reference for backward compat
+const pinImages = pinImagesSelected;
+
 const typeLightningCount: Record<StationType, number> = {
   AC: 1,
   DC: 2,
   HPC: 3,
 };
+
+// Selected pin size: images are 63x112 → display at 52x92
+// Unselected pin size: images are ~175-211 x 304 → display at 42x60
+const PIN_SELECTED = { imgW: 66, imgH: 108, boxW: 66, boxH: 108 };
+const PIN_UNSELECTED = { imgW: 54, imgH: 76, boxW: 54, boxH: 76 };
+
+// Dedicated marker component that ensures the pin image is fully loaded
+// before Android takes its bitmap snapshot — prevents clipping on all devices.
+const MapPinMarker = React.memo(({ station, isSelected, onPress }: {
+  station: Station;
+  isSelected: boolean;
+  onPress: (station: Station) => void;
+}) => {
+  const [imageLoaded, setImageLoaded] = React.useState(false);
+  const prevSelectedRef = React.useRef(isSelected);
+
+  // When selection state changes, reset imageLoaded so Android re-snapshots the bitmap
+  React.useEffect(() => {
+    if (prevSelectedRef.current !== isSelected) {
+      setImageLoaded(false);
+      prevSelectedRef.current = isSelected;
+    }
+  }, [isSelected]);
+
+  const typeKey = String(station.type || "DC").toUpperCase();
+  const imgSource = isSelected
+    ? (pinImagesSelected[typeKey] || pinImagesSelected.DC)
+    : (pinImagesUnselected[typeKey] || pinImagesUnselected.DC);
+  const stationColor = getStationColor(station.type);
+  const availableCount = station.socket_stats
+    ? Object.values(station.socket_stats).reduce((acc: number, curr: any) => acc + (curr.available || 0), 0)
+    : 0;
+
+  const size = isSelected ? PIN_SELECTED : PIN_UNSELECTED;
+
+  return (
+    <Marker
+      coordinate={{ latitude: station.latitude, longitude: station.longitude }}
+      onPress={() => onPress(station)}
+      anchor={{ x: 0.5, y: 0.82 }}
+      tracksViewChanges={!imageLoaded}
+      zIndex={isSelected ? 999 : 0}
+    >
+      <View style={{
+        width: size.boxW,
+        height: size.boxH,
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+      }}>
+        <Image
+          source={imgSource}
+          style={{ width: size.imgW, height: size.imgH }}
+          resizeMode="contain"
+          onLoad={() => {
+            setTimeout(() => setImageLoaded(true), 100);
+          }}
+          fadeDuration={0}
+        />
+        <Text style={{
+          position: 'absolute',
+          bottom: isSelected ? 20 : 12,
+          color: stationColor,
+          zIndex: 999,
+          fontSize: isSelected ? 13 : 11,
+          fontWeight: '800',
+          textAlign: 'center',
+        }}>
+          {availableCount}
+        </Text>
+      </View>
+    </Marker>
+  );
+});
 
 export default function MapScreen() {
   const router = useRouter();
@@ -118,6 +206,9 @@ export default function MapScreen() {
     setBottomSheetMode('vehicle_select');
     // Force present/expand just in case it's closed
     bottomSheetRef.current?.present();
+    setTimeout(() => {
+      bottomSheetRef.current?.snapToIndex(0);
+    }, 50);
 
     setIsLoadingVehicles(true);
 
@@ -415,6 +506,7 @@ export default function MapScreen() {
                 started_at: payload.started_at,
                 socket_type: d.socket_type, // HPC, DC, AC
                 start_soc: d.start_soc,     // Initial battery level
+                status: d.status,           // INITIATED, CHARGING, etc.
               } as any);
             }
           }
@@ -566,14 +658,10 @@ export default function MapScreen() {
   };
 
   const [search, setSearch] = useState("");
-  const [typeFilters, setTypeFilters] = useState<StationType[]>([
-    "HPC",
-    "DC",
-    "AC",
-  ]);
-  const [onlyEfish, setOnlyEfish] = useState(true);
-  const [showPublic, setShowPublic] = useState(true);
-  const [showFavorites, setShowFavorites] = useState(true); // Default to true as requested
+  const [typeFilters, setTypeFilters] = useState<StationType[]>([]);
+  const [onlyEfish, setOnlyEfish] = useState(false);
+  const [showPublic, setShowPublic] = useState(false);
+  const [showFavorites, setShowFavorites] = useState(false);
   const [userLocation, setUserLocation] =
     useState<Location.LocationObject | null>(null);
   const [locationPermission, setLocationPermission] = useState<boolean>(false);
@@ -715,14 +803,14 @@ export default function MapScreen() {
 
   const bottomSheetRef = useRef<BottomSheetModal>(null);
   const mapRef = useRef<MapView>(null);
-  const snapPoints = useMemo(() => ["25%", "50%", "90%"], []);
+  const snapPoints = useMemo(() => ["50%", "90%"], []);
 
   const typeListBottomSheetRef = useRef<BottomSheetModal>(null);
-  const typeListSnapPoints = useMemo(() => ["10%", "50%", "90%"], []);
+  const typeListSnapPoints = useMemo(() => ["15%", "35%", "90%"], []);
   const [bottomSheetSelectedType, setBottomSheetSelectedType] = useState<StationType | null>(null);
 
   const chargingBottomSheetRef = useRef<BottomSheetModal>(null);
-  const chargingSnapPoints = useMemo(() => ["95%"], []);
+  const chargingSnapPoints = useMemo(() => ["90%"], []);
 
   useEffect(() => {
     if (
@@ -935,6 +1023,10 @@ export default function MapScreen() {
     setStationDetails(null); // Reset details
     setBottomSheetMode('details'); // Ensure we start in details mode
     bottomSheetRef.current?.present();
+    // Force snap to index 0 (50%) specifically with a small timeout to let it mount
+    setTimeout(() => {
+      bottomSheetRef.current?.snapToIndex(0);
+    }, 50);
 
     // Auto-focus logic: Center the map on the pin
     // We subtract a small amount from latitude to shift the map down, 
@@ -1150,89 +1242,14 @@ export default function MapScreen() {
               }
             ] : []}>
 
-            {filteredStations.map((station) => {
-              const availableCount = station.socket_stats
-                ? Object.values(station.socket_stats).reduce((acc: number, curr: any) => acc + (curr.available || 0), 0)
-                : 0;
-              const stationColor = getStationColor(station.type);
-
-              return (
-                <Marker
-                  key={station.id}
-                  coordinate={{
-                    latitude: station.latitude,
-                    longitude: station.longitude,
-                  }}
-                  onPress={() => handleMarkerPress(station)}
-                  anchor={{ x: 0.5, y: 1 }}
-                  flat={false}
-                  tracksViewChanges={true}
-                >
-                  <View style={{ alignItems: 'center' }}>
-                    <View style={{ width: 40, height: 52 }}>
-                      <Svg width={40} height={52} viewBox="0 0 40 52">
-                        {/* Teardrop shape */}
-                        <Path
-                          d="M20 0C8.954 0 0 8.954 0 20c0 11.046 20 32 20 32s20-20.954 20-32C40 8.954 31.046 0 20 0z"
-                          fill={stationColor}
-                        />
-                        {/* White inner circle */}
-                        <Circle cx={20} cy={18} r={13} fill="#ffffff" />
-                      </Svg>
-                      {/* Logo overlay */}
-                      <View style={{
-                        position: "absolute",
-                        top: 6,
-                        left: 0,
-                        right: 0,
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}>
-                        <RNImage
-                          source={require("@/assets/images/efishremovedbge.png")}
-                          style={{
-                            width: 24,
-                            height: 24,
-                          }}
-                          resizeMode="contain"
-                          tintColor={stationColor}
-                        />
-                      </View>
-                    </View>
-
-                    {/* Available Socket Badge */}
-                    <View style={{
-                      backgroundColor: stationColor,
-                      paddingHorizontal: 5,
-                      paddingVertical: 1,
-                      borderRadius: 12,
-                      borderWidth: 2,
-                      borderColor: '#fff',
-                      minWidth: 22,
-                      height: 22,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      marginTop: -10, // Pull up to overlap with pin tip
-                      zIndex: 2,
-                      elevation: 2,
-                      shadowColor: "#000",
-                      shadowOffset: { width: 0, height: 1 },
-                      shadowOpacity: 0.2,
-                      shadowRadius: 1,
-                    }}>
-                      <Text style={{
-                        color: '#fff',
-                        fontSize: 11,
-                        fontWeight: '900',
-                        textAlign: 'center'
-                      }}>
-                        {availableCount}
-                      </Text>
-                    </View>
-                  </View>
-                </Marker>
-              )
-            })}
+            {filteredStations.map((station) => (
+              <MapPinMarker
+                key={station.id}
+                station={station}
+                isSelected={selectedStation?.id === station.id}
+                onPress={handleMarkerPress}
+              />
+            ))}
           </MapView>
 
           <View style={[styles.overlay, { paddingTop: topInset }]}>
@@ -1242,11 +1259,10 @@ export default function MapScreen() {
               top: 0,
               left: 0,
               right: 0,
-              paddingTop: topInset,
-              paddingBottom: 4, // Smaller bottom padding
+              paddingTop: Platform.OS === 'ios' ? topInset : topInset - 15,
               backgroundColor: isDark ? "rgba(30, 30, 30, 0.85)" : "rgba(255, 255, 255, 0.95)", // Semi-transparent for glass effect
-              borderBottomLeftRadius: 10,
-              borderBottomRightRadius: 10,
+              borderBottomLeftRadius: 24,
+              borderBottomRightRadius: 24,
               shadowColor: "#000",
               shadowOffset: { width: 0, height: 4 }, // Reduced shadow
               shadowOpacity: 0.1,
@@ -1309,11 +1325,8 @@ export default function MapScreen() {
                     width: 48, // Match height
                     height: 48,
                     borderRadius: 99,
-                    backgroundColor: isDark ? "#333" : "#fff",
                     alignItems: "center",
-                    justifyContent: "center",
-                    borderWidth: 1,
-                    borderColor: isDark ? "#444" : "#e0e0e0",
+                    justifyContent: "center"
                   }}>
                     <Notification
                       size={24}
@@ -1403,11 +1416,29 @@ export default function MapScreen() {
                         setBottomSheetSelectedType(t);
                         bottomSheetRef.current?.dismiss();
                         typeListBottomSheetRef.current?.present();
-                        // Next tick snap to ensure 50% opens instead of 10%
-                        requestAnimationFrame(() => {
+                        // Provide a short timeout so BottomSheet has time to mount before we force snap
+                        setTimeout(() => {
                           typeListBottomSheetRef.current?.snapToIndex(1);
-                        });
+                        }, 50);
                         DeviceEventEmitter.emit('toggleBottomSheet', true);
+
+                        // Zoom out the map to a wider view (delta ≈ 0.2)
+                        // If we have a current region or user location, we use that as center
+                        if (mapRef.current) {
+                          const center = userLocation ? {
+                            latitude: userLocation.coords.latitude,
+                            longitude: userLocation.coords.longitude,
+                          } : {
+                            latitude: currentRegion.current.latitude,
+                            longitude: currentRegion.current.longitude,
+                          };
+
+                          mapRef.current.animateToRegion({
+                            ...center,
+                            latitudeDelta: 0.2, // Zoomed out delta
+                            longitudeDelta: 0.2,
+                          }, 500);
+                        }
                       }}
                       style={{
                         flex: 1,
@@ -1417,10 +1448,15 @@ export default function MapScreen() {
                         alignItems: 'center',
                         flexDirection: 'row',
                         justifyContent: 'center',
-                        gap: 4,
                       }}
                     >
-                      <Flash variant="Bold" size={16} color="#ffffff" />
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 4 }}>
+                        {Array.from({ length: typeLightningCount[t] }).map((_, i) => (
+                          <View key={i} style={{ marginLeft: i > 0 ? -10 : 0, zIndex: i }}>
+                            <Flash variant="Bold" size={16} color="#ffffff" />
+                          </View>
+                        ))}
+                      </View>
                       <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 13 }}>{t}</Text>
                     </Pressable>
                   ))}
@@ -1458,11 +1494,13 @@ export default function MapScreen() {
 
           <BottomSheetModal
             ref={bottomSheetRef}
+            index={0}
             snapPoints={snapPoints}
             onDismiss={closeSheet}
             enablePanDownToClose
             backdropComponent={renderBackdrop}
             handleComponent={null}
+            enableDynamicSizing={false}
             backgroundStyle={{ backgroundColor: isDark ? "#161616" : "#ffffff" }}
           >
             <BottomSheetScrollView
@@ -1906,6 +1944,7 @@ export default function MapScreen() {
             snapPoints={typeListSnapPoints}
             enablePanDownToClose={false}
             enableOverDrag={false}
+            enableDynamicSizing={false}
             backgroundStyle={{ backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF' }}
             handleIndicatorStyle={{ backgroundColor: isDark ? '#333' : '#E5E5EA' }}
           >
@@ -1925,39 +1964,146 @@ export default function MapScreen() {
                 </Pressable>
               </View>
               <BottomSheetFlatList
-                data={stationsList.filter(s => s.type === bottomSheetSelectedType)}
+                data={stationsList.filter(s => {
+                  if (!bottomSheetSelectedType) return false;
+                  // Look at primary type OR check socket_stats for matching type
+                  return s.type === bottomSheetSelectedType ||
+                    (s.socket_stats && s.socket_stats[bottomSheetSelectedType] && s.socket_stats[bottomSheetSelectedType].total > 0);
+                })}
                 keyExtractor={(item: Station) => item.id}
                 bounces={false}
-                contentContainerStyle={{ gap: 12, paddingHorizontal: 16, paddingBottom: 24 }}
-                renderItem={({ item }: { item: Station }) => (
-                  <Pressable
-                    onPress={() => {
-                      typeListBottomSheetRef.current?.dismiss();
-                      DeviceEventEmitter.emit('toggleBottomSheet', false);
-                      handleMarkerPress(item); // Focus on map and open details
-                    }}
-                    style={{
-                      backgroundColor: isDark ? '#2C2C2E' : '#F2F2F7',
-                      padding: 16,
-                      borderRadius: 16,
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      borderWidth: 1,
-                      borderColor: isDark ? '#3A3A3C' : '#E5E5EA'
-                    }}
-                  >
-                    <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: getStationColor(item.type), alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
-                      <Ionicons name="flash" size={20} color="#fff" />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 16, fontWeight: '600', color: colors.text }}>{item.name}</Text>
-                      <Text style={{ fontSize: 14, color: colors.textSecondary, marginTop: 4 }}>
-                        {item.powerKw} kW • {item.distanceKm ? `${item.distanceKm} km` : ''}
-                      </Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
-                  </Pressable>
+                contentContainerStyle={[
+                  { paddingHorizontal: 16, paddingBottom: 24 },
+                  stationsList.filter(s => {
+                    if (!bottomSheetSelectedType) return false;
+                    return s.type === bottomSheetSelectedType ||
+                      (s.socket_stats && s.socket_stats[bottomSheetSelectedType] && s.socket_stats[bottomSheetSelectedType].total > 0);
+                  }).length === 0 ? { flex: 1 } : { gap: 12 }
+                ]}
+                ListEmptyComponent={() => (
+                  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'flex-start', minHeight: 150, padding: 20 }}>
+                    <Ionicons name="search-outline" size={48} color={colors.textTertiary} style={{ marginBottom: 16 }} />
+                    <Text style={{ fontSize: 18, fontWeight: '700', color: colors.textSecondary, textAlign: 'center' }}>
+                      No stations found.
+                    </Text>
+                    <Text style={{ fontSize: 14, color: colors.textTertiary, textAlign: 'center', marginTop: 8 }}>
+                      There are no stations matching the selected type in this area.
+                    </Text>
+                  </View>
                 )}
+                renderItem={({ item }: { item: Station }) => {
+                  let distanceText = "";
+                  if (userLocation) {
+                    const dist = getDistanceFromLatLonInKm(
+                      userLocation.coords.latitude,
+                      userLocation.coords.longitude,
+                      item.latitude,
+                      item.longitude
+                    );
+                    distanceText = ` • ${dist.toFixed(1)} km`;
+                  } else if (item.distanceKm) {
+                    distanceText = ` • ${item.distanceKm} km`;
+                  }
+
+                  const isAvailable = item.status === "available";
+
+                  return (
+                    <Pressable
+                      onPress={() => {
+                        typeListBottomSheetRef.current?.dismiss();
+                        DeviceEventEmitter.emit('toggleBottomSheet', false);
+                        handleMarkerPress(item); // Focus on map and open details
+                      }}
+                      style={{
+                        backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF',
+                        padding: 16,
+                        borderRadius: 20,
+                        borderWidth: 1,
+                        borderColor: isDark ? '#333333' : '#EAEAEA',
+                        shadowColor: "#000",
+                        shadowOffset: { width: 0, height: 4 },
+                        shadowOpacity: 0.05,
+                        shadowRadius: 10,
+                        elevation: 3,
+                        marginBottom: 4,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'space-between'
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', flex: 1, alignItems: 'center' }}>
+                        {/* Avatar / Icons with Tighter Stacking */}
+                        <View style={{
+                          width: 48,
+                          height: 48,
+                          borderRadius: 24,
+                          backgroundColor: getStationColor(item.type) + '15',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          marginRight: 14,
+                          flexDirection: 'row'
+                        }}>
+                          {Array.from({ length: typeLightningCount[item.type as StationType] || 1 }).map((_, i) => (
+                            <View key={i} style={{ marginLeft: i > 0 ? -12 : 0, zIndex: i }}>
+                              <Ionicons name="flash" size={20} color={getStationColor(item.type)} />
+                            </View>
+                          ))}
+
+                          {/* Live Status Indicator attached to the Avatar */}
+                          <View style={{
+                            position: 'absolute',
+                            top: 4,
+                            right: -2,
+                            width: 16,
+                            height: 16,
+                            borderRadius: 96,
+                            backgroundColor: isAvailable ? "#2cdb9b" : "#ff3b30",
+                            borderWidth: 3,
+                            borderColor: isDark ? '#1C1C1E' : '#FFFFFF'
+                          }} />
+                        </View>
+
+                        {/* Station Text Details */}
+                        <View style={{ flex: 1, justifyContent: 'center', paddingRight: 8 }}>
+                          <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text, marginBottom: 4 }} numberOfLines={1}>{item.name}</Text>
+                          <Text style={{ fontSize: 13, color: colors.textSecondary, fontWeight: '500' }}>
+                            {item.powerKw} kW{distanceText}
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* Action Buttons Aligned Right */}
+                      <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                        <Pressable
+                          onPress={() => {
+                            DeviceEventEmitter.emit('toggleBottomSheet', false);
+                            router.push({
+                              pathname: "/modal",
+                              params: {
+                                name: item.name,
+                                lat: String(item.latitude),
+                                lng: String(item.longitude),
+                              },
+                            });
+                          }}
+                          style={{
+                            backgroundColor: colors.primary,
+                            paddingHorizontal: 14,
+                            height: 38,
+                            borderRadius: 19,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flexDirection: 'row',
+                            gap: 4
+                          }}
+                        >
+                          <Ionicons name="navigate" size={16} color="#fff" />
+                          <Text style={{ fontSize: 13, fontWeight: '700', color: "#fff" }}>Directions</Text>
+                        </Pressable>
+                      </View>
+                    </Pressable>
+                  );
+                }}
               />
             </View>
           </BottomSheetModal>
@@ -2439,8 +2585,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    borderWidth: 1,
-    borderColor: "#e6e6e6",
   },
   recenterText: {
     fontWeight: "700",

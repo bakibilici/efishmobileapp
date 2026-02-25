@@ -66,6 +66,15 @@ export default ({ config }) => ({
     "expo-secure-store",
     "@react-native-voice/voice",
     "expo-localization",
+    [
+      "expo-build-properties",
+      {
+        android: {
+          enableJetifier: true,
+        },
+      }
+    ],
+    "./withAndroidSupportExclude.js",
   ],
   experiments: {
     typedRoutes: true,
