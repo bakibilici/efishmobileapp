@@ -512,7 +512,7 @@ function SettingsItem({
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
-  container: { paddingBottom: 40 },
+  container: { paddingBottom: 200 },
 
   profileCard: {
     alignItems: "center",

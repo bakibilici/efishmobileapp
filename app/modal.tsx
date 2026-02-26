@@ -111,6 +111,8 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'flex-end',
     backgroundColor: 'transparent', // User requested removing the dark overlay
+    zIndex: 9999,
+    elevation: 9999,
   },
   backdrop: {
     ...StyleSheet.absoluteFillObject,

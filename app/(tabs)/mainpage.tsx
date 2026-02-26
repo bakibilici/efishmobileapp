@@ -33,7 +33,7 @@ import {
   Alert,
   Animated,
   DeviceEventEmitter,
-  Image,
+  ImageBackground,
   Keyboard,
   LayoutAnimation,
   Platform,
@@ -92,78 +92,85 @@ const typeLightningCount: Record<StationType, number> = {
   HPC: 3,
 };
 
-// Selected pin size: images are 63x112 → display at 52x92
-// Unselected pin size: images are ~175-211 x 304 → display at 42x60
-const PIN_SELECTED = { imgW: 66, imgH: 108, boxW: 66, boxH: 108 };
-const PIN_UNSELECTED = { imgW: 54, imgH: 76, boxW: 54, boxH: 76 };
+// Pin display sizes (smaller to avoid oversized markers)
+const PIN_SELECTED = { w: 38, h: 56 };
+const PIN_UNSELECTED = { w: 38, h: 56 };
 
-// Dedicated marker component that ensures the pin image is fully loaded
-// before Android takes its bitmap snapshot — prevents clipping on all devices.
+// Positive marginBottom to push text UP from the bottom of ImageBackground.
+// This keeps all content INSIDE the bounding box — Android bitmap snapshot won't clip.
+const CIRCLE_MB_SELECTED = 7;
+const CIRCLE_MB_UNSELECTED = 5;
+
+// Dedicated marker component — uses ImageBackground with flex-end layout.
+// Text is placed at the bottom circle using positive marginBottom only,
+// ensuring nothing extends outside the view bounds on Android.
 const MapPinMarker = React.memo(({ station, isSelected, onPress }: {
   station: Station;
   isSelected: boolean;
   onPress: (station: Station) => void;
 }) => {
   const [imageLoaded, setImageLoaded] = React.useState(false);
-  const prevSelectedRef = React.useRef(isSelected);
 
-  // When selection state changes, reset imageLoaded so Android re-snapshots the bitmap
+  // When selection state changes, force Android to re-render the snapshot
   React.useEffect(() => {
-    if (prevSelectedRef.current !== isSelected) {
-      setImageLoaded(false);
-      prevSelectedRef.current = isSelected;
-    }
-  }, [isSelected]);
+    setImageLoaded(false);
+  }, [isSelected, station.socket_stats]);
 
   const typeKey = String(station.type || "DC").toUpperCase();
   const imgSource = isSelected
     ? (pinImagesSelected[typeKey] || pinImagesSelected.DC)
     : (pinImagesUnselected[typeKey] || pinImagesUnselected.DC);
+
   const stationColor = getStationColor(station.type);
+
   const availableCount = station.socket_stats
     ? Object.values(station.socket_stats).reduce((acc: number, curr: any) => acc + (curr.available || 0), 0)
     : 0;
 
   const size = isSelected ? PIN_SELECTED : PIN_UNSELECTED;
+  const fontSize = isSelected ? 10 : 10;
+  const circleMB = isSelected ? CIRCLE_MB_SELECTED : CIRCLE_MB_UNSELECTED;
 
   return (
     <Marker
       coordinate={{ latitude: station.latitude, longitude: station.longitude }}
       onPress={() => onPress(station)}
-      anchor={{ x: 0.5, y: 0.82 }}
-      tracksViewChanges={!imageLoaded}
+      anchor={{ x: 0.5, y: 0.8 }}
+      tracksViewChanges={Platform.OS === 'android' ? !imageLoaded : false}
       zIndex={isSelected ? 999 : 0}
     >
-      <View style={{
-        width: size.boxW,
-        height: size.boxH,
-        alignItems: 'center',
-        justifyContent: 'flex-start',
-      }}>
-        <Image
+      {/* @ts-ignore collapsable prevents Android from optimizing away the View */}
+      <View collapsable={false}>
+        <ImageBackground
           source={imgSource}
-          style={{ width: size.imgW, height: size.imgH }}
+          style={{
+            width: size.w,
+            height: size.h,
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+          }}
           resizeMode="contain"
           onLoad={() => {
-            setTimeout(() => setImageLoaded(true), 100);
+            setTimeout(() => setImageLoaded(true), 200);
           }}
           fadeDuration={0}
-        />
-        <Text style={{
-          position: 'absolute',
-          bottom: isSelected ? 20 : 12,
-          color: stationColor,
-          zIndex: 999,
-          fontSize: isSelected ? 13 : 11,
-          fontWeight: '800',
-          textAlign: 'center',
-        }}>
-          {availableCount}
-        </Text>
+        >
+          <Text style={{
+            color: stationColor,
+            fontSize: fontSize,
+            fontWeight: '800',
+            textAlign: 'center',
+            marginBottom: 7,
+            includeFontPadding: false,
+          }}>
+            {availableCount}
+          </Text>
+        </ImageBackground>
       </View>
     </Marker>
   );
 });
+
 
 export default function MapScreen() {
   const router = useRouter();
@@ -808,6 +815,7 @@ export default function MapScreen() {
   const typeListBottomSheetRef = useRef<BottomSheetModal>(null);
   const typeListSnapPoints = useMemo(() => ["15%", "35%", "90%"], []);
   const [bottomSheetSelectedType, setBottomSheetSelectedType] = useState<StationType | null>(null);
+  const [isTypeListOpen, setIsTypeListOpen] = useState(false);
 
   const chargingBottomSheetRef = useRef<BottomSheetModal>(null);
   const chargingSnapPoints = useMemo(() => ["90%"], []);
@@ -820,6 +828,18 @@ export default function MapScreen() {
       UIManager.setLayoutAnimationEnabledExperimental(true);
     }
   }, []);
+
+  // Animated value for type buttons slide in/out
+  const typeButtonsAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    const shouldShow = !isFiltersVisible && !isTypeListOpen;
+    Animated.timing(typeButtonsAnim, {
+      toValue: shouldShow ? 1 : 0,
+      duration: 250,
+      useNativeDriver: false,
+    }).start();
+  }, [isFiltersVisible, isTypeListOpen]);
 
   const [showRecenter, setShowRecenter] = useState(false);
 
@@ -1285,27 +1305,44 @@ export default function MapScreen() {
                 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
                     <TextInput
-                      placeholder="Search"
-                      placeholderTextColor={colors.textTertiary}
+                      placeholder={isTypeListOpen && bottomSheetSelectedType ? `${bottomSheetSelectedType} Stations` : "Search"}
+                      placeholderTextColor={isTypeListOpen && bottomSheetSelectedType ? colors.text : colors.textTertiary}
                       value={search}
                       onChangeText={setSearch}
+                      editable={!isTypeListOpen}
                       style={{
                         flex: 1,
                         paddingHorizontal: 16,
                         fontSize: 16,
-                        color: colors.text
+                        color: colors.text,
+                        fontWeight: isTypeListOpen && bottomSheetSelectedType ? '700' : 'normal',
                       }}
                     />
-                    <Pressable
-                      onPress={toggleListening}
-                      style={{ paddingRight: 12 }}
-                    >
-                      <Microphone2
-                        size={20}
-                        color={isListening ? colors.primary : colors.textTertiary}
-                        variant={isListening ? "Bold" : "Outline"}
-                      />
-                    </Pressable>
+                    {isTypeListOpen && bottomSheetSelectedType ? (
+                      <Pressable
+                        onPress={() => {
+                          LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                          setBottomSheetSelectedType(null);
+                          setIsTypeListOpen(false);
+                          typeListBottomSheetRef.current?.dismiss();
+                          DeviceEventEmitter.emit('toggleBottomSheet', false);
+                        }}
+                        style={{ paddingRight: 12 }}
+                      >
+                        <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
+                      </Pressable>
+                    ) : (
+                      <Pressable
+                        onPress={toggleListening}
+                        style={{ paddingRight: 12 }}
+                      >
+                        <Microphone2
+                          size={20}
+                          color={isListening ? colors.primary : colors.textTertiary}
+                          variant={isListening ? "Bold" : "Outline"}
+                        />
+                      </Pressable>
+                    )}
                   </View>
 
                 </View>
@@ -1406,14 +1443,23 @@ export default function MapScreen() {
                 </View>
               </Animated.View>
 
-              {/* Solid Type Buttons when filters are CLOSED */}
-              {!isFiltersVisible && (
+              {/* Solid Type Buttons — animated slide in/out */}
+              <Animated.View style={{
+                overflow: 'hidden',
+                height: typeButtonsAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 52],
+                }),
+                opacity: typeButtonsAnim,
+              }}>
                 <View style={{ flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingBottom: 12, marginTop: 4 }}>
                   {(["HPC", "DC", "AC"] as StationType[]).map((t) => (
                     <Pressable
                       key={t}
                       onPress={() => {
+                        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
                         setBottomSheetSelectedType(t);
+                        setIsTypeListOpen(true);
                         bottomSheetRef.current?.dismiss();
                         typeListBottomSheetRef.current?.present();
                         // Provide a short timeout so BottomSheet has time to mount before we force snap
@@ -1423,7 +1469,6 @@ export default function MapScreen() {
                         DeviceEventEmitter.emit('toggleBottomSheet', true);
 
                         // Zoom out the map to a wider view (delta ≈ 0.2)
-                        // If we have a current region or user location, we use that as center
                         if (mapRef.current) {
                           const center = userLocation ? {
                             latitude: userLocation.coords.latitude,
@@ -1435,7 +1480,7 @@ export default function MapScreen() {
 
                           mapRef.current.animateToRegion({
                             ...center,
-                            latitudeDelta: 0.2, // Zoomed out delta
+                            latitudeDelta: 0.2,
                             longitudeDelta: 0.2,
                           }, 500);
                         }
@@ -1461,7 +1506,7 @@ export default function MapScreen() {
                     </Pressable>
                   ))}
                 </View>
-              )}
+              </Animated.View>
 
             </Animated.View>
 
@@ -1955,6 +2000,9 @@ export default function MapScreen() {
                 </Text>
                 <Pressable
                   onPress={() => {
+                    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                    setBottomSheetSelectedType(null);
+                    setIsTypeListOpen(false);
                     typeListBottomSheetRef.current?.dismiss();
                     DeviceEventEmitter.emit('toggleBottomSheet', false);
                   }}
@@ -2010,6 +2058,9 @@ export default function MapScreen() {
                   return (
                     <Pressable
                       onPress={() => {
+                        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                        setBottomSheetSelectedType(null);
+                        setIsTypeListOpen(false);
                         typeListBottomSheetRef.current?.dismiss();
                         DeviceEventEmitter.emit('toggleBottomSheet', false);
                         handleMarkerPress(item); // Focus on map and open details
