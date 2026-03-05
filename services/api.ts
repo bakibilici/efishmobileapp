@@ -20,6 +20,26 @@ const api = axios.create({
   },
 });
 
+const buildQueryString = (params?: Record<string, any>): string => {
+  if (!params) return "";
+
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (
+      value === undefined ||
+      value === null ||
+      value === "" ||
+      (typeof value === "number" && Number.isNaN(value))
+    ) {
+      return;
+    }
+    searchParams.append(key, String(value));
+  });
+
+  const query = searchParams.toString();
+  return query ? `?${query}` : "";
+};
+
 // In-memory token variable for synchronous access
 let authToken: string | null = null;
 
@@ -269,6 +289,52 @@ export const getStationDetails = async (id: string) => {
     JSON.stringify(response.data, null, 2),
   );
   return response.data.data ? response.data.data : response.data;
+};
+
+// EV catalog endpoints for cascading dropdowns
+
+export const getVehicleBrands = async (params?: {
+  ordering?: string;
+  page?: number;
+  page_size?: number;
+  search?: string;
+}) => {
+  const qs = buildQueryString(params);
+  const response = await api.get(`/api/v1/ev/web/brands/${qs}`);
+  return response.data;
+};
+
+export const getVehicleModelsByBrand = async (
+  brandUuid: string,
+  params?: {
+    ordering?: string;
+    page?: number;
+    page_size?: number;
+    search?: string;
+  },
+) => {
+  const qs = buildQueryString({ ...params, brand: brandUuid });
+  const response = await api.get(`/api/v1/ev/web/models/${qs}`);
+  return response.data;
+};
+
+export const getVehiclesByBrandAndModel = async (
+  brandUuid: string,
+  modelUuid: string,
+  params?: {
+    ordering?: string;
+    page?: number;
+    page_size?: number;
+    search?: string;
+  },
+) => {
+  const qs = buildQueryString({
+    ...params,
+    brand: brandUuid,
+    model: modelUuid,
+  });
+  const response = await api.get(`/api/v1/ev/web/vehicles/${qs}`);
+  return response.data;
 };
 
 export const getRegisteredVehicles = async () => {

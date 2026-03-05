@@ -1,7 +1,9 @@
 import { useTheme } from "@/context/ThemeContext";
 import {
   getRegisteredVehicleDetail,
-  getVehicleModels,
+  getVehicleBrands,
+  getVehicleModelsByBrand,
+  getVehiclesByBrandAndModel,
   updateRegisteredVehicle,
 } from "@/services/api";
 import { Ionicons } from "@expo/vector-icons";
@@ -25,60 +27,106 @@ export default function UpdateVehicleScreen() {
 
   // Form State
   const [plateNumber, setPlateNumber] = useState("");
-  const [selectedModel, setSelectedModel] = useState<any>(null);
 
-  // Data State
+  // Cascading dropdown state
+  const [brands, setBrands] = useState<any[]>([]);
   const [models, setModels] = useState<any[]>([]);
+  const [vehicles, setVehicles] = useState<any[]>([]);
+
+  const [selectedBrand, setSelectedBrand] = useState<any>(null);
+  const [selectedModel, setSelectedModel] = useState<any>(null);
+  const [selectedVehicle, setSelectedVehicle] = useState<any>(null);
+
+  // Loading state
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
   // Dropdown state
-  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [brandDropdownOpen, setBrandDropdownOpen] = useState(false);
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const [vehicleDropdownOpen, setVehicleDropdownOpen] = useState(false);
 
   useEffect(() => {
     if (uuid) {
       loadData();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uuid]);
 
   const loadData = async () => {
     try {
       setLoading(true);
-      // 1. Fetch Models
-      const modelsResponse = await getVehicleModels();
-      let modelList = [];
-      if (modelsResponse.data && Array.isArray(modelsResponse.data.results)) {
+      // 1. Fetch registered vehicle detail
+      const vehicleResponse = await getRegisteredVehicleDetail(uuid as string);
+      const vehicleData = vehicleResponse?.data || vehicleResponse;
+
+      setPlateNumber(vehicleData.plate_number || "");
+
+      // vehicle shape: vehicle.model.brand.name, model.name, vehicle.id/uuid
+      const v = vehicleData.vehicle;
+      const brandName = v?.model?.brand?.name;
+      const modelName = v?.model?.name;
+
+      // 2. Load brands and preselect matching brand
+      const brandsResponse = await getVehicleBrands();
+      let brandList: any[] = [];
+      if (brandsResponse?.data && Array.isArray(brandsResponse.data.results)) {
+        brandList = brandsResponse.data.results;
+      } else if (Array.isArray(brandsResponse?.results)) {
+        brandList = brandsResponse.results;
+      } else if (Array.isArray(brandsResponse)) {
+        brandList = brandsResponse;
+      }
+      setBrands(brandList);
+
+      const brandMatch =
+        brandList.find((b: any) => b.name === brandName) ?? brandList[0];
+      if (!brandMatch) {
+        return;
+      }
+      setSelectedBrand(brandMatch);
+
+      // 3. Load models for brand and preselect model
+      const modelsResponse = await getVehicleModelsByBrand(brandMatch.uuid);
+      let modelList: any[] = [];
+      if (modelsResponse?.data && Array.isArray(modelsResponse.data.results)) {
         modelList = modelsResponse.data.results;
-      } else if (Array.isArray(modelsResponse.results)) {
+      } else if (Array.isArray(modelsResponse?.results)) {
         modelList = modelsResponse.results;
       } else if (Array.isArray(modelsResponse)) {
         modelList = modelsResponse;
       }
       setModels(modelList);
 
-      // 2. Fetch Vehicle Detail
-      const vehicleResponse = await getRegisteredVehicleDetail(uuid as string);
-      const vehicleData = vehicleResponse.data || vehicleResponse;
+      const modelMatch =
+        modelList.find((m: any) => m.name === modelName) ?? modelList[0];
+      if (!modelMatch) {
+        return;
+      }
+      setSelectedModel(modelMatch);
 
-      setPlateNumber(vehicleData.plate_number || "");
+      // 4. Load vehicles for brand+model and preselect exact vehicle
+      const vehiclesResponse = await getVehiclesByBrandAndModel(
+        brandMatch.uuid,
+        modelMatch.uuid,
+      );
+      let vehicleList: any[] = [];
+      if (
+        vehiclesResponse?.data &&
+        Array.isArray(vehiclesResponse.data.results)
+      ) {
+        vehicleList = vehiclesResponse.data.results;
+      } else if (Array.isArray(vehiclesResponse?.results)) {
+        vehicleList = vehiclesResponse.results;
+      } else if (Array.isArray(vehiclesResponse)) {
+        vehicleList = vehiclesResponse;
+      }
+      setVehicles(vehicleList);
 
-      // 3. Match Model (vehicle from API can be uuid or id)
-      if (vehicleData.vehicle) {
-        const found = modelList.find(
-          (m: any) =>
-            m.uuid === vehicleData.vehicle || m.id === vehicleData.vehicle,
-        );
-        if (found) setSelectedModel(found);
-      } else if (vehicleData.vehicle_details?.uuid) {
-        const found = modelList.find(
-          (m: any) => m.uuid === vehicleData.vehicle_details.uuid,
-        );
-        if (found) setSelectedModel(found);
-      } else if (vehicleData.vehicle_details?.id) {
-        const found = modelList.find(
-          (m: any) => m.id === vehicleData.vehicle_details.id,
-        );
-        if (found) setSelectedModel(found);
+      const vehicleMatch =
+        vehicleList.find((item: any) => item.id === v.id) ?? vehicleList[0];
+      if (vehicleMatch) {
+        setSelectedVehicle(vehicleMatch);
       }
     } catch (error) {
       console.error("Failed to load data", error);
@@ -90,8 +138,8 @@ export default function UpdateVehicleScreen() {
   };
 
   const handleUpdate = async () => {
-    if (!selectedModel) {
-      Alert.alert("Required", "Please select a vehicle model.");
+    if (!selectedVehicle) {
+      Alert.alert("Required", "Please select a vehicle.");
       return;
     }
     if (!plateNumber.trim()) {
@@ -102,7 +150,7 @@ export default function UpdateVehicleScreen() {
     setSubmitting(true);
     try {
       await updateRegisteredVehicle(uuid as string, {
-        vehicle: selectedModel.uuid,
+        vehicle: selectedVehicle.uuid,
         plate_number: plateNumber.trim(),
         vehicle_type: "INDIVIDUAL",
       });
@@ -120,6 +168,42 @@ export default function UpdateVehicleScreen() {
     }
   };
 
+  const renderBrandItem = ({ item }: { item: any }) => (
+    <Pressable
+      style={({ pressed }) => [
+        styles.dropdownItem,
+        { borderBottomColor: colors.border },
+        pressed && { backgroundColor: colors.backgroundSecondary },
+      ]}
+      onPress={() => {
+        setSelectedBrand(item);
+        setSelectedModel(null);
+        setSelectedVehicle(null);
+        setModels([]);
+        setVehicles([]);
+        setBrandDropdownOpen(false);
+        getVehicleModelsByBrand(item.uuid).then((res) => {
+          let list: any[] = [];
+          if (res?.data && Array.isArray(res.data.results)) {
+            list = res.data.results;
+          } else if (Array.isArray(res?.results)) {
+            list = res.results;
+          } else if (Array.isArray(res)) {
+            list = res;
+          }
+          setModels(list);
+        });
+      }}
+    >
+      <Text style={[styles.dropdownItemText, { color: colors.text }]}>
+        {item.name}
+      </Text>
+      {selectedBrand?.uuid === item.uuid && (
+        <Ionicons name="checkmark" size={18} color={colors.primary} />
+      )}
+    </Pressable>
+  );
+
   const renderModelItem = ({ item }: { item: any }) => (
     <Pressable
       style={({ pressed }) => [
@@ -129,11 +213,28 @@ export default function UpdateVehicleScreen() {
       ]}
       onPress={() => {
         setSelectedModel(item);
-        setDropdownOpen(false);
+        setSelectedVehicle(null);
+        setVehicles([]);
+        setModelDropdownOpen(false);
+        if (selectedBrand?.uuid) {
+          getVehiclesByBrandAndModel(selectedBrand.uuid, item.uuid).then(
+            (res) => {
+              let list: any[] = [];
+              if (res?.data && Array.isArray(res.data.results)) {
+                list = res.data.results;
+              } else if (Array.isArray(res?.results)) {
+                list = res.results;
+              } else if (Array.isArray(res)) {
+                list = res;
+              }
+              setVehicles(list);
+            },
+          );
+        }
       }}
     >
       <Text style={[styles.dropdownItemText, { color: colors.text }]}>
-        {item.full_name || `${item.brand} ${item.model}`}
+        {item.name}
       </Text>
       {selectedModel?.uuid === item.uuid && (
         <Ionicons name="checkmark" size={18} color={colors.primary} />
@@ -149,6 +250,9 @@ export default function UpdateVehicleScreen() {
     );
   }
 
+  const anyDropdownOpen =
+    brandDropdownOpen || modelDropdownOpen || vehicleDropdownOpen;
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <Stack.Screen
@@ -158,46 +262,107 @@ export default function UpdateVehicleScreen() {
       <ScrollView
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
-        scrollEnabled={!dropdownOpen}
+        scrollEnabled={!anyDropdownOpen}
       >
+        {/* BRAND */}
         <Text style={[styles.label, { color: colors.textTertiary }]}>
-          VEHICLE MODEL
+          BRAND
         </Text>
-
-        {/* Visual Container for ZIndex context */}
         <View style={{ zIndex: 1000, marginBottom: 8 }}>
           <Pressable
             style={[
               styles.inputContainer,
               {
                 backgroundColor: colors.card,
-                borderColor: isActiveOrOpen(dropdownOpen, colors),
+                borderColor: isActiveOrOpen(brandDropdownOpen, colors),
               },
-              dropdownOpen && styles.inputContainerOpen,
+              brandDropdownOpen && styles.inputContainerOpen,
             ]}
-            onPress={() => setDropdownOpen(!dropdownOpen)}
+            onPress={() => setBrandDropdownOpen(!brandDropdownOpen)}
+          >
+            {selectedBrand ? (
+              <Text
+                style={[styles.inputText, { color: colors.text }]}
+                numberOfLines={1}
+              >
+                {selectedBrand.name}
+              </Text>
+            ) : (
+              <Text style={[styles.inputText, { color: colors.textTertiary }]}>
+                Select a brand ...
+              </Text>
+            )}
+            <Ionicons
+              name={brandDropdownOpen ? "chevron-up" : "chevron-down"}
+              size={20}
+              color={colors.textTertiary}
+            />
+          </Pressable>
+
+          {brandDropdownOpen && (
+            <View
+              style={[
+                styles.dropdownList,
+                {
+                  backgroundColor: colors.card,
+                  borderColor: colors.border,
+                  shadowColor: colors.shadow,
+                },
+              ]}
+            >
+              <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled={true}>
+                {brands.map((item) => (
+                  <View key={item.uuid?.toString() || Math.random().toString()}>
+                    {renderBrandItem({ item })}
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+        </View>
+
+        {/* MODEL */}
+        <Text
+          style={[styles.label, { color: colors.textTertiary, marginTop: 16 }]}
+        >
+          MODEL
+        </Text>
+        <View style={{ zIndex: 900, marginBottom: 8 }}>
+          <Pressable
+            style={[
+              styles.inputContainer,
+              {
+                backgroundColor: colors.card,
+                borderColor: isActiveOrOpen(modelDropdownOpen, colors),
+                opacity: selectedBrand ? 1 : 0.5,
+              },
+              modelDropdownOpen && styles.inputContainerOpen,
+            ]}
+            onPress={() => {
+              if (!selectedBrand) return;
+              setModelDropdownOpen(!modelDropdownOpen);
+            }}
           >
             {selectedModel ? (
               <Text
                 style={[styles.inputText, { color: colors.text }]}
                 numberOfLines={1}
               >
-                {selectedModel.full_name ||
-                  `${selectedModel.brand} ${selectedModel.model}`}
+                {selectedModel.name}
               </Text>
             ) : (
               <Text style={[styles.inputText, { color: colors.textTertiary }]}>
-                Select a vehicle model ...
+                {selectedBrand ? "Select a model ..." : "Select a brand first"}
               </Text>
             )}
             <Ionicons
-              name={dropdownOpen ? "chevron-up" : "chevron-down"}
+              name={modelDropdownOpen ? "chevron-up" : "chevron-down"}
               size={20}
               color={colors.textTertiary}
             />
           </Pressable>
 
-          {dropdownOpen && (
+          {modelDropdownOpen && (
             <View
               style={[
                 styles.dropdownList,
@@ -212,6 +377,99 @@ export default function UpdateVehicleScreen() {
                 {models.map((item) => (
                   <View key={item.uuid?.toString() || Math.random().toString()}>
                     {renderModelItem({ item })}
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+        </View>
+
+        {/* VEHICLE */}
+        <Text
+          style={[styles.label, { color: colors.textTertiary, marginTop: 16 }]}
+        >
+          VEHICLE
+        </Text>
+        <View style={{ zIndex: 800, marginBottom: 8 }}>
+          <Pressable
+            style={[
+              styles.inputContainer,
+              {
+                backgroundColor: colors.card,
+                borderColor: isActiveOrOpen(vehicleDropdownOpen, colors),
+                opacity: selectedModel ? 1 : 0.5,
+              },
+              vehicleDropdownOpen && styles.inputContainerOpen,
+            ]}
+            onPress={() => {
+              if (!selectedBrand || !selectedModel) return;
+              setVehicleDropdownOpen(!vehicleDropdownOpen);
+            }}
+          >
+            {selectedVehicle ? (
+              <Text
+                style={[styles.inputText, { color: colors.text }]}
+                numberOfLines={1}
+              >
+                {selectedVehicle.full_name || selectedVehicle.name}
+              </Text>
+            ) : (
+              <Text style={[styles.inputText, { color: colors.textTertiary }]}>
+                {selectedModel
+                  ? "Select a vehicle ..."
+                  : "Select a model first"}
+              </Text>
+            )}
+            <Ionicons
+              name={vehicleDropdownOpen ? "chevron-up" : "chevron-down"}
+              size={20}
+              color={colors.textTertiary}
+            />
+          </Pressable>
+
+          {vehicleDropdownOpen && (
+            <View
+              style={[
+                styles.dropdownList,
+                {
+                  backgroundColor: colors.card,
+                  borderColor: colors.border,
+                  shadowColor: colors.shadow,
+                },
+              ]}
+            >
+              <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled={true}>
+                {vehicles.map((item) => (
+                  <View key={item.uuid?.toString() || Math.random().toString()}>
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.dropdownItem,
+                        { borderBottomColor: colors.border },
+                        pressed && {
+                          backgroundColor: colors.backgroundSecondary,
+                        },
+                      ]}
+                      onPress={() => {
+                        setSelectedVehicle(item);
+                        setVehicleDropdownOpen(false);
+                      }}
+                    >
+                      <Text
+                        style={[
+                          styles.dropdownItemText,
+                          { color: colors.text },
+                        ]}
+                      >
+                        {item.full_name || item.name}
+                      </Text>
+                      {selectedVehicle?.uuid === item.uuid && (
+                        <Ionicons
+                          name="checkmark"
+                          size={18}
+                          color={colors.primary}
+                        />
+                      )}
+                    </Pressable>
                   </View>
                 ))}
               </ScrollView>

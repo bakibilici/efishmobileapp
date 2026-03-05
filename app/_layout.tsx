@@ -10,9 +10,16 @@ import { Accelerometer } from "expo-sensors";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
-import { Text, TextInput } from "react-native";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import "react-native-reanimated";
+import { startNetworkLogging } from "react-native-network-logger";
 
 import {
   ThemeProvider as AppThemeProvider,
@@ -100,6 +107,12 @@ function useShakeDetector() {
 
 export default Sentry.wrap(function RootLayout() {
   useShakeDetector();
+
+  useEffect(() => {
+    if (__DEV__) {
+      startNetworkLogging();
+    }
+  }, []);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -196,7 +209,41 @@ function RootLayoutNav() {
           />
         </Stack>
         <StatusBar style={themeScheme === "dark" ? "light" : "dark"} />
+        {__DEV__ && (
+          <View pointerEvents="box-none" style={styles.devBubbleWrapper}>
+            <Pressable
+              onPress={() => {
+                router.push("/network-logger");
+              }}
+              style={styles.devBubble}
+            >
+              <Text style={styles.devBubbleText}>NET</Text>
+            </Pressable>
+          </View>
+        )}
       </ThemeProvider>
     </BottomSheetModalProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  devBubbleWrapper: {
+    position: "absolute",
+    right: 16,
+    bottom: 40,
+  },
+  devBubble: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "rgba(0,0,0,0.8)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  devBubbleText: {
+    color: "white",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+});
+

@@ -1,194 +1,505 @@
-import { useTheme } from '@/context/ThemeContext';
-import { addRegisteredVehicle, getVehicleModels } from '@/services/api';
-import { Ionicons } from '@expo/vector-icons';
-import { Stack, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useTheme } from "@/context/ThemeContext";
+import {
+  addRegisteredVehicle,
+  getVehicleBrands,
+  getVehicleModelsByBrand,
+  getVehiclesByBrandAndModel,
+} from "@/services/api";
+import { Ionicons } from "@expo/vector-icons";
+import { Stack, useRouter } from "expo-router";
+import React, { useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
 export default function AddVehicleScreen() {
-    const router = useRouter();
-    const { colors } = useTheme();
-    const [plateNumber, setPlateNumber] = useState('');
-    const [selectedModel, setSelectedModel] = useState<any>(null);
-    const [models, setModels] = useState<any[]>([]);
-    const [loadingModels, setLoadingModels] = useState(true);
-    const [submitting, setSubmitting] = useState(false);
+  const router = useRouter();
+  const { colors } = useTheme();
 
-    // Dropdown state
-    const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [plateNumber, setPlateNumber] = useState("");
 
-    useEffect(() => {
-        fetchModels();
-    }, []);
+  const [brands, setBrands] = useState<any[]>([]);
+  const [models, setModels] = useState<any[]>([]);
+  const [vehicles, setVehicles] = useState<any[]>([]);
 
-    const fetchModels = async () => {
-        try {
-            const response = await getVehicleModels();
-            // Handle { success: true, data: { results: [...] } } structure
-            let list = [];
-            if (response.data && Array.isArray(response.data.results)) {
-                list = response.data.results;
-            } else if (Array.isArray(response.results)) {
-                list = response.results;
-            } else if (Array.isArray(response)) {
-                list = response;
-            }
-            setModels(list);
-        } catch (error) {
-            console.error("Failed to fetch models", error);
-            Alert.alert("Error", "Failed to load vehicle models.");
-        } finally {
-            setLoadingModels(false);
+  const [selectedBrand, setSelectedBrand] = useState<any>(null);
+  const [selectedModel, setSelectedModel] = useState<any>(null);
+  const [selectedVehicle, setSelectedVehicle] = useState<any>(null);
+
+  const [loadingBrands, setLoadingBrands] = useState(true);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [loadingVehicles, setLoadingVehicles] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const [brandDropdownOpen, setBrandDropdownOpen] = useState(false);
+  const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const [vehicleDropdownOpen, setVehicleDropdownOpen] = useState(false);
+
+  useEffect(() => {
+    fetchBrands();
+  }, []);
+
+  const fetchBrands = async () => {
+    try {
+      setLoadingBrands(true);
+      const response = await getVehicleBrands();
+      let list: any[] = [];
+      if (response?.data && Array.isArray(response.data.results)) {
+        list = response.data.results;
+      } else if (Array.isArray(response?.results)) {
+        list = response.results;
+      } else if (Array.isArray(response)) {
+        list = response;
+      }
+      setBrands(list);
+    } catch (error) {
+      console.error("Failed to fetch brands", error);
+      Alert.alert("Error", "Failed to load brands.");
+    } finally {
+      setLoadingBrands(false);
+    }
+  };
+
+  const fetchModels = async (brandUuid: string) => {
+    try {
+      setLoadingModels(true);
+      const response = await getVehicleModelsByBrand(brandUuid);
+      let list: any[] = [];
+      if (response?.data && Array.isArray(response.data.results)) {
+        list = response.data.results;
+      } else if (Array.isArray(response?.results)) {
+        list = response.results;
+      } else if (Array.isArray(response)) {
+        list = response;
+      }
+      setModels(list);
+    } catch (error) {
+      console.error("Failed to fetch models", error);
+      Alert.alert("Error", "Failed to load vehicle models.");
+    } finally {
+      setLoadingModels(false);
+    }
+  };
+
+  const fetchVehicles = async (brandUuid: string, modelUuid: string) => {
+    try {
+      setLoadingVehicles(true);
+      const response = await getVehiclesByBrandAndModel(brandUuid, modelUuid);
+      let list: any[] = [];
+      if (response?.data && Array.isArray(response.data.results)) {
+        list = response.data.results;
+      } else if (Array.isArray(response?.results)) {
+        list = response.results;
+      } else if (Array.isArray(response)) {
+        list = response;
+      }
+      setVehicles(list);
+    } catch (error) {
+      console.error("Failed to fetch vehicles", error);
+      Alert.alert("Error", "Failed to load vehicles.");
+    } finally {
+      setLoadingVehicles(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!selectedVehicle) {
+      Alert.alert("Required", "Please select a vehicle.");
+      return;
+    }
+    if (!plateNumber.trim()) {
+      Alert.alert("Required", "Please enter your plate number.");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await addRegisteredVehicle({
+        plate_number: plateNumber.trim(),
+        vehicle: selectedVehicle.uuid,
+        vehicle_type: "INDIVIDUAL",
+      });
+      Alert.alert("Success", "Vehicle added successfully", [
+        { text: "OK", onPress: () => router.back() },
+      ]);
+    } catch (error: any) {
+      console.error("Failed to add vehicle", error);
+      const msg =
+        error.response?.data?.message ||
+        "Could not add vehicle. Please try again.";
+      Alert.alert("Error", msg);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const renderBrandItem = ({ item }: { item: any }) => (
+    <Pressable
+      style={({ pressed }) => [
+        styles.dropdownItem,
+        { borderBottomColor: colors.border },
+        pressed && { backgroundColor: colors.backgroundSecondary },
+      ]}
+      onPress={() => {
+        setSelectedBrand(item);
+        setSelectedModel(null);
+        setSelectedVehicle(null);
+        setModels([]);
+        setVehicles([]);
+        setBrandDropdownOpen(false);
+        fetchModels(item.uuid);
+      }}
+    >
+      <Text style={[styles.dropdownItemText, { color: colors.text }]}>
+        {item.name}
+      </Text>
+      {selectedBrand?.uuid === item.uuid && (
+        <Ionicons name="checkmark" size={18} color={colors.primary} />
+      )}
+    </Pressable>
+  );
+
+  const renderModelItem = ({ item }: { item: any }) => (
+    <Pressable
+      style={({ pressed }) => [
+        styles.dropdownItem,
+        { borderBottomColor: colors.border },
+        pressed && { backgroundColor: colors.backgroundSecondary },
+      ]}
+      onPress={() => {
+        setSelectedModel(item);
+        setSelectedVehicle(null);
+        setVehicles([]);
+        setModelDropdownOpen(false);
+        if (selectedBrand?.uuid) {
+          fetchVehicles(selectedBrand.uuid, item.uuid);
         }
-    };
+      }}
+    >
+      <Text style={[styles.dropdownItemText, { color: colors.text }]}>
+        {item.name}
+      </Text>
+      {selectedModel?.uuid === item.uuid && (
+        <Ionicons name="checkmark" size={18} color={colors.primary} />
+      )}
+    </Pressable>
+  );
 
-    const handleSubmit = async () => {
-        if (!selectedModel) {
-            Alert.alert("Required", "Please select a vehicle model.");
-            return;
-        }
-        if (!plateNumber.trim()) {
-            Alert.alert("Required", "Please enter your plate number.");
-            return;
-        }
+  const renderVehicleItem = ({ item }: { item: any }) => (
+    <Pressable
+      style={({ pressed }) => [
+        styles.dropdownItem,
+        { borderBottomColor: colors.border },
+        pressed && { backgroundColor: colors.backgroundSecondary },
+      ]}
+      onPress={() => {
+        setSelectedVehicle(item);
+        setVehicleDropdownOpen(false);
+      }}
+    >
+      <Text style={[styles.dropdownItemText, { color: colors.text }]}>
+        {item.full_name || item.name}
+      </Text>
+      {selectedVehicle?.uuid === item.uuid && (
+        <Ionicons name="checkmark" size={18} color={colors.primary} />
+      )}
+    </Pressable>
+  );
 
-        setSubmitting(true);
-        try {
-            await addRegisteredVehicle({
-                vehicle: selectedModel.uuid,
-                plate_number: plateNumber.trim(),
-                vehicle_type: "INDIVIDUAL"
-            });
-            Alert.alert("Success", "Vehicle added successfully", [
-                { text: "OK", onPress: () => router.back() }
-            ]);
-        } catch (error: any) {
-            console.error("Failed to add vehicle", error);
-            const msg = error.response?.data?.message || "Could not add vehicle. Please try again.";
-            Alert.alert("Error", msg);
-        } finally {
-            setSubmitting(false);
-        }
-    };
+  const anyDropdownOpen =
+    brandDropdownOpen || modelDropdownOpen || vehicleDropdownOpen;
 
-    const renderModelItem = ({ item }: { item: any }) => (
-        <Pressable
-            style={({ pressed }) => [
-                styles.dropdownItem,
-                { borderBottomColor: colors.border },
-                pressed && { backgroundColor: colors.backgroundSecondary }
+  return (
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <Stack.Screen
+        options={{ title: "Add Vehicle", headerBackTitle: "Cancel" }}
+      />
+
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        scrollEnabled={!anyDropdownOpen}
+      >
+        {/* BRAND */}
+        <Text style={[styles.label, { color: colors.textTertiary }]}>
+          BRAND
+        </Text>
+        <View style={{ zIndex: 1000, marginBottom: 8 }}>
+          <Pressable
+            style={[
+              styles.inputContainer,
+              {
+                backgroundColor: colors.card,
+                borderColor: isActiveOrOpen(brandDropdownOpen, colors),
+              },
+              brandDropdownOpen && styles.inputContainerOpen,
+            ]}
+            onPress={() => setBrandDropdownOpen(!brandDropdownOpen)}
+          >
+            {selectedBrand ? (
+              <Text
+                style={[styles.inputText, { color: colors.text }]}
+                numberOfLines={1}
+              >
+                {selectedBrand.name}
+              </Text>
+            ) : (
+              <Text style={[styles.inputText, { color: colors.textTertiary }]}>
+                Select a brand ...
+              </Text>
+            )}
+            <Ionicons
+              name={brandDropdownOpen ? "chevron-up" : "chevron-down"}
+              size={20}
+              color={colors.textTertiary}
+            />
+          </Pressable>
+
+          {brandDropdownOpen && (
+            <View
+              style={[
+                styles.dropdownList,
+                {
+                  backgroundColor: colors.card,
+                  borderColor: colors.border,
+                  shadowColor: colors.shadow,
+                },
+              ]}
+            >
+              {loadingBrands ? (
+                <ActivityIndicator
+                  size="small"
+                  color={colors.primary}
+                  style={{ margin: 20 }}
+                />
+              ) : (
+                <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
+                  {brands.map((item) => (
+                    <View
+                      key={item.uuid?.toString() || Math.random().toString()}
+                    >
+                      {renderBrandItem({ item })}
+                    </View>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+          )}
+        </View>
+
+        {/* MODEL */}
+        <Text
+          style={[
+            styles.label,
+            { color: colors.textTertiary, marginTop: 16 },
+          ]}
+        >
+          MODEL
+        </Text>
+        <View style={{ zIndex: 900, marginBottom: 8 }}>
+          <Pressable
+            style={[
+              styles.inputContainer,
+              {
+                backgroundColor: colors.card,
+                borderColor: isActiveOrOpen(modelDropdownOpen, colors),
+                opacity: selectedBrand ? 1 : 0.5,
+              },
+              modelDropdownOpen && styles.inputContainerOpen,
             ]}
             onPress={() => {
-                setSelectedModel(item);
-                setDropdownOpen(false);
+              if (!selectedBrand) return;
+              setModelDropdownOpen(!modelDropdownOpen);
             }}
-        >
-            <Text style={[styles.dropdownItemText, { color: colors.text }]}>
-                {item.full_name || `${item.brand} ${item.model}`}
-            </Text>
-            {selectedModel?.uuid === item.uuid && (
-                <Ionicons name="checkmark" size={18} color={colors.primary} />
+          >
+            {selectedModel ? (
+              <Text
+                style={[styles.inputText, { color: colors.text }]}
+                numberOfLines={1}
+              >
+                {selectedModel.name}
+              </Text>
+            ) : (
+              <Text style={[styles.inputText, { color: colors.textTertiary }]}>
+                {selectedBrand
+                  ? "Select a model ..."
+                  : "Select a brand first"}
+              </Text>
             )}
-        </Pressable>
-    );
+            <Ionicons
+              name={modelDropdownOpen ? "chevron-up" : "chevron-down"}
+              size={20}
+              color={colors.textTertiary}
+            />
+          </Pressable>
 
-    return (
-        <View style={[styles.container, { backgroundColor: colors.background }]}>
-            <Stack.Screen options={{ title: 'Add Vehicle', headerBackTitle: 'Cancel' }} />
-
-            <ScrollView
-                contentContainerStyle={styles.content}
-                keyboardShouldPersistTaps="handled"
-                scrollEnabled={!dropdownOpen}
+          {modelDropdownOpen && (
+            <View
+              style={[
+                styles.dropdownList,
+                {
+                  backgroundColor: colors.card,
+                  borderColor: colors.border,
+                  shadowColor: colors.shadow,
+                },
+              ]}
             >
-
-                <Text style={[styles.label, { color: colors.textTertiary }]}>VEHICLE MODEL</Text>
-
-                {/* Visual Container for ZIndex context */}
-                <View style={{ zIndex: 1000, marginBottom: 8 }}>
-                    <Pressable
-                        style={[
-                            styles.inputContainer, // Box style
-                            { backgroundColor: colors.card, borderColor: isActiveOrOpen(dropdownOpen, colors) },
-                            dropdownOpen && styles.inputContainerOpen
-                        ]}
-                        onPress={() => setDropdownOpen(!dropdownOpen)}
+              {loadingModels ? (
+                <ActivityIndicator
+                  size="small"
+                  color={colors.primary}
+                  style={{ margin: 20 }}
+                />
+              ) : (
+                <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
+                  {models.map((item) => (
+                    <View
+                      key={item.uuid?.toString() || Math.random().toString()}
                     >
-                        {selectedModel ? (
-                            <Text style={[styles.inputText, { color: colors.text }]} numberOfLines={1}>
-                                {selectedModel.full_name || `${selectedModel.brand} ${selectedModel.model}`}
-                            </Text>
-                        ) : (
-                            <Text style={[styles.inputText, { color: colors.textTertiary }]}>
-                                Select a vehicle model ...
-                            </Text>
-                        )}
-                        <Ionicons
-                            name={dropdownOpen ? "chevron-up" : "chevron-down"}
-                            size={20}
-                            color={colors.textTertiary}
-                        />
-                    </Pressable>
-
-                    {dropdownOpen && (
-                        <View style={[styles.dropdownList, { backgroundColor: colors.card, borderColor: colors.border, shadowColor: colors.shadow }]}>
-                            {loadingModels ? (
-                                <ActivityIndicator size="small" color={colors.primary} style={{ margin: 20 }} />
-                            ) : (
-                                <ScrollView
-                                    style={{ maxHeight: 200 }}
-                                    nestedScrollEnabled={true}
-                                >
-                                    {models.map((item) => (
-                                        <View key={item.uuid?.toString() || Math.random().toString()}>
-                                            {renderModelItem({ item })}
-                                        </View>
-                                    ))}
-                                </ScrollView>
-                            )}
-                        </View>
-                    )}
-                </View>
-
-                {/* Wrapper for the rest to potentially push down z-index */}
-                <View style={{ zIndex: 1 }}>
-                    <Text style={[styles.label, { color: colors.textTertiary, marginTop: 16 }]}>PLATE NUMBER</Text>
-                    <View style={[styles.inputContainer, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                        <TextInput
-                            style={[styles.input, { color: colors.text }]}
-                            value={plateNumber}
-                            onChangeText={text => setPlateNumber(text.toUpperCase())}
-                            placeholder="e.g. 34ABC123"
-                            placeholderTextColor={colors.textTertiary}
-                            autoCapitalize="characters"
-                        />
+                      {renderModelItem({ item })}
                     </View>
-
-                    <Text style={[styles.note, { color: colors.textTertiary }]}>
-                        Vehicle type is set to INDIVIDUAL by default.
-                    </Text>
-
-                    <Pressable
-                        style={({ pressed }) => [
-                            styles.submitButton,
-                            { backgroundColor: colors.primary },
-                            pressed && { opacity: 0.9 },
-                            submitting && { opacity: 0.5 }
-                        ]}
-                        onPress={handleSubmit}
-                        disabled={submitting}
-                    >
-                        {submitting ? (
-                            <ActivityIndicator color="#fff" />
-                        ) : (
-                            <Text style={styles.submitButtonText}>Add Vehicle</Text>
-                        )}
-                    </Pressable>
-                </View>
-
-            </ScrollView>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+          )}
         </View>
-    );
+
+        {/* VEHICLE */}
+        <Text
+          style={[
+            styles.label,
+            { color: colors.textTertiary, marginTop: 16 },
+          ]}
+        >
+          VEHICLE
+        </Text>
+        <View style={{ zIndex: 800, marginBottom: 8 }}>
+          <Pressable
+            style={[
+              styles.inputContainer,
+              {
+                backgroundColor: colors.card,
+                borderColor: isActiveOrOpen(vehicleDropdownOpen, colors),
+                opacity: selectedModel ? 1 : 0.5,
+              },
+              vehicleDropdownOpen && styles.inputContainerOpen,
+            ]}
+            onPress={() => {
+              if (!selectedBrand || !selectedModel) return;
+              setVehicleDropdownOpen(!vehicleDropdownOpen);
+            }}
+          >
+            {selectedVehicle ? (
+              <Text
+                style={[styles.inputText, { color: colors.text }]}
+                numberOfLines={1}
+              >
+                {selectedVehicle.full_name || selectedVehicle.name}
+              </Text>
+            ) : (
+              <Text style={[styles.inputText, { color: colors.textTertiary }]}>
+                {selectedModel
+                  ? "Select a vehicle ..."
+                  : "Select a model first"}
+              </Text>
+            )}
+            <Ionicons
+              name={vehicleDropdownOpen ? "chevron-up" : "chevron-down"}
+              size={20}
+              color={colors.textTertiary}
+            />
+          </Pressable>
+
+          {vehicleDropdownOpen && (
+            <View
+              style={[
+                styles.dropdownList,
+                {
+                  backgroundColor: colors.card,
+                  borderColor: colors.border,
+                  shadowColor: colors.shadow,
+                },
+              ]}
+            >
+              {loadingVehicles ? (
+                <ActivityIndicator
+                  size="small"
+                  color={colors.primary}
+                  style={{ margin: 20 }}
+                />
+              ) : (
+                <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
+                  {vehicles.map((item) => (
+                    <View
+                      key={item.uuid?.toString() || Math.random().toString()}
+                    >
+                      {renderVehicleItem({ item })}
+                    </View>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+          )}
+        </View>
+
+        {/* PLATE & SUBMIT */}
+        <View style={{ zIndex: 1 }}>
+          <Text
+            style={[
+              styles.label,
+              { color: colors.textTertiary, marginTop: 16 },
+            ]}
+          >
+            PLATE NUMBER
+          </Text>
+          <View
+            style={[
+              styles.inputContainer,
+              { backgroundColor: colors.card, borderColor: colors.border },
+            ]}
+          >
+            <TextInput
+              style={[styles.input, { color: colors.text }]}
+              value={plateNumber}
+              onChangeText={(text) => setPlateNumber(text.toUpperCase())}
+              placeholder="e.g. 34ABC123"
+              placeholderTextColor={colors.textTertiary}
+              autoCapitalize="characters"
+            />
+          </View>
+
+          <Text style={[styles.note, { color: colors.textTertiary }]}>
+            Vehicle type is set to INDIVIDUAL by default.
+          </Text>
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.submitButton,
+              { backgroundColor: colors.primary },
+              pressed && { opacity: 0.9 },
+              submitting && { opacity: 0.5 },
+            ]}
+            onPress={handleSubmit}
+            disabled={submitting}
+          >
+            {submitting ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.submitButtonText}>Add Vehicle</Text>
+            )}
+          </Pressable>
+        </View>
+      </ScrollView>
+    </View>
+  );
 }
 
 function isActiveOrOpen(isOpen: boolean, colors: any) {
