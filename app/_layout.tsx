@@ -1,4 +1,5 @@
 import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   DarkTheme,
   DefaultTheme,
@@ -11,15 +12,16 @@ import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
 import {
+  Animated,
+  PanResponder,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
-  View,
 } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import "react-native-reanimated";
 import { startNetworkLogging } from "react-native-network-logger";
+import "react-native-reanimated";
 
 import {
   ThemeProvider as AppThemeProvider,
@@ -209,18 +211,7 @@ function RootLayoutNav() {
           />
         </Stack>
         <StatusBar style={themeScheme === "dark" ? "light" : "dark"} />
-        {__DEV__ && (
-          <View pointerEvents="box-none" style={styles.devBubbleWrapper}>
-            <Pressable
-              onPress={() => {
-                router.push("/network-logger");
-              }}
-              style={styles.devBubble}
-            >
-              <Text style={styles.devBubbleText}>NET</Text>
-            </Pressable>
-          </View>
-        )}
+        {__DEV__ && <DraggableDevButton />}
       </ThemeProvider>
     </BottomSheetModalProvider>
   );
@@ -247,3 +238,78 @@ const styles = StyleSheet.create({
   },
 });
 
+function DraggableDevButton() {
+  const router = useRouter();
+  const pan = useRef(new Animated.ValueXY()).current;
+  const panValue = useRef({ x: 0, y: 0 });
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    const listenerId = pan.addListener((value) => {
+      panValue.current = value;
+    });
+
+    AsyncStorage.getItem("dev_button_pos").then((val) => {
+      if (val) {
+        try {
+          const { x, y } = JSON.parse(val);
+          pan.setValue({ x, y });
+          panValue.current = { x, y };
+        } catch (e) {}
+      }
+      setIsReady(true);
+    });
+
+    return () => {
+      pan.removeListener(listenerId);
+    };
+  }, [pan]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        return Math.abs(gestureState.dx) > 5 || Math.abs(gestureState.dy) > 5;
+      },
+      onPanResponderGrant: () => {
+        pan.setOffset({
+          x: panValue.current.x,
+          y: panValue.current.y,
+        });
+        pan.setValue({ x: 0, y: 0 });
+      },
+      onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], {
+        useNativeDriver: false,
+      }),
+      onPanResponderRelease: () => {
+        pan.flattenOffset();
+        AsyncStorage.setItem(
+          "dev_button_pos",
+          JSON.stringify({ x: panValue.current.x, y: panValue.current.y }),
+        );
+      },
+    }),
+  ).current;
+
+  if (!isReady) return null;
+
+  return (
+    <Animated.View
+      {...panResponder.panHandlers}
+      style={[
+        styles.devBubbleWrapper,
+        {
+          transform: [{ translateX: pan.x }, { translateY: pan.y }],
+        },
+      ]}
+    >
+      <Pressable
+        onPress={() => {
+          router.push("/network-logger");
+        }}
+        style={styles.devBubble}
+      >
+        <Text style={styles.devBubbleText}>NET</Text>
+      </Pressable>
+    </Animated.View>
+  );
+}
