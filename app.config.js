@@ -4,7 +4,7 @@ export default ({ config }) => ({
   slug: "efish",
   version: "1.0.0",
   orientation: "portrait",
-  icon: "./assets/images/icon.png",
+  icon: "./assets/images/efishjuste.png",
   scheme: "efish",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,

@@ -33,7 +33,8 @@ import {
   Alert,
   Animated,
   DeviceEventEmitter,
-  ImageBackground,
+  Dimensions,
+  Image,
   Keyboard,
   LayoutAnimation,
   Platform,
@@ -92,30 +93,20 @@ const typeLightningCount: Record<StationType, number> = {
   HPC: 3,
 };
 
-// Pin display sizes (smaller to avoid oversized markers)
-const PIN_SELECTED = { w: 38, h: 56 };
-const PIN_UNSELECTED = { w: 38, h: 56 };
+// Marker size as percentage of screen width — consistent across all resolutions.
+const SCREEN_W = Dimensions.get('window').width;
+const PIN_W = Math.round(SCREEN_W * 0.08);   // 8% of screen width
+const PIN_H = Math.round(PIN_W * 1.78);       // maintain pin aspect ratio
+const PIN_SIZE = { w: PIN_W, h: PIN_H };
 
-// Positive marginBottom to push text UP from the bottom of ImageBackground.
-// This keeps all content INSIDE the bounding box — Android bitmap snapshot won't clip.
-const CIRCLE_MB_SELECTED = 7;
-const CIRCLE_MB_UNSELECTED = 5;
+// Marker component — fixed size, only image source changes on selection.
+const isAndroid = Platform.OS === 'android';
 
-// Dedicated marker component — uses ImageBackground with flex-end layout.
-// Text is placed at the bottom circle using positive marginBottom only,
-// ensuring nothing extends outside the view bounds on Android.
 const MapPinMarker = React.memo(({ station, isSelected, onPress }: {
   station: Station;
   isSelected: boolean;
   onPress: (station: Station) => void;
 }) => {
-  const [imageLoaded, setImageLoaded] = React.useState(false);
-
-  // When selection state changes, force Android to re-render the snapshot
-  React.useEffect(() => {
-    setImageLoaded(false);
-  }, [isSelected, station.socket_stats]);
-
   const typeKey = String(station.type || "DC").toUpperCase();
   const imgSource = isSelected
     ? (pinImagesSelected[typeKey] || pinImagesSelected.DC)
@@ -127,45 +118,48 @@ const MapPinMarker = React.memo(({ station, isSelected, onPress }: {
     ? Object.values(station.socket_stats).reduce((acc: number, curr: any) => acc + (curr.available || 0), 0)
     : 0;
 
-  const size = isSelected ? PIN_SELECTED : PIN_UNSELECTED;
-  const fontSize = isSelected ? 10 : 10;
-  const circleMB = isSelected ? CIRCLE_MB_SELECTED : CIRCLE_MB_UNSELECTED;
+  // Android-only: bitmap tracking for 1.5s after visual changes
+  const [tracking, setTracking] = React.useState(isAndroid);
+  const visKey = `${isSelected}-${availableCount}-${typeKey}`;
+
+  React.useEffect(() => {
+    if (!isAndroid) return; // iOS needs NO tracking — fully static
+    setTracking(true);
+    const timer = setTimeout(() => setTracking(false), 1500);
+    return () => clearTimeout(timer);
+  }, [visKey]);
 
   return (
     <Marker
       coordinate={{ latitude: station.latitude, longitude: station.longitude }}
       onPress={() => onPress(station)}
-      anchor={{ x: 0.5, y: 0.8 }}
-      tracksViewChanges={Platform.OS === 'android' ? !imageLoaded : false}
+      anchor={isAndroid ? { x: 0.5, y: 0.87 } : undefined}
+      tracksViewChanges={isAndroid ? tracking : false}
       zIndex={isSelected ? 999 : 0}
     >
-      {/* @ts-ignore collapsable prevents Android from optimizing away the View */}
-      <View collapsable={false}>
-        <ImageBackground
+      {/* @ts-ignore */}
+      <View collapsable={false} style={{
+        width: PIN_SIZE.w,
+        height: PIN_SIZE.h,
+      }}>
+        <Image
           source={imgSource}
-          style={{
-            width: size.w,
-            height: size.h,
-            justifyContent: 'flex-end',
-            alignItems: 'center',
-          }}
-          resizeMode="contain"
-          onLoad={() => {
-            setTimeout(() => setImageLoaded(true), 200);
-          }}
+          style={{ width: PIN_SIZE.w, height: PIN_SIZE.h }}
+          resizeMode="stretch"
           fadeDuration={0}
-        >
-          <Text style={{
-            color: stationColor,
-            fontSize: fontSize,
-            fontWeight: '800',
-            textAlign: 'center',
-            marginBottom: 7,
-            includeFontPadding: false,
-          }}>
-            {availableCount}
-          </Text>
-        </ImageBackground>
+        />
+        <Text style={{
+          position: 'absolute',
+          bottom: '13%',
+          width: '100%',
+          textAlign: 'center',
+          color: stationColor,
+          fontSize: 11,
+          fontWeight: '800',
+          includeFontPadding: false,
+        }}>
+          {availableCount}
+        </Text>
       </View>
     </Marker>
   );
@@ -1637,7 +1631,7 @@ export default function MapScreen() {
                               {v.plate_number}
                             </Text>
                             <Text style={{ fontSize: 13, color: colors.textSecondary }}>
-                              {v.vehicle_name || `${v.vehicle_details?.brand || ''} ${v.vehicle_details?.model || ''}`}
+                              {`${v.vehicle?.model?.brand?.name} - ${v.vehicle?.model?.name}`}
                             </Text>
                           </View>
                           <View style={{ flex: 1 }} />

@@ -117,34 +117,38 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
                         </Text>
                     </View>
 
-                    {/* Status Info */}
+                    {/* Status Info (Hide percentage for AC) */}
                     <View style={styles.status}>
-                        <Text style={[styles.percent, { color: theme.accent }]}>
-                            {Math.floor(state.batteryLevel)}%
-                        </Text>
+                        {state.mode !== 'AC' && (
+                            <Text style={[styles.percent, { color: theme.accent }]}>
+                                {Math.floor(state.batteryLevel)}%
+                            </Text>
+                        )}
                         <View style={styles.liveDot} />
                     </View>
                 </View>
 
-                {/* Progress Visual */}
-                <View style={styles.progressContainer}>
-                    <View style={[styles.progressBarBg, { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                        <Animated.View
-                            style={[
-                                styles.progressBarFill,
-                                {
-                                    backgroundColor: theme.accent,
-                                    width: progressAnim.interpolate({
-                                        inputRange: [0, 100],
-                                        outputRange: ['0%', '100%']
-                                    })
-                                }
-                            ]}
-                        >
-                            <View style={styles.progressShine} />
-                        </Animated.View>
+                {/* Progress Visual (Hide for AC) */}
+                {state.mode !== 'AC' && (
+                    <View style={styles.progressContainer}>
+                        <View style={[styles.progressBarBg, { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                            <Animated.View
+                                style={[
+                                    styles.progressBarFill,
+                                    {
+                                        backgroundColor: theme.accent,
+                                        width: progressAnim.interpolate({
+                                            inputRange: [0, 100],
+                                            outputRange: ['0%', '100%']
+                                        })
+                                    }
+                                ]}
+                            >
+                                <View style={styles.progressShine} />
+                            </Animated.View>
+                        </View>
                     </View>
-                </View>
+                )}
             </Pressable>
         </Animated.View>
     );
