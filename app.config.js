@@ -35,6 +35,10 @@ export default ({ config }) => ({
     },
     edgeToEdgeEnabled: true,
     predictiveBackGestureEnabled: false,
+    permissions: [
+      "android.permission.RECORD_AUDIO",
+      "android.permission.INTERNET"
+    ]
   },
   web: {
     output: "static",

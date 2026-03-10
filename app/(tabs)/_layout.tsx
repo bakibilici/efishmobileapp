@@ -49,7 +49,7 @@ export default function TabLayout() {
           shadowRadius: 8,
           height: Platform.OS === 'ios' ? 106 : 96, // Taller and spacious
           paddingTop: 10,
-          paddingBottom: Platform.OS === 'ios' ? 34 : 0, // Safe area
+          paddingBottom: Platform.OS === 'ios' ? 34 : 16, // Safe area for system nav bar
           borderTopLeftRadius: 24, // More rounded
           borderTopRightRadius: 24,
           transform: [{ translateY: tabBarAnim }]

@@ -18,6 +18,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { ScrollView as GHScrollView } from "react-native-gesture-handler";
 
 export default function AddVehicleScreen() {
   const router = useRouter();
@@ -123,7 +124,7 @@ export default function AddVehicleScreen() {
     try {
       await addRegisteredVehicle({
         plate_number: plateNumber.trim(),
-        vehicle: selectedVehicle.uuid,
+        vehicle: selectedVehicle.id,
         vehicle_type: "INDIVIDUAL",
       });
       Alert.alert("Success", "Vehicle added successfully", [
@@ -280,15 +281,13 @@ export default function AddVehicleScreen() {
                   style={{ margin: 20 }}
                 />
               ) : (
-                <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
+                <GHScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
                   {brands.map((item) => (
-                    <View
-                      key={item.uuid?.toString() || Math.random().toString()}
-                    >
+                    <View key={item.uuid?.toString() || item.id?.toString()}>
                       {renderBrandItem({ item })}
                     </View>
                   ))}
-                </ScrollView>
+                </GHScrollView>
               )}
             </View>
           )}
@@ -358,15 +357,13 @@ export default function AddVehicleScreen() {
                   style={{ margin: 20 }}
                 />
               ) : (
-                <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
+                <GHScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
                   {models.map((item) => (
-                    <View
-                      key={item.uuid?.toString() || Math.random().toString()}
-                    >
+                    <View key={item.uuid?.toString() || item.id?.toString()}>
                       {renderModelItem({ item })}
                     </View>
                   ))}
-                </ScrollView>
+                </GHScrollView>
               )}
             </View>
           )}
@@ -436,15 +433,13 @@ export default function AddVehicleScreen() {
                   style={{ margin: 20 }}
                 />
               ) : (
-                <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
+                <GHScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
                   {vehicles.map((item) => (
-                    <View
-                      key={item.uuid?.toString() || Math.random().toString()}
-                    >
+                    <View key={item.uuid?.toString() || item.id?.toString()}>
                       {renderVehicleItem({ item })}
                     </View>
                   ))}
-                </ScrollView>
+                </GHScrollView>
               )}
             </View>
           )}
@@ -503,98 +498,97 @@ export default function AddVehicleScreen() {
 }
 
 function isActiveOrOpen(isOpen: boolean, colors: any) {
-    return isOpen ? colors.primary : colors.border;
+  return isOpen ? colors.primary : colors.border;
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-    },
-    content: {
-        padding: 20,
-    },
-    label: {
-        fontSize: 13,
-        fontWeight: '600',
-        marginBottom: 8,
-        marginLeft: 4,
-        letterSpacing: 0.5,
-    },
-    inputContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        height: 54,
-        paddingHorizontal: 16,
-        borderRadius: 12,
-        borderWidth: 1,
-        // marginBottom: 8, // Moved to parent zIndex view
-    },
-    inputContainerOpen: {
-        borderBottomLeftRadius: 0,
-        borderBottomRightRadius: 0,
-        borderBottomWidth: 0,
-    },
-    input: {
-        flex: 1,
-        fontSize: 16,
-        fontWeight: '600',
-        height: '100%',
-    },
-    inputText: {
-        flex: 1,
-        fontSize: 16,
-        fontWeight: '500',
-        marginRight: 10,
-    },
-    dropdownList: {
-        position: 'absolute',
-        top: 53, // Just below the input (height - 1 border width)
-        left: 0,
-        right: 0,
-        borderWidth: 1,
-        borderTopWidth: 1, // Add top border back for the list
-        borderBottomLeftRadius: 12,
-        borderBottomRightRadius: 12,
-        overflow: 'hidden',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1,
-        shadowRadius: 8,
-        elevation: 5,
-        zIndex: 9999, // Ensure it sits on top
-    },
-    dropdownItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingVertical: 14,
-        paddingHorizontal: 16,
-        borderTopWidth: StyleSheet.hairlineWidth,
-    },
-    dropdownItemText: {
-        fontSize: 15,
-        fontWeight: '500',
-    },
-    note: {
-        fontSize: 12,
-        marginBottom: 32,
-        marginLeft: 4,
-    },
-    submitButton: {
-        height: 56,
-        borderRadius: 16,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginTop: 10,
-        shadowColor: "#000",
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-        elevation: 4,
-    },
-    submitButtonText: {
-        color: '#fff',
-        fontSize: 17,
-        fontWeight: '700',
-    },
+  container: {
+    flex: 1,
+  },
+  content: {
+    padding: 20,
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 8,
+    marginLeft: 4,
+    letterSpacing: 0.5,
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    height: 54,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    // marginBottom: 8, // Moved to parent zIndex view
+  },
+  inputContainerOpen: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    borderBottomWidth: 0,
+  },
+  input: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
+    height: '100%',
+  },
+  inputText: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '500',
+    marginRight: 10,
+  },
+  dropdownList: {
+    position: 'absolute',
+    top: 53, // Just below the input (height - 1 border width)
+    left: 0,
+    right: 0,
+    borderWidth: 1,
+    borderTopWidth: 1, // Add top border back for the list
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+    zIndex: 9999, // Ensure it sits on top
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  dropdownItemText: {
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  note: {
+    fontSize: 12,
+    marginBottom: 32,
+    marginLeft: 4,
+  },
+  submitButton: {
+    height: 56,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  submitButtonText: {
+    color: '#fff',
+    fontSize: 17,
+    fontWeight: '700',
+  },
 });

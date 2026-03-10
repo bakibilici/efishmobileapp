@@ -269,13 +269,6 @@ export default function ProfileScreen() {
                 isFirst
                 colors={colors}
               />
-              <SettingsItem
-                icon="lock-closed-outline"
-                title="Change Password"
-                color="#FF3B30"
-                isLast
-                colors={colors}
-              />
             </View>
           </>
         )}

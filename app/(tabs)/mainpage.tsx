@@ -1161,6 +1161,7 @@ export default function MapScreen() {
             initialRegion={initialRegion}
             showsUserLocation={locationPermission}
             showsMyLocationButton={false}
+            toolbarEnabled={false}
             userLocationPriority="high"
             userLocationUpdateInterval={5000}
             tintColor={colors.tint}
