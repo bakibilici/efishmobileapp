@@ -3,6 +3,7 @@ import { ChargingState } from '@/hooks/useChargingSimulation';
 import { Ionicons } from '@expo/vector-icons';
 import React, { useEffect, useRef } from 'react';
 import { Animated, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import FinishingSpinner from './FinishingSpinner';
 
 type ChargingWidgetProps = {
     state: ChargingState;
@@ -15,14 +16,25 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
     const progressAnim = useRef(new Animated.Value(state.batteryLevel)).current;
     const entranceAnim = useRef(new Animated.Value(0)).current;
 
-    // Entrance Animation on Mount
+    // Entrance & Exit Animation
     useEffect(() => {
-        Animated.timing(entranceAnim, {
-            toValue: 1,
-            duration: 350,
-            useNativeDriver: true,
-        }).start();
-    }, []);
+        if (state.isFinishing) {
+            // Wait 5 seconds to show finishing, then animate out for 500ms
+            Animated.timing(entranceAnim, {
+                toValue: 0,
+                duration: 500,
+                delay: 4800,
+                useNativeDriver: true,
+            }).start();
+        } else {
+            // Animate in when active
+            Animated.timing(entranceAnim, {
+                toValue: 1,
+                duration: 350,
+                useNativeDriver: true,
+            }).start();
+        }
+    }, [state.isFinishing]);
 
     // Update progress bar smoothly
     useEffect(() => {
@@ -128,8 +140,8 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
                     </View>
                 </View>
 
-                {/* Progress Visual (Hide for AC) */}
-                {state.mode !== 'AC' && (
+                {/* Progress Visual (Hide for AC or Finishing) */}
+                {state.mode !== 'AC' && !state.isFinishing && (
                     <View style={styles.progressContainer}>
                         <View style={[styles.progressBarBg, { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
                             <Animated.View
@@ -147,6 +159,14 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
                                 <View style={styles.progressShine} />
                             </Animated.View>
                         </View>
+                    </View>
+                )}
+
+                {/* Finishing Overlay */}
+                {state.isFinishing && (
+                    <View style={[styles.finishingOverlay, { backgroundColor: isDark ? 'rgba(40, 40, 40, 0.95)' : 'rgba(255, 255, 255, 0.95)' }]}>
+                        <FinishingSpinner size={22} color={theme.accent} />
+                        <Text style={[styles.title, { color: colors.text, marginLeft: 10 }]}>Finishing Charge Session...</Text>
                     </View>
                 )}
             </Pressable>
@@ -270,5 +290,12 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(255,255,255,0.2)',
         width: '30%',
         transform: [{ skewX: '-20deg' }],
+    },
+    finishingOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 20,
     }
 });

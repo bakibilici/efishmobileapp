@@ -7,7 +7,6 @@
 6 silly config load:file:/usr/local/etc/npmrc
 7 verbose title npm start
 8 verbose argv "start"
-9 verbose logfile logs-max:10 dir:/Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-03-10T12_22_02_950Z-
-10 verbose logfile /Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-03-10T12_22_02_950Z-debug-0.log
+9 verbose logfile logs-max:10 dir:/Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-03-11T06_32_08_107Z-
+10 verbose logfile /Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-03-11T06_32_08_107Z-debug-0.log
 11 silly logfile done cleaning log files
-12 http fetch GET 200 https://registry.npmjs.org/npm 272ms

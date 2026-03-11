@@ -1,5 +1,6 @@
 import ChargingScreen from "@/components/ChargingScreen";
 import ChargingWidget from "@/components/ChargingWidget";
+import SocketChargeErrorModal from '@/components/SocketChargeErrorModal';
 import SocketErrorModal from "@/components/SocketErrorModal";
 import { useUser } from "@/context/UserContext";
 import { useChargingSimulation } from "@/hooks/useChargingSimulation";
@@ -120,7 +121,7 @@ const MapPinMarker = React.memo(({ station, isSelected, onPress }: {
 
   // Android-only: bitmap tracking for 1.5s after visual changes
   const [tracking, setTracking] = React.useState(isAndroid);
-  const visKey = `${isSelected}-${availableCount}-${typeKey}`;
+  const visKey = `${isSelected} -${availableCount} -${typeKey} `;
 
   React.useEffect(() => {
     if (!isAndroid) return; // iOS needs NO tracking — fully static
@@ -445,21 +446,17 @@ export default function MapScreen() {
             rawData = data.data || {};
           }
 
-          // Backend: type "socket_status" -> data.status "Charging", data.power, data.counter
           if (data.type === "socket_status" || (rawData.status && rawData.power)) {
-            // ... existing charging widget update logic ... 
-            // We reuse the parsing logic you already had, just ensuring it handles the new format which is cleaner.
-            // The new 'socket_status' for a *specific* socket (global update) might not belong to *my* session.
-            // We should verify if this socket update is relevant to MY active session if possible.
-            // But existing logic seemed to assume any 'socket_status' *with power/counter* meant my session?
-            // No, the new 'socket_status' is broadcasted. 
-            // IMPORTANT: We must filter 'socket_status' to only update 'charging' simulation/widget 
-            // IF it matches our session or we are just showing "A socket is charging".
-
-            // The specification says "meter_values" is "sadece sarj yapan kullaniciya ozel".
-            // So "meter_values" is the source of truth for the active session widget.
-            // "socket_status" is for the map/details.
-            // I will separate them to prevent map updates from confusing the charging widget.
+            // Check if this socket status matches our active session (we'd ideally need a socket_uuid check,
+            // but for FINISHING let's just use it safely if there is an active simulation)
+            if (activeChargeSessionUuidRef.current || charging.isActive) {
+              const upperStatus = (rawData.status || '').toUpperCase();
+              if (upperStatus === 'FINISHING' || upperStatus === 'SUSPENDEDEV' || upperStatus === 'SUSPENDEDEVSE' || upperStatus === 'FAULTED') {
+                charging.updateFromMeterValues({
+                  status: rawData.status
+                });
+              }
+            }
           }
 
           if (data.type === "meter_values" || data.type === "charge_session") {
@@ -1810,6 +1807,9 @@ export default function MapScreen() {
                               if (status === "available") statusColor = "#4BACE4"; // Blue
                               else if (status === "preparing") statusColor = "#2cdb9b"; // Green
                               else if (status === "charging") statusColor = "#FFCC00"; // Yellow
+                              else if (status === "unavailable") statusColor = "#B366FF"; // Purple
+                              else if (status === "faulted") statusColor = "#FF3B30"; // Red
+                              else if (status === "reserved") statusColor = colors.border; // Grayish
 
                               // Helper for Pulse Effect (simplified inline for now or use Lottie if needed)
                               // We will use a simple opacity animation for Charging
@@ -1883,6 +1883,49 @@ export default function MapScreen() {
                                           <Text style={{ color: "#FFCC00", fontWeight: "800", fontSize: 12 }}>Charging</Text>
                                         </View>
                                       </View>
+                                    ) : status === "reserved" ? (
+                                      <View
+                                        style={{
+                                          backgroundColor: isDark ? "rgba(255, 255, 255, 0.05)" : "rgba(0, 0, 0, 0.05)",
+                                          paddingHorizontal: 14,
+                                          paddingVertical: 8,
+                                          borderRadius: 88,
+                                        }}
+                                      >
+                                        <Text style={{ color: colors.textTertiary, fontWeight: "700", fontSize: 12 }}>Reserved</Text>
+                                      </View>
+                                    ) : status === "unavailable" ? (
+                                      <View
+                                        style={{
+                                          backgroundColor: "rgba(179, 102, 255, 0.15)", // Light Purple bg
+                                          paddingHorizontal: 12,
+                                          paddingVertical: 6,
+                                          borderRadius: 88,
+                                          borderWidth: 1,
+                                          borderColor: "#B366FF"
+                                        }}
+                                      >
+                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                                          <Ionicons name="close-circle" size={14} color="#B366FF" />
+                                          <Text style={{ color: "#B366FF", fontWeight: "800", fontSize: 12 }}>Unavailable</Text>
+                                        </View>
+                                      </View>
+                                    ) : status === "faulted" ? (
+                                      <View
+                                        style={{
+                                          backgroundColor: "rgba(255, 59, 48, 0.15)", // Light Red bg
+                                          paddingHorizontal: 12,
+                                          paddingVertical: 6,
+                                          borderRadius: 88,
+                                          borderWidth: 1,
+                                          borderColor: "#FF3B30"
+                                        }}
+                                      >
+                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                                          <Ionicons name="warning" size={14} color="#FF3B30" />
+                                          <Text style={{ color: "#FF3B30", fontWeight: "800", fontSize: 12 }}>Faulted</Text>
+                                        </View>
+                                      </View>
                                     ) : (
                                       /* Fallback / Other statuses */
                                       <Text style={{
@@ -1943,6 +1986,14 @@ export default function MapScreen() {
             onClose={() => setShowSocketError(false)}
             onRetry={handleSocketRetry}
             onRepair={handleSocketRepair}
+          />
+          <SocketChargeErrorModal
+            visible={!!charging.hasError}
+            onClose={() => {
+              // Note: the socket will likely still be sending SUSPENDED
+              // this just hides the UI. You might want to stop simulation entirely.
+              charging.stopSimulation();
+            }}
           />
 
           {/* Full Screen Charging Bottom Sheet */}

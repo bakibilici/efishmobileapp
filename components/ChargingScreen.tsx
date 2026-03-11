@@ -5,6 +5,7 @@ import React, { useEffect, useRef } from 'react';
 import { Dimensions, Easing, Image, Pressable, Animated as RNAnimated, StyleSheet, Text, View } from 'react-native';
 import Animated, { interpolateColor, useAnimatedProps, useDerivedValue, withTiming } from 'react-native-reanimated';
 import Svg, { Circle, Defs, Mask } from 'react-native-svg';
+import FinishingSpinner from './FinishingSpinner';
 
 const { width } = Dimensions.get('window');
 const CIRCLE_SIZE = width * 0.75; // Large central circle
@@ -127,105 +128,116 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                 </View>
 
                 {/* Main Content */}
-                <View style={styles.mainContent}>
+                {state.isFinishing ? (
+                    <View style={styles.mainContent}>
+                        <FinishingSpinner size={50} color={colors.primary} />
+                        <Text style={[styles.percentageText, { color: colors.text, fontSize: 32, marginTop: 24 }]}>
+                            Finishing Session...
+                        </Text>
+                        <Text style={[styles.powerText, { color: colors.textSecondary }]}>
+                            Please wait while we finalize your charging session.
+                        </Text>
+                    </View>
+                ) : (
+                    <View style={styles.mainContent}>
 
-                    {/* Circular Progress & Visual (Hide for AC) */}
-                    {state.mode !== 'AC' ? (
-                        <View style={styles.circleContainer}>
-                            <Svg
-                                width={CIRCLE_SIZE}
-                                height={CIRCLE_SIZE}
-                                style={{ transform: [{ rotate: '-90deg' }] }}
-                            >
-                                <Defs>
-                                    <Mask id="dashMask">
-                                        <Circle
-                                            cx={CIRCLE_SIZE / 2}
-                                            cy={CIRCLE_SIZE / 2}
-                                            r={RADIUS}
-                                            stroke="white"
-                                            strokeWidth={STROKE_WIDTH}
-                                            strokeDasharray="2, 4"
-                                            fill="transparent"
-                                        />
-                                    </Mask>
-                                </Defs>
+                        {/* Circular Progress & Visual (Hide for AC) */}
+                        {state.mode !== 'AC' ? (
+                            <View style={styles.circleContainer}>
+                                <Svg
+                                    width={CIRCLE_SIZE}
+                                    height={CIRCLE_SIZE}
+                                    style={{ transform: [{ rotate: '-90deg' }] }}
+                                >
+                                    <Defs>
+                                        <Mask id="dashMask">
+                                            <Circle
+                                                cx={CIRCLE_SIZE / 2}
+                                                cy={CIRCLE_SIZE / 2}
+                                                r={RADIUS}
+                                                stroke="white"
+                                                strokeWidth={STROKE_WIDTH}
+                                                strokeDasharray="2, 4"
+                                                fill="transparent"
+                                            />
+                                        </Mask>
+                                    </Defs>
 
-                                {/* Track (Faint Dashes) */}
-                                <Circle
-                                    cx={CIRCLE_SIZE / 2}
-                                    cy={CIRCLE_SIZE / 2}
-                                    r={RADIUS}
-                                    stroke={isDark ? '#333' : '#E5E5EA'}
-                                    strokeWidth={STROKE_WIDTH}
-                                    strokeDasharray="2, 4"
-                                    fill="transparent"
-                                />
+                                    {/* Track (Faint Dashes) */}
+                                    <Circle
+                                        cx={CIRCLE_SIZE / 2}
+                                        cy={CIRCLE_SIZE / 2}
+                                        r={RADIUS}
+                                        stroke={isDark ? '#333' : '#E5E5EA'}
+                                        strokeWidth={STROKE_WIDTH}
+                                        strokeDasharray="2, 4"
+                                        fill="transparent"
+                                    />
 
-                                {/* Progress (Masked to look dashed) */}
-                                <AnimatedCircle
-                                    cx={CIRCLE_SIZE / 2}
-                                    cy={CIRCLE_SIZE / 2}
-                                    r={RADIUS}
-                                    strokeWidth={STROKE_WIDTH}
-                                    strokeLinecap="butt"
-                                    fill="transparent"
-                                    strokeDasharray={`${CIRCUMFERENCE}`}
-                                    mask="url(#dashMask)"
-                                    animatedProps={animatedProps}
-                                />
-                            </Svg>
+                                    {/* Progress (Masked to look dashed) */}
+                                    <AnimatedCircle
+                                        cx={CIRCLE_SIZE / 2}
+                                        cy={CIRCLE_SIZE / 2}
+                                        r={RADIUS}
+                                        strokeWidth={STROKE_WIDTH}
+                                        strokeLinecap="butt"
+                                        fill="transparent"
+                                        strokeDasharray={`${CIRCUMFERENCE}`}
+                                        mask="url(#dashMask)"
+                                        animatedProps={animatedProps}
+                                    />
+                                </Svg>
 
-                            {/* Centered Content: Car & Percentage */}
-                            <View style={styles.innerCircle}>
+                                {/* Centered Content: Car & Percentage */}
+                                <View style={styles.innerCircle}>
+                                    <Image
+                                        source={require('@/assets/images/teslamodely.webp')}
+                                        style={styles.carImage}
+                                        resizeMode="contain"
+                                    />
+                                    <Text style={[styles.percentageText, { color: colors.text }]}>
+                                        {Math.floor(state.batteryLevel)}%
+                                    </Text>
+                                    <Text style={[styles.powerText, { color: colors.textSecondary }]}>
+                                        {state.power} kW
+                                    </Text>
+                                </View>
+                            </View>
+                        ) : (
+                            <View style={[styles.circleContainer, { justifyContent: 'center' }]}>
+                                {/* AC Simplified Center Content */}
                                 <Image
                                     source={require('@/assets/images/teslamodely.webp')}
-                                    style={styles.carImage}
+                                    style={[styles.carImage, { transform: [{ scale: 1.2 }], marginBottom: 20 }]}
                                     resizeMode="contain"
                                 />
-                                <Text style={[styles.percentageText, { color: colors.text }]}>
-                                    {Math.floor(state.batteryLevel)}%
-                                </Text>
-                                <Text style={[styles.powerText, { color: colors.textSecondary }]}>
+                                <Text style={[styles.percentageText, { color: colors.text, fontSize: 32 }]}>
                                     {state.power} kW
                                 </Text>
-                            </View>
-                        </View>
-                    ) : (
-                        <View style={[styles.circleContainer, { justifyContent: 'center' }]}>
-                            {/* AC Simplified Center Content */}
-                            <Image
-                                source={require('@/assets/images/teslamodely.webp')}
-                                style={[styles.carImage, { transform: [{ scale: 1.2 }], marginBottom: 20 }]}
-                                resizeMode="contain"
-                            />
-                            <Text style={[styles.percentageText, { color: colors.text, fontSize: 32 }]}>
-                                {state.power} kW
-                            </Text>
-                            <Text style={[styles.powerText, { color: colors.textSecondary, marginTop: 8 }]}>
-                                Charging Power
-                            </Text>
-                        </View>
-                    )}
-
-                    {/* Battery Breakdown (DC/HPC Only) */}
-                    {(state.mode === 'DC' || state.mode === 'HPC') && (
-                        <View style={styles.batteryRow}>
-                            <View style={styles.batteryStat}>
-                                <Text style={[styles.bLabel, { color: colors.textSecondary }]}>Start</Text>
-                                <Text style={[styles.bValue, { color: colors.text }]}>
-                                    {state.startSoc != null ? `${state.startSoc}%` : '—'}
+                                <Text style={[styles.powerText, { color: colors.textSecondary, marginTop: 8 }]}>
+                                    Charging Power
                                 </Text>
                             </View>
-                            <View style={[styles.divider, { backgroundColor: colors.border }]} />
-                            <View style={styles.batteryStat}>
-                                <Text style={[styles.bLabel, { color: colors.textSecondary }]}>Current</Text>
-                                <Text style={[styles.bValue, { color: colors.text }]}>{Math.floor(state.batteryLevel)}%</Text>
-                            </View>
-                        </View>
-                    )}
+                        )}
 
-                </View>
+                        {/* Battery Breakdown (DC/HPC Only) */}
+                        {(state.mode === 'DC' || state.mode === 'HPC') && (
+                            <View style={styles.batteryRow}>
+                                <View style={styles.batteryStat}>
+                                    <Text style={[styles.bLabel, { color: colors.textSecondary }]}>Start</Text>
+                                    <Text style={[styles.bValue, { color: colors.text }]}>
+                                        {state.startSoc != null ? `${state.startSoc}%` : '—'}
+                                    </Text>
+                                </View>
+                                <View style={[styles.divider, { backgroundColor: colors.border }]} />
+                                <View style={styles.batteryStat}>
+                                    <Text style={[styles.bLabel, { color: colors.textSecondary }]}>Current</Text>
+                                    <Text style={[styles.bValue, { color: colors.text }]}>{Math.floor(state.batteryLevel)}%</Text>
+                                </View>
+                            </View>
+                        )}
+                    </View>
+                )}
 
                 {/* Statistics Grid */}
                 <View style={[styles.statsGrid, { backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF' }]}>

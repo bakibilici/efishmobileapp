@@ -17,6 +17,8 @@ export type ChargingState = {
     // Estimates for DC
     estTime80: number | null; // minutes remaining to 80%
     estTime100: number | null; // minutes remaining to 100%
+    hasError?: boolean;
+    isFinishing?: boolean;
 };
 
 export const useChargingSimulation = () => {
@@ -34,6 +36,8 @@ export const useChargingSimulation = () => {
         startSoc: null,
         estTime80: null,
         estTime100: null,
+        hasError: false,
+        isFinishing: false,
     });
 
     const timerRef = useRef<any>(null);
@@ -77,6 +81,44 @@ export const useChargingSimulation = () => {
         const hasCharging = power > 0 || (batteryLevel != null && batteryLevel > 0) || isActiveStatus;
 
         setState(prev => {
+            if (prev.isFinishing) {
+                console.log("[CHARGING_HOOK] Ignoring update because isFinishing is TRUE");
+                // Ignore other updates while waiting to finish to avoid resetting
+                return prev;
+            }
+
+            if (data.status) {
+                const upperStatus = data.status.toUpperCase();
+                console.log("[CHARGING_HOOK] Received status:", upperStatus);
+                if (upperStatus === 'FINISHING') {
+                    console.log("[CHARGING_HOOK] Status is FINISHING! Enabling timeout.");
+                    if (timerRef.current) clearInterval(timerRef.current);
+
+                    // Show finishing state for 5.5 seconds before stopping
+                    // This gives the widget exactly 5 second visibility + 500ms exit animation timeframe.
+                    setTimeout(() => {
+                        console.log("[CHARGING_HOOK] 5.5 second timeout elapsed. Calling stopSimulation()");
+                        stopSimulation();
+                    }, 5500);
+
+                    return {
+                        ...prev,
+                        isActive: true, // Keep it active to show the finishing UI
+                        hasError: false,
+                        isFinishing: true
+                    };
+                }
+
+                if (upperStatus === 'SUSPENDEDEV' || upperStatus === 'SUSPENDEDEVSE' || upperStatus === 'FAULTED') {
+                    console.log("[CHARGING_HOOK] Setting hasError due to:", upperStatus);
+                    return {
+                        ...prev,
+                        hasError: true,
+                        // Not killing active state immediately so the error modal can render
+                    };
+                }
+            }
+
             if (hasCharging && !prev.isActive) {
                 isLiveFromBackendRef.current = true;
                 return {
@@ -94,8 +136,11 @@ export const useChargingSimulation = () => {
                     startSoc: startSoc ?? prev.startSoc,
                     estTime80: null,
                     estTime100: null,
+                    hasError: false,
+                    isFinishing: false,
                 };
             }
+
             if (hasCharging) {
                 return {
                     ...prev,
@@ -109,14 +154,17 @@ export const useChargingSimulation = () => {
                     startSoc: startSoc ?? prev.startSoc,
                 };
             }
+
+            if (!hasCharging && !['SUSPENDEDEV', 'SUSPENDEDEVSE', 'FAULTED', 'FINISHING'].includes(data.status?.toUpperCase() || '')) {
+                if (timerRef.current) clearInterval(timerRef.current);
+                isLiveFromBackendRef.current = false;
+                if (prev.isActive) {
+                    return { ...prev, isActive: false, startTime: null, startedAt: null, startSoc: null, hasError: false, isFinishing: false };
+                }
+            }
+
             return prev;
         });
-
-        if (!hasCharging) {
-            if (timerRef.current) clearInterval(timerRef.current);
-            isLiveFromBackendRef.current = false;
-            setState(prev => (prev.isActive ? { ...prev, isActive: false, startTime: null, startedAt: null, startSoc: null } : prev));
-        }
     };
 
     const startSimulation = (mode: ChargingMode = 'DC') => {
@@ -139,6 +187,7 @@ export const useChargingSimulation = () => {
             startSoc: null,
             estTime80: mode !== 'AC' ? 20 : null, // Faster estimates
             estTime100: mode !== 'AC' ? 40 : null,
+            isFinishing: false,
         });
     };
 
@@ -147,7 +196,7 @@ export const useChargingSimulation = () => {
         if (timerRef.current) {
             clearInterval(timerRef.current);
         }
-        setState(prev => ({ ...prev, isActive: false, startTime: null, startedAt: null, startSoc: null }));
+        setState(prev => ({ ...prev, isActive: false, startTime: null, startedAt: null, startSoc: null, isFinishing: false }));
     };
 
     const toggleMinimize = () => {
