@@ -201,6 +201,10 @@ export default function MapScreen() {
 
   // Charging Simulation
   const charging = useChargingSimulation();
+  const chargingIsActiveRef = useRef(false);
+  useEffect(() => {
+    chargingIsActiveRef.current = charging.isActive;
+  }, [charging.isActive]);
 
   const handleStartPress = async (socketUuid: string) => {
     setTargetSocketUuid(socketUuid);
@@ -432,6 +436,19 @@ export default function MapScreen() {
               if (currentRegion.current) {
                 sendBoundingBoxUpdateDebounced(currentRegion.current);
               }
+
+              // Multi-device sync: If a socket goes into Preparing/Charging and we don't have an active session,
+              // maybe THIS user started it on another device! Reconnect WS to fetch the active session instantly.
+              const upperStatus = statusData.status?.toUpperCase();
+              if ((upperStatus === "CHARGING" || upperStatus === "PREPARING" || upperStatus === "INITIATED") && !chargingIsActiveRef.current) {
+                if (!reconnectTimeoutRef.current) {
+                  console.log("Possible external start detected! Reconnecting meter-values socket...");
+                  reconnectTimeoutRef.current = setTimeout(() => {
+                    reconnectTimeoutRef.current = null;
+                    connectMeterValuesSocket(true);
+                  }, 1500); // 1.5s debounce
+                }
+              }
             }
             // Fallthrough to generic logic below
           }
@@ -444,6 +461,19 @@ export default function MapScreen() {
           // Normalize if wrapped in "data"
           if (data.type === "socket_status" || data.type === "meter_values" || data.type === "charge_session") {
             rawData = data.data || {};
+          }
+
+          // If we receive a meter_values payload but NO active simulation, the user probably left the app open
+          // and the initial charge_session was missed. Reconnect to sync `started_at` and duration!
+          if (data.type === "meter_values" && !chargingIsActiveRef.current && (rawData.power > 0 || rawData.batteryLevel > 0)) {
+            console.log("Surprise meter_values received! Reconnecting meter-values socket to fetch true started_at.");
+            if (!reconnectTimeoutRef.current) {
+              reconnectTimeoutRef.current = setTimeout(() => {
+                reconnectTimeoutRef.current = null;
+                connectMeterValuesSocket(true);
+              }, 500);
+            }
+            return; // Skip processing this incomplete payload
           }
 
           if (data.type === "socket_status" || (rawData.status && rawData.power)) {
@@ -567,7 +597,7 @@ export default function MapScreen() {
       Alert.alert("Error", e.response?.data?.message || "Failed to stop charging session.");
     } finally {
       activeChargeSessionUuidRef.current = null;
-      charging.stopSimulation();
+      charging.updateFromMeterValues({ status: 'FINISHING' } as any);
     }
   }, [charging]);
 
@@ -1991,8 +2021,9 @@ export default function MapScreen() {
             visible={!!charging.hasError}
             onClose={() => {
               // Note: the socket will likely still be sending SUSPENDED
-              // this just hides the UI. You might want to stop simulation entirely.
-              charging.stopSimulation();
+              // We just clear the error modal. We DO NOT stop simulation here,
+              // so the background Finishing animation or session stays intact.
+              charging.clearError();
             }}
           />
 

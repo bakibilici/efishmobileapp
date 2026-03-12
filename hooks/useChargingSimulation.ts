@@ -87,8 +87,16 @@ export const useChargingSimulation = () => {
                 return prev;
             }
 
+            const upperStatus = data.status?.toUpperCase();
+
+            // If we have an error, ONLY allow the FINISHING status to pass through (to trigger the background animation)
+            if (prev.hasError && upperStatus !== 'FINISHING') {
+                console.log("[CHARGING_HOOK] Ignoring update because hasError is TRUE");
+                // The user explicitly requested the error modal to stay open until they manually close it.
+                return prev;
+            }
+
             if (data.status) {
-                const upperStatus = data.status.toUpperCase();
                 console.log("[CHARGING_HOOK] Received status:", upperStatus);
                 if (upperStatus === 'FINISHING') {
                     console.log("[CHARGING_HOOK] Status is FINISHING! Enabling timeout.");
@@ -104,7 +112,7 @@ export const useChargingSimulation = () => {
                     return {
                         ...prev,
                         isActive: true, // Keep it active to show the finishing UI
-                        hasError: false,
+                        hasError: prev.hasError, // <--- Preserve the error state so the modal STAYS open!
                         isFinishing: true
                     };
                 }
@@ -188,6 +196,7 @@ export const useChargingSimulation = () => {
             estTime80: mode !== 'AC' ? 20 : null, // Faster estimates
             estTime100: mode !== 'AC' ? 40 : null,
             isFinishing: false,
+            hasError: false,
         });
     };
 
@@ -196,7 +205,12 @@ export const useChargingSimulation = () => {
         if (timerRef.current) {
             clearInterval(timerRef.current);
         }
+        // Do not reset hasError so error modal persists until specifically dismissed
         setState(prev => ({ ...prev, isActive: false, startTime: null, startedAt: null, startSoc: null, isFinishing: false }));
+    };
+
+    const clearError = () => {
+        setState(prev => ({ ...prev, hasError: false }));
     };
 
     const toggleMinimize = () => {
@@ -296,5 +310,6 @@ export const useChargingSimulation = () => {
         setMinimized,
         setMode,
         updateFromMeterValues,
+        clearError,
     };
 };
