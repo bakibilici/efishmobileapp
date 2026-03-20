@@ -12,16 +12,18 @@ export default ({ config }) => ({
     "infoPlist": {
       ITSAppUsesNonExemptEncryption: false,
       NSMicrophoneUsageDescription: "Ses kaydı için mikrofon erişimi gerekiyor.",
-      NSSpeechRecognitionUsageDescription: "Konuşmayı yazıya çevirmek için izin gerekiyor."
+      NSSpeechRecognitionUsageDescription: "Konuşmayı yazıya çevirmek için izin gerekiyor.",
+      NSPhotoLibraryUsageDescription: "Profil fotoğrafı ve araç fotoğrafı ekleyebilmeniz için galeriye erişim izni gereklidir.",
+      NSCameraUsageDescription: "Profil fotoğrafı ve araç fotoğrafı çekebilmeniz için kameraya erişim izni gereklidir."
     },
     supportsTablet: true,
-    bundleIdentifier: "com.efish.app",
+    bundleIdentifier: "com.efishmobile.app",
     config: {
       googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY,
     },
   },
   android: {
-    package: "com.efish.app",
+    package: "com.efishmobile.app",
     adaptiveIcon: {
       backgroundColor: "#E6F4FE",
       foregroundImage: "./assets/images/android-icon-foreground.png",
