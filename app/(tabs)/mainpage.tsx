@@ -56,6 +56,9 @@ import MapView, { Marker, PROVIDER_GOOGLE, Region } from "react-native-maps";
 import { Station, StationType } from "@/constants/stations";
 import { Colors } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
+import { useHeaderAutoCollapse } from "@/hooks/useHeaderAutoCollapse";
+import { useActivityState } from "@/hooks/useActivityState";
+import { ActivityContextBar } from "@/components/ActivityContextBar";
 import Voice from '@react-native-voice/voice';
 import { Flash, Microphone2, Notification, Setting4 } from "iconsax-react-native";
 
@@ -165,6 +168,8 @@ const MapPinMarker = React.memo(({ station, isSelected, onPress }: {
     </Marker>
   );
 });
+
+MapPinMarker.displayName = 'MapPinMarker';
 
 
 export default function MapScreen() {
@@ -699,6 +704,20 @@ export default function MapScreen() {
 
   const { colors, themeScheme } = useTheme();
   const isDark = themeScheme === 'dark';
+  const activityState = useActivityState();
+  const { headerMode, reportInteraction, forceExpand } = useHeaderAutoCollapse(activityState);
+  const isHeaderExpanded = headerMode === 'FULL';
+  
+  const headerExpandAnim = useRef(new Animated.Value(isHeaderExpanded ? 1 : 0)).current;
+
+  useEffect(() => {
+    Animated.spring(headerExpandAnim, {
+      toValue: isHeaderExpanded ? 1 : 0,
+      useNativeDriver: false,
+      speed: 16,
+      bounciness: 4,
+    }).start();
+  }, [isHeaderExpanded]);
 
   const [isFiltersVisible, setIsFiltersVisible] = useState(false);
   const filterDrawerAnim = useRef(new Animated.Value(0)).current;
@@ -1182,7 +1201,18 @@ export default function MapScreen() {
         <View style={styles.container}>
           <MapView
             ref={mapRef}
-            onPress={() => Keyboard.dismiss()}
+            onPanDrag={() => {
+              Keyboard.dismiss();
+              reportInteraction();
+            }}
+            onPress={() => {
+              Keyboard.dismiss();
+              if (headerMode === 'COMPACT') {
+                forceExpand();
+              } else {
+                reportInteraction(false);
+              }
+            }}
             provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined}
             style={StyleSheet.absoluteFillObject}
             initialRegion={initialRegion}
@@ -1312,10 +1342,20 @@ export default function MapScreen() {
               elevation: 8,
               zIndex: 10,
               transform: [{ translateY: headerAnim }],
-              overflow: 'hidden' // FIX: Ensure child content (chips) doesn't overflow rounded corners
+              // overflow: 'hidden' // Removed to allow step chip to overflow at bottom-right
             }}>
-              {/* Row 1: Search & Bell/Login */}
-              <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, marginBottom: 12, alignItems: 'center' }}>
+              
+              <Animated.View style={{ 
+                overflow: 'hidden', 
+                opacity: headerExpandAnim,
+                maxHeight: headerExpandAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 300] // More than enough to fit the search and filters
+                })
+              }}>
+                <View style={{ paddingBottom: 4 }}>
+                  {/* Row 1: Search & Bell/Login */}
+                  <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, marginBottom: 12, alignItems: 'center' }}>
                 <View style={{
                   flex: 1,
                   height: 48, // Slightly taller
@@ -1379,6 +1419,7 @@ export default function MapScreen() {
                     variant={isFiltersVisible ? "Bold" : "Outline"}
                   />
                 </Pressable>
+
                 {user ? (
                   <Pressable style={{
                     width: 48, // Match height
@@ -1529,8 +1570,13 @@ export default function MapScreen() {
                   ))}
                 </View>
               </Animated.View>
-
+              </View>
+              </Animated.View>
+              
+              <ActivityContextBar mode={headerMode} onPress={forceExpand} />
+              
             </Animated.View>
+            
 
           </View>
 

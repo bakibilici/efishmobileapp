@@ -15,6 +15,13 @@ import {
   TouchableWithoutFeedback,
   View,
 } from "react-native";
+import { ActivityState, ActivityStateMachine } from "@/services/ActivityStateMachine";
+import { CarModeModal } from "@/components/CarModeModal";
+
+// A global instance for demonstration purposes only!
+// Note: We set debounceMs to 0 here so the button triggers instantly.
+// Otherwise, the FSM would wait 5 seconds to ensure you're actually in a car!
+const demoFsm = new ActivityStateMachine({ debounceMs: 0 });
 
 export default function ProfileScreen() {
   const router = useRouter();
@@ -174,7 +181,29 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        {/* Settings Groups */}
+        <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
+          Developer Tools
+        </Text>
+        <View style={[styles.group, { backgroundColor: colors.card }]}>
+          <SettingsItem
+            icon="speedometer-outline"
+            title="Simulate Car Drive"
+            subtitle="Triggers FSM Navigation Modal"
+            color="#f43f5e"
+            isFirst
+            isLast
+            onPress={() => {
+              // Force reset to IDLE first, then transition to CAR.
+              // Without this, pressing the button while already in CAR
+              // would be ignored by the FSM (no duplicate state changes).
+              demoFsm.transition('IDLE', false);
+              demoFsm.transition('CAR', false);
+              setTimeout(() => demoFsm.transition(ActivityState.IDLE, false), 3000);
+            }}
+            colors={colors}
+          />
+        </View>
+
         {/* Settings Groups */}
         {user && (
           <>
@@ -293,6 +322,9 @@ export default function ProfileScreen() {
           efish v1.0.0 (Build 124)
         </Text>
       </ScrollView>
+
+      {/* Render the modal at the root of this screen for demonstration */}
+      <CarModeModal fsm={demoFsm} />
     </SafeAreaView>
   );
 }

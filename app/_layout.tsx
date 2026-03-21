@@ -13,6 +13,7 @@ import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
 import {
   Animated,
+  AppState,
   PanResponder,
   Pressable,
   StyleSheet,
@@ -23,12 +24,15 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { startNetworkLogging } from "react-native-network-logger";
 import "react-native-reanimated";
 
+import { DailyStepStore } from "@/services/sensors/DailyStepStore";
+
 import {
   ThemeProvider as AppThemeProvider,
   useTheme,
 } from "@/context/ThemeContext";
 import { UserProvider, useUser } from "@/context/UserContext";
 import { PaymentProvider } from "@/context/payment/PaymentContext";
+import { ActivityService } from "@/services/ActivityService";
 import * as Sentry from "@sentry/react-native";
 
 Sentry.init({
@@ -114,6 +118,11 @@ export default Sentry.wrap(function RootLayout() {
     if (__DEV__) {
       startNetworkLogging();
     }
+
+    // Boot the sensor pipeline (steps, activity detection)
+    DailyStepStore.bindAppState(AppState);
+    ActivityService.start();
+    return () => ActivityService.stop();
   }, []);
 
   return (
@@ -208,6 +217,10 @@ function RootLayoutNav() {
           <Stack.Screen
             name="qr-scanner"
             options={{ presentation: "modal", headerShown: false }}
+          />
+          <Stack.Screen
+            name="route-plan"
+            options={{ headerShown: false }}
           />
         </Stack>
         <StatusBar style={themeScheme === "dark" ? "light" : "dark"} />

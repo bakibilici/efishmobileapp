@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ChargingSessionStore } from '../services/ChargingSessionStore';
 
 export type ChargingMode = 'AC' | 'DC' | 'HPC';
 
@@ -300,6 +301,10 @@ export const useChargingSimulation = () => {
         return () => {
             if (timerRef.current) clearInterval(timerRef.current);
         };
+    }, [state.isActive]);
+
+    useEffect(() => {
+        ChargingSessionStore.setChargingState(state.isActive);
     }, [state.isActive]);
 
     return {

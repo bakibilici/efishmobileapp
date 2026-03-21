@@ -37,7 +37,7 @@ export const CreditCard = ({
 
     useEffect(() => {
         rotate.value = withSpring(flipped ? 180 : 0, { damping: 20, stiffness: 90 });
-    }, [flipped]);
+    }, [flipped, rotate]);
 
     const frontAnimatedStyle = useAnimatedStyle(() => {
         const rotateValue = interpolate(rotate.value, [0, 180], [0, 180]);
