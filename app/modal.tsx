@@ -1,13 +1,20 @@
-import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from "@expo/vector-icons";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import {
+  Linking,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 
 type Params = { name?: string; lat?: string; lng?: string };
 
 const appColors = {
-  apple: '#000000',
-  google: '#4285F4',
-  yandex: '#FC3F1D',
+  apple: "#000000",
+  google: "#4285F4",
+  yandex: "#FC3F1D",
 };
 
 export default function NavigationModal() {
@@ -21,12 +28,12 @@ export default function NavigationModal() {
     if (supported) {
       Linking.openURL(url);
     } else {
-      console.warn('Cannot open maps URL', url);
+      console.warn("Cannot open maps URL", url);
     }
   };
 
   const openAppleMaps = () => {
-    const url = `http://maps.apple.com/?daddr=${latitude},${longitude}&q=${encodeURIComponent(name || 'efish station')}`;
+    const url = `http://maps.apple.com/?daddr=${latitude},${longitude}&q=${encodeURIComponent(name || "efish station")}`;
     openUrl(url);
   };
 
@@ -47,10 +54,10 @@ export default function NavigationModal() {
       <View style={styles.sheet}>
         <View style={styles.handle} />
         <Text style={styles.title}>Navigate with</Text>
-        <Text style={styles.subtitle}>{name || 'Selected Station'}</Text>
+        <Text style={styles.subtitle}>{name || "Selected Station"}</Text>
 
         <View style={styles.appsGrid}>
-          {Platform.OS === 'ios' && (
+          {Platform.OS === "ios" && (
             <AppIcon
               label="Apple Maps"
               icon="logo-apple"
@@ -88,13 +95,13 @@ function AppIcon({
   icon,
   color,
   onPress,
-  library
+  library,
 }: {
   label: string;
   icon: any;
   color: string;
   onPress: () => void;
-  library?: string
+  library?: string;
 }) {
   return (
     <Pressable style={styles.appItem} onPress={onPress}>
@@ -109,8 +116,8 @@ function AppIcon({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'transparent', // User requested removing the dark overlay
+    justifyContent: "flex-end",
+    backgroundColor: "transparent", // User requested removing the dark overlay
     zIndex: 9999,
     elevation: 9999,
   },
@@ -118,13 +125,13 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
   },
   sheet: {
-    backgroundColor: '#fff',
+    backgroundColor: "#fff",
     borderTopLeftRadius: 32,
     borderTopRightRadius: 32,
     padding: 24,
     paddingBottom: 40,
-    alignItems: 'center',
-    shadowColor: '#000',
+    alignItems: "center",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.1,
     shadowRadius: 10,
@@ -133,40 +140,40 @@ const styles = StyleSheet.create({
   handle: {
     width: 40,
     height: 4,
-    backgroundColor: '#E0E0E0',
+    backgroundColor: "#E0E0E0",
     borderRadius: 2,
     marginBottom: 24,
   },
   title: {
     fontSize: 20,
-    fontWeight: '700',
-    color: '#0f231c',
+    fontWeight: "700",
+    color: "#0f231c",
     marginBottom: 4,
   },
   subtitle: {
     fontSize: 14,
-    color: '#6e7f8d',
+    color: "#6e7f8d",
     marginBottom: 32,
-    textAlign: 'center',
+    textAlign: "center",
   },
   appsGrid: {
-    flexDirection: 'row',
-    justifyContent: 'center',
+    flexDirection: "row",
+    justifyContent: "center",
     gap: 32,
     marginBottom: 40,
-    width: '100%',
+    width: "100%",
   },
   appItem: {
-    alignItems: 'center',
+    alignItems: "center",
     gap: 12,
   },
   iconBox: {
     width: 64,
     height: 64,
     borderRadius: 18, // App icon shape (Squircle-ish)
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.15,
     shadowRadius: 8,
@@ -174,20 +181,20 @@ const styles = StyleSheet.create({
   },
   appLabel: {
     fontSize: 13,
-    fontWeight: '600',
-    color: '#0f231c',
+    fontWeight: "600",
+    color: "#0f231c",
   },
   cancelBtn: {
     paddingVertical: 16,
     paddingHorizontal: 32,
     borderRadius: 100,
-    backgroundColor: '#F5F5F5',
-    width: '100%',
-    alignItems: 'center',
+    backgroundColor: "#F5F5F5",
+    width: "100%",
+    alignItems: "center",
   },
   cancelText: {
     fontSize: 16,
-    fontWeight: '700',
-    color: '#FF3B30', // Destructive/Cancel color
+    fontWeight: "700",
+    color: "#FF3B30", // Destructive/Cancel color
   },
 });

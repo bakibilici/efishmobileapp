@@ -117,7 +117,7 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
 
         return {
           icon: "walk",
-          color: colors.tertiary,
+          color: isDark ? colors.tertiary : "#00875A", // Darker green in light mode for contrast
           bgColor: isDark
             ? "rgba(124, 251, 199, 0.15)"
             : "rgba(124, 251, 199, 0.1)",

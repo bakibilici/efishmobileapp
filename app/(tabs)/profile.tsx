@@ -319,7 +319,7 @@ export default function ProfileScreen() {
         )}
 
         <Text style={[styles.version, { color: colors.textTertiary }]}>
-          efish v1.0.0 (Build 124)
+          TUBITAK App v1.0.0 (Build 124)
         </Text>
       </ScrollView>
 

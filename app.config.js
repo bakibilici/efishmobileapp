@@ -1,29 +1,33 @@
 export default ({ config }) => ({
   ...config,
-  name: "efish",
-  slug: "efish",
+  name: "Tubitak App Demo",
+  slug: "tubitak-app",
   version: "1.0.0",
   orientation: "portrait",
-  icon: "./assets/images/efishjuste.png",
-  scheme: "efish",
+  icon: "./assets/images/app_homepage_icon.png",
+  scheme: "tubitak",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
   ios: {
-    "infoPlist": {
+    infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
-      NSMicrophoneUsageDescription: "Ses kaydı için mikrofon erişimi gerekiyor.",
-      NSSpeechRecognitionUsageDescription: "Konuşmayı yazıya çevirmek için izin gerekiyor.",
-      NSPhotoLibraryUsageDescription: "Profil fotoğrafı ve araç fotoğrafı ekleyebilmeniz için galeriye erişim izni gereklidir.",
-      NSCameraUsageDescription: "Profil fotoğrafı ve araç fotoğrafı çekebilmeniz için kameraya erişim izni gereklidir."
+      NSMicrophoneUsageDescription:
+        "Ses kaydı için mikrofon erişimi gerekiyor.",
+      NSSpeechRecognitionUsageDescription:
+        "Konuşmayı yazıya çevirmek için izin gerekiyor.",
+      NSPhotoLibraryUsageDescription:
+        "Profil fotoğrafı ve araç fotoğrafı ekleyebilmeniz için galeriye erişim izni gereklidir.",
+      NSCameraUsageDescription:
+        "Profil fotoğrafı ve araç fotoğrafı çekebilmeniz için kameraya erişim izni gereklidir.",
     },
     supportsTablet: true,
-    bundleIdentifier: "com.efishmobile.app",
+    bundleIdentifier: "com.tubitak.app",
     config: {
       googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY,
     },
   },
   android: {
-    package: "com.efishmobile.app",
+    package: "com.tubitak.app",
     adaptiveIcon: {
       backgroundColor: "#E6F4FE",
       foregroundImage: "./assets/images/android-icon-foreground.png",
@@ -39,8 +43,8 @@ export default ({ config }) => ({
     predictiveBackGestureEnabled: false,
     permissions: [
       "android.permission.RECORD_AUDIO",
-      "android.permission.INTERNET"
-    ]
+      "android.permission.INTERNET",
+    ],
   },
   web: {
     output: "static",
@@ -65,7 +69,7 @@ export default ({ config }) => ({
       {
         url: "https://sentry.io/",
         note: "Use environment variables for these in CI/CD if possible",
-        project: "efish-mobile",
+        project: "tubitak-mobile",
         organization: "uptecra-teknoloji-anonim-sirke",
       },
     ],
@@ -78,7 +82,7 @@ export default ({ config }) => ({
         android: {
           enableJetifier: true,
         },
-      }
+      },
     ],
     "./withAndroidSupportExclude.js",
   ],

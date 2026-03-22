@@ -4,13 +4,11 @@ import { useUser } from "@/context/UserContext";
 import { sendOtp, setAuthToken, verifyOtp } from "@/services/api";
 import { saveTokens } from "@/services/tokenStorage";
 import { Ionicons } from "@expo/vector-icons";
-import * as Sentry from "@sentry/react-native";
 import { usePathname, useRouter } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
-  Button,
   Image,
   KeyboardAvoidingView,
   LayoutAnimation,
@@ -269,7 +267,7 @@ export default function LoginScreen() {
                 </Text>
               </View>
               <Image
-                source={require("@/assets/images/efishlogo.png")}
+                source={require("@/assets/images/app_logo.png")}
                 style={[styles.logo]}
                 resizeMode="contain"
               />
@@ -587,26 +585,7 @@ export default function LoginScreen() {
             </View>
 
             {/* Footer */}
-            <View style={styles.footer}>
-              {__DEV__ && (
-                <View style={{ marginTop: 20 }}>
-                  <Button
-                    title="Try Sentry Error!"
-                    onPress={() => {
-                      Sentry.captureException(new Error("First error"));
-                    }}
-                    color={colors.primary}
-                  />
-                  <Button
-                    title="Give Feedback"
-                    onPress={() => {
-                      Sentry.showFeedbackWidget();
-                    }}
-                    color={colors.primary}
-                  />
-                </View>
-              )}
-            </View>
+            <View style={styles.footer}></View>
           </Animated.View>
         </KeyboardAvoidingView>
       </ScrollView>

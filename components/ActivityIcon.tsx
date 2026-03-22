@@ -2,7 +2,6 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import LottieView from "lottie-react-native";
 import React, { forwardRef, memo, useImperativeHandle, useRef } from "react";
 import { View } from "react-native";
-import { useTheme } from "../context/ThemeContext";
 import { ActivityState } from "../services/ActivityStateMachine";
 
 export interface ActivityIconHandle {
@@ -33,7 +32,7 @@ const ActivityAnimations = {
 const ActivityIcon = forwardRef<ActivityIconHandle, Props>(
   ({ state, size = 24, color = "#000", movementSpeed = 0 }, ref) => {
     const lottieRef = useRef<LottieView>(null);
-    const { colors, themeScheme } = useTheme();
+
 
     useImperativeHandle(ref, () => ({
       play: () => lottieRef.current?.play(),
@@ -70,43 +69,34 @@ const ActivityIcon = forwardRef<ActivityIconHandle, Props>(
         fallbackIcon = "help-circle";
     }
 
-    // Determine color filters for dark mode accent color
+    // Determine color filters (always override to ensure theme consistency)
     const colorFilters = React.useMemo(() => {
-      if (themeScheme !== "dark") return [];
-
+      // For Car navigation icon
       if (state === ActivityState.CAR) {
         return [
           {
             keypath: "Capa 1/ coche Outlines.Group 1.Fill 1",
-            color: colors.primary,
+            color,
           },
           {
             keypath: "Capa 3/ coche Outlines.Group 1.Fill 1",
-            color: colors.primary,
+            color,
           },
         ];
       }
 
-      const isWalkingOrRunning =
-        state === ActivityState.WALKING || state === ActivityState.RUNNING;
-
-      if (isWalkingOrRunning) {
+      // For Walking or Running icons
+      if (state === ActivityState.WALKING || state === ActivityState.RUNNING) {
         return [
-          "Union 1",
-          "Union 2",
-          "Union 3",
-          "Union 4",
-          "Union 5",
-          "Union 6",
-          "Union 7",
-        ].map((name) => ({
-          keypath: `${name}.${name}.Fill 1`,
-          color: colors.tertiary,
-        }));
+          {
+            keypath: "**.Fill 1",
+            color,
+          },
+        ];
       }
 
       return [];
-    }, [themeScheme, state, colors.primary, colors.tertiary]);
+    }, [state, color]);
 
     if (!lottieSource) {
       return <Ionicons name={fallbackIcon as any} size={size} color={color} />;
