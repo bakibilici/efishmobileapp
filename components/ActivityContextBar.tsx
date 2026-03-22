@@ -90,6 +90,22 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
           label: "Driving",
           data: `${dSpeedText} km/h`,
         };
+      case ActivityState.RUNNING: {
+        const displaySpeed = Math.round(speed * 10) / 10;
+        return {
+          icon: "walk",
+          color: colors.primary,
+          bgColor: isDark
+            ? "rgba(0, 147, 201, 0.15)"
+            : "rgba(0, 147, 201, 0.1)",
+          borderColor: isDark
+            ? "rgba(0, 147, 201, 0.3)"
+            : "rgba(0, 147, 201, 0.2)",
+          label: "Running",
+          speedText: `${displaySpeed} km/h • `,
+          showSteps: true,
+        };
+      }
       case ActivityState.WALKING: {
         const isUnknownSpeed = displaySpeed < 0;
         const isPaused = !isUnknownSpeed && displaySpeed < 1;
@@ -101,11 +117,13 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
 
         return {
           icon: "walk",
-          color: "#34C759", // Apple Green
-          bgColor: isDark ? "rgba(52, 199, 89, 0.15)" : "rgba(52, 199, 89, 0.1)",
+          color: colors.tertiary,
+          bgColor: isDark
+            ? "rgba(124, 251, 199, 0.15)"
+            : "rgba(124, 251, 199, 0.1)",
           borderColor: isDark
-            ? "rgba(52, 199, 89, 0.3)"
-            : "rgba(52, 199, 89, 0.2)",
+            ? "rgba(124, 251, 199, 0.3)"
+            : "rgba(124, 251, 199, 0.2)",
           label: primaryString,
           speedText,
         };
@@ -147,13 +165,13 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
       default:
         return {
           icon: "moon",
-          color: "#8E8E93", // Apple Gray
+          color: colors.neutral,
           bgColor: isDark
-            ? "rgba(142, 142, 147, 0.15)"
-            : "rgba(142, 142, 147, 0.1)",
+            ? "rgba(88, 122, 153, 0.15)"
+            : "rgba(88, 122, 153, 0.1)",
           borderColor: isDark
-            ? "rgba(142, 142, 147, 0.3)"
-            : "rgba(142, 142, 147, 0.2)",
+            ? "rgba(88, 122, 153, 0.3)"
+            : "rgba(88, 122, 153, 0.2)",
           label: "Idle",
           data: null,
         };
@@ -179,8 +197,9 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
           <View style={styles.leftContent}>
             <ActivityIcon
               state={activityState}
-              size={20}
+              size={24}
               color={config.color}
+              movementSpeed={speed}
             />
             {mode !== "MINIMAL" &&
               (Platform.OS === "ios" ? (
@@ -208,6 +227,7 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
           {/* Only show the right pill if there is actually data (steps, speed, or boosting info) */}
           {(config.speedText ||
             activityState === ActivityState.WALKING ||
+            activityState === ActivityState.RUNNING ||
             (config as any).showSteps ||
             config.data) && (
             <View
@@ -227,6 +247,7 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
                   </Text>
                 ) : null}
                 {activityState === ActivityState.WALKING ||
+                activityState === ActivityState.RUNNING ||
                 (config as any).showSteps ? (
                   <View style={styles.stepsWrapper}>
                     <RollingNumber

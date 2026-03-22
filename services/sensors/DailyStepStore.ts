@@ -1,7 +1,5 @@
-import {
-  openDatabaseAsync,
-  type SQLiteDatabase as ExpoSQLiteDatabase,
-} from "expo-sqlite";
+import type { SQLiteDatabase as ExpoSQLiteDatabase } from "expo-sqlite";
+import { ActivityState } from "../ActivityStateMachine";
 
 const isSimulation = () =>
   process.env.IS_SIMULATION === "true" ||
@@ -13,6 +11,7 @@ export interface DailyStepData {
   totalSteps: number;
   rawSteps: number;
   walkingSteps: number;
+  runningSteps: number;
   chargingSteps: number;
   lastUpdatedAt: number;
 }
@@ -47,6 +46,7 @@ class DailyStepStoreImpl {
         totalSteps: 0,
         rawSteps: 0,
         walkingSteps: 0,
+        runningSteps: 0,
         chargingSteps: 0,
         lastUpdatedAt: Date.now(),
       };
@@ -55,9 +55,7 @@ class DailyStepStoreImpl {
     }
 
     try {
-      // Use dynamic import to satisfy linter and hide it from static analysis (esbuild/tsx)
-      // which fails to transform react-native dependencies in Node environments.
-
+      const { openDatabaseAsync } = await import("expo-sqlite");
       const db = await openDatabaseAsync("steps.db");
       this.db = db;
 
@@ -82,6 +80,16 @@ class DailyStepStoreImpl {
         console.log("[DailyStepStore] Migration: Added rawSteps column");
       } catch {
         // Column likely exists already, that's fine
+      }
+
+      // 1b. Migration: Ensure runningSteps exists
+      try {
+        await db.execAsync(
+          "ALTER TABLE daily_steps ADD COLUMN runningSteps INTEGER DEFAULT 0;",
+        );
+        console.log("[DailyStepStore] Migration: Added runningSteps column");
+      } catch {
+        // Column likely exists already
       }
 
       // 2. Load today's data
@@ -117,6 +125,7 @@ class DailyStepStoreImpl {
           totalSteps: 0,
           rawSteps: 0,
           walkingSteps: 0,
+          runningSteps: 0,
           chargingSteps: 0,
           lastUpdatedAt: Date.now(),
         };
@@ -132,7 +141,7 @@ class DailyStepStoreImpl {
     return this.currentData;
   }
 
-  public async incrementSteps(count: number, isCharging: boolean) {
+  public async incrementSteps(count: number, isCharging: boolean, activityState?: ActivityState) {
     if (!this.isInitialized) await this.waitForInit();
     if (!this.currentData) return;
 
@@ -149,13 +158,17 @@ class DailyStepStoreImpl {
     // Requirement says: "walkingSteps", "chargingSteps".
     if (isCharging) {
       this.currentData.chargingSteps += count * 2;
+    } else if (activityState === ActivityState.RUNNING) {
+      this.currentData.runningSteps += count;
     } else {
       this.currentData.walkingSteps += count;
     }
 
     this.currentData.rawSteps += count;
     this.currentData.totalSteps =
-      this.currentData.walkingSteps + this.currentData.chargingSteps;
+      this.currentData.walkingSteps +
+      this.currentData.runningSteps +
+      this.currentData.chargingSteps;
     this.currentData.lastUpdatedAt = Date.now();
 
     this.scheduleSave();
@@ -178,19 +191,21 @@ class DailyStepStoreImpl {
       totalSteps,
       rawSteps,
       walkingSteps,
+      runningSteps,
       chargingSteps,
       lastUpdatedAt,
     } = this.currentData;
 
     try {
       await this.db.runAsync(
-        `INSERT OR REPLACE INTO daily_steps (date, totalSteps, rawSteps, walkingSteps, chargingSteps, lastUpdatedAt)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT OR REPLACE INTO daily_steps (date, totalSteps, rawSteps, walkingSteps, runningSteps, chargingSteps, lastUpdatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           date,
           totalSteps,
           rawSteps,
           walkingSteps,
+          runningSteps,
           chargingSteps,
           lastUpdatedAt,
         ],
@@ -222,6 +237,7 @@ class DailyStepStoreImpl {
       totalSteps: 0,
       rawSteps: 0,
       walkingSteps: 0,
+      runningSteps: 0,
       chargingSteps: 0,
       lastUpdatedAt: Date.now(),
     };

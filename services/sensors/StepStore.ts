@@ -8,6 +8,7 @@
 
 import { calculateEffectiveSteps } from './StepCalculator';
 import { DailyStepStore } from './DailyStepStore';
+import { ActivityState } from '../ActivityStateMachine';
 
 export interface StepSnapshot {
   /** Raw steps from hardware sensors */
@@ -58,7 +59,7 @@ class StepStoreImpl {
   }
 
   /** Called by the pipeline whenever new sensor data arrives */
-  public async addSteps(steps: number, isCharging: boolean): Promise<void> {
+  public async addSteps(steps: number, isCharging: boolean, activityState?: ActivityState): Promise<void> {
     if (steps <= 0) return;
 
     if (!this.isHydrated) {
@@ -75,7 +76,7 @@ class StepStoreImpl {
     };
     
     // Persist to DailyStepStore
-    DailyStepStore.incrementSteps(steps, isCharging);
+    DailyStepStore.incrementSteps(steps, isCharging, activityState);
 
     this.notify();
   }

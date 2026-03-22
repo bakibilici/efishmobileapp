@@ -1,20 +1,26 @@
 import { SensorDataPayload } from './types';
 import { SensorDataBuffer } from './SensorDataBuffer';
 
-export type ActivityState = 'WALKING' | 'IDLE' | 'CAR' | 'UNKNOWN';
+export type ActivityState = 'WALKING' | 'RUNNING' | 'IDLE' | 'CAR' | 'UNKNOWN';
 
 export interface ClassifierConfig {
   /** Minimum average steps per second to be considered WALKING */
   walkingStepFreqThreshold: number;
+  /** Minimum average steps per second to be considered RUNNING */
+  runningStepFreqThreshold: number;
   /** Minimum average speed (m/s) to be considered CAR */
   carSpeedThreshold: number;
+  /** Minimum average speed (m/s) to be considered RUNNING */
+  runningSpeedThreshold: number;
   /** Maximum motion variance to be considered IDLE */
   idleMotionVarianceThreshold: number;
 }
 
 const DEFAULT_CONFIG: ClassifierConfig = {
-  walkingStepFreqThreshold: 0.5,    // at least 0.5 steps per second
-  carSpeedThreshold: 4.0,           // > 14 km/h is likely a vehicle
+  walkingStepFreqThreshold: 1.2,    // ~1.2 steps/sec for slow walk
+  runningStepFreqThreshold: 2.2,    // > 2.2 steps/sec implies running
+  carSpeedThreshold: 4.17,          // > 15 km/h is definitely a vehicle (4.17 m/s)
+  runningSpeedThreshold: 1.67,       // > 6 km/h start to consider running (1.67 m/s)
   idleMotionVarianceThreshold: 0.1, // very low motion variance implies zero device movement
 };
 
@@ -55,18 +61,24 @@ export function classifyActivity(
   const avgMotionVariance = totalMotionVariance / count;
 
   // RULE 1: CAR
-  // If moving relatively fast, it supersedes other low-level movements like step noise while on a bus
+  // If moving relatively fast, it supersedes other low-level movements
   if (avgSpeed > config.carSpeedThreshold) {
     return 'CAR';
   }
 
-  // RULE 2: WALKING
+  // RULE 2: RUNNING
+  // High step frequency AND moderate speed
+  if (stepFrequency >= config.runningStepFreqThreshold && avgSpeed >= config.runningSpeedThreshold) {
+    return 'RUNNING';
+  }
+
+  // RULE 3: WALKING
   // Sufficient step frequency
   if (stepFrequency >= config.walkingStepFreqThreshold) {
     return 'WALKING';
   }
 
-  // RULE 3: IDLE
+  // RULE 4: IDLE
   // Low speed, no steps, and low physical device variance (device is stable)
   if (avgSpeed < 0.5 && stepFrequency === 0 && avgMotionVariance < config.idleMotionVarianceThreshold) {
     return 'IDLE';

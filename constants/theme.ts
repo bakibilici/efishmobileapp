@@ -5,32 +5,33 @@
 
 import { Platform } from "react-native";
 
-const brandGreen = "#2CDD9D";
-const tintColorLight = brandGreen;
-const tintColorDark = brandGreen;
-
-const navy = "#0f2f4f";
-const navyDark = "#E6FFF5";
+export const brandBlue = "#0093C9"; // Primary
+export const brandNavy = "#002331"; // Secondary
+export const brandMint = "#7CFBC7"; // Tertiary
+export const brandSlate = "#587A99"; // Neutral
 
 export const Colors = {
   light: {
-    text: "#0f2f4f",
-    textSecondary: "#64748b",
+    text: brandNavy,
+    textSecondary: brandSlate,
     textTertiary: "#94a3b8",
     background: "#ffffff",
     backgroundSecondary: "#f8fafc",
     card: "#ffffff",
     cardBorder: "#f1f5f9",
     border: "#e2e8f0",
-    primary: brandGreen,
+    primary: brandBlue,
+    secondary: brandNavy,
+    tertiary: brandMint,
+    neutral: brandSlate,
     primaryText: "#fff",
-    tint: tintColorLight,
-    icon: "#0F4733",
+    tint: brandBlue,
+    icon: brandNavy,
     inputBackground: "#f8f9fa",
     inputBorder: "#e9ecef",
     tabIconDefault: "#98B2A7",
-    tabIconSelected: tintColorLight,
-    shadow: navy,
+    tabIconSelected: brandBlue,
+    shadow: brandNavy,
     shadowOpacity: 0.12,
     success: "#34C759",
     warning: "#FF9500",
@@ -45,14 +46,17 @@ export const Colors = {
     card: "#121212",
     cardBorder: "#2C2C2E",
     border: "#2C2C2E",
-    primary: brandGreen,
-    primaryText: "#000000",
-    tint: tintColorDark,
+    primary: brandBlue,
+    secondary: brandNavy,
+    tertiary: brandMint,
+    neutral: brandSlate,
+    primaryText: "#ffffff",
+    tint: brandBlue,
     icon: "#6e6e6e",
     inputBackground: "#1C1C1E",
     inputBorder: "#2C2C2E",
     tabIconDefault: "#6e6e6e",
-    tabIconSelected: tintColorDark,
+    tabIconSelected: brandBlue,
     shadow: "#000",
     shadowOpacity: 0.3,
     success: "#34C759",

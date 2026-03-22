@@ -125,7 +125,7 @@ export default function TabLayout() {
                   width: 64,
                   height: 64,
                   resizeMode: "contain",
-                  tintColor: focused ? "#fff" : undefined,
+                  tintColor: focused ? "#fff" : colors.primary,
                 }}
               />
             </View>

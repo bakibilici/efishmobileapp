@@ -15,6 +15,9 @@
     "sim:car": "npx tsx services/simulation/runSimulation.ts -s car",
     "sim:charge": "npx tsx services/simulation/runSimulation.ts -s charging_walk",
     "sim:charge-idle": "npx tsx services/simulation/runSimulation.ts -s charging_idle",
+    "sim:run": "npx tsx services/simulation/runSimulation.ts -s running_slow -x 5",
+    "sim:run-fast": "npx tsx services/simulation/runSimulation.ts -s running_fast -x 5",
+    "sim:run-interval": "npx tsx services/simulation/runSimulation.ts -s running_interval -x 5",
     "sim:all": "npx tsx services/simulation/runSimulation.ts -s all"
   },
   "dependencies": {

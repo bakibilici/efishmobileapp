@@ -10,6 +10,7 @@ import {
     Text,
     View,
 } from "react-native";
+import { useTheme } from "@/context/ThemeContext";
 
 interface Device {
     id: string;
@@ -43,6 +44,7 @@ const MOCK_DEVICES: Device[] = [
 ];
 
 export default function DevicesScreen() {
+    const { colors } = useTheme();
     const router = useRouter();
     const [devices] = useState<Device[]>(MOCK_DEVICES);
 
@@ -63,7 +65,7 @@ export default function DevicesScreen() {
                     </Text>
                     {item.isCurrentSession && (
                         <View style={styles.currentBadge}>
-                            <Text style={styles.currentBadgeText}>Current Session</Text>
+                            <Text style={[styles.currentBadgeText, { color: colors.primary }]}>Current</Text>
                         </View>
                     )}
                 </View>
@@ -71,7 +73,7 @@ export default function DevicesScreen() {
                 <Text style={styles.deviceId}>ID: {item.deviceId}</Text>
 
                 <View style={styles.metaRow}>
-                    <Ionicons name="time-outline" size={12} color="#8E8E93" />
+                    <Ionicons name="time-outline" size={12} color="#587A99" />
                     <Text style={styles.deviceDate}>Last login: {item.loginDate}</Text>
                 </View>
             </View>
@@ -171,11 +173,10 @@ const styles = StyleSheet.create({
     currentBadgeText: {
         fontSize: 10,
         fontWeight: "700",
-        color: "#2cdb9b",
     },
     deviceId: {
         fontSize: 12,
-        color: "#8E8E93",
+        color: "#587A99",
         fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
         marginBottom: 4,
     },
@@ -186,7 +187,7 @@ const styles = StyleSheet.create({
     },
     deviceDate: {
         fontSize: 12,
-        color: "#8E8E93",
+        color: "#587A99",
     },
     removeButton: {
         padding: 8,

@@ -4,6 +4,7 @@ export enum ActivityState {
   IDLE = "IDLE",
   WALKING = "WALKING",
   CAR = "CAR",
+  RUNNING = "RUNNING",
   CHARGING = "CHARGING",
   UNKNOWN = "UNKNOWN",
 }
@@ -74,6 +75,9 @@ export class ActivityStateMachine {
       switch (classifiedActivity) {
         case "WALKING":
           targetState = ActivityState.WALKING;
+          break;
+        case "RUNNING":
+          targetState = ActivityState.RUNNING;
           break;
         case "CAR":
           targetState = ActivityState.CAR;

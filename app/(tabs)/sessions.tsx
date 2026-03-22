@@ -235,7 +235,7 @@ export default function SessionsScreen() {
               <View style={styles.statsLeft}>
                 <View style={styles.stat}>
                   <View style={[styles.statIcon, { backgroundColor: isDark ? "#1C1C1E" : "#E8F9F1" }]}>
-                    <Ionicons name="flash" size={14} color="#2cdb9b" />
+                    <Ionicons name="flash" size={14} color="#0093C9" />
                   </View>
                   <Text style={[styles.statValue, { color: colors.text }]}>{item.energy}</Text>
                 </View>
@@ -259,7 +259,7 @@ export default function SessionsScreen() {
     if (!loading) return null;
     return (
       <View style={styles.footer}>
-        <ActivityIndicator size="small" color="#2cdb9b" />
+        <ActivityIndicator size="small" color="#0093C9" />
       </View>
     );
   }, [loading]);
@@ -290,7 +290,7 @@ export default function SessionsScreen() {
                 )}
               </View>
               <Animated.View style={{ transform: [{ rotate: chevronRotation }] }}>
-                <Ionicons name="chevron-down" size={20} color="#8E8E93" />
+                <Ionicons name="chevron-down" size={20} color="#587A99" />
               </Animated.View>
             </Pressable>
 
@@ -418,7 +418,7 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 15,
-    color: "#8E8E93",
+    color: "#587A99",
     marginTop: 2,
   },
   list: {
@@ -457,7 +457,7 @@ const styles = StyleSheet.create({
     color: "#0f231c",
   },
   filterBadge: {
-    backgroundColor: "#2cdb9b",
+    backgroundColor: "#0093C9",
     borderRadius: 10,
     paddingHorizontal: 8,
     paddingVertical: 2,
@@ -549,7 +549,7 @@ const styles = StyleSheet.create({
   },
   metaText: {
     fontSize: 12,
-    color: "#8E8E93",
+    color: "#587A99",
   },
   metaDot: {
     color: "#C7C7CC",
@@ -601,7 +601,7 @@ const styles = StyleSheet.create({
   cost: {
     fontSize: 20,
     fontWeight: "800",
-    color: "#2cdb9b",
+    color: "#0093C9",
   },
   footer: {
     paddingVertical: 20,
@@ -615,7 +615,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 16,
-    color: "#8E8E93",
+    color: "#587A99",
   },
 });
 

@@ -115,6 +115,39 @@ const chargingIdleScenario: Scenario = {
   ),
 };
 
+const runningSlowScenario: Scenario = {
+  name: 'running_slow',
+  description: 'Slow jog (~7-8 km/h)',
+  ticks: [
+    ...repeat(
+      { durationMs: 1000, steps: 2, speed: 2.1, isCharging: false, motionVariance: 1.2, label: '🏃 Jogging' },
+      20,
+    ),
+  ],
+};
+
+const runningFastScenario: Scenario = {
+  name: 'running_fast',
+  description: 'Fast running (~12 km/h)',
+  ticks: [
+    ...repeat(
+      { durationMs: 1000, steps: 3, speed: 3.4, isCharging: false, motionVariance: 2.0, label: '🏃 Running Fast' },
+      20,
+    ),
+  ],
+};
+
+const runningIntervalScenario: Scenario = {
+  name: 'running_interval',
+  description: 'Interval training: Walk ↔ Run',
+  ticks: [
+    ...repeat({ durationMs: 1000, steps: 1, speed: 1.2, isCharging: false, motionVariance: 0.5, label: '🚶 Walking' }, 5),
+    ...repeat({ durationMs: 1000, steps: 3, speed: 3.5, isCharging: false, motionVariance: 2.2, label: '🏃 Running' }, 5),
+    ...repeat({ durationMs: 1000, steps: 1, speed: 1.2, isCharging: false, motionVariance: 0.5, label: '🚶 Walking' }, 5),
+    ...repeat({ durationMs: 1000, steps: 3, speed: 3.5, isCharging: false, motionVariance: 2.2, label: '🏃 Running' }, 5),
+  ],
+};
+
 // ─── Registry ────────────────────────────────────────────────────────────────
 
 export const SCENARIOS: Record<string, Scenario> = {
@@ -123,6 +156,9 @@ export const SCENARIOS: Record<string, Scenario> = {
   car: carScenario,
   charging_walk: chargingWalkScenario,
   charging_idle: chargingIdleScenario,
+  running_slow: runningSlowScenario,
+  running_fast: runningFastScenario,
+  running_interval: runningIntervalScenario,
 };
 
 export function getScenario(name: string): Scenario | undefined {

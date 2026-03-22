@@ -215,7 +215,7 @@ export default function ProfileScreen() {
                 icon="person-outline"
                 title="My Profile"
                 subtitle="Edit your information"
-                color="#2cdb9b"
+                color="#0093C9"
                 isFirst
                 colors={colors}
               />
@@ -239,7 +239,7 @@ export default function ProfileScreen() {
                 icon="card-outline"
                 title="Payment Methods"
                 subtitle="Cards and billing"
-                color="#5856D6"
+                color="#0093C9"
                 isLast
                 onPress={() => router.push("/payment-methods")}
                 colors={colors}
@@ -264,7 +264,7 @@ export default function ProfileScreen() {
             icon="globe-outline"
             title="Language"
             value="English"
-            color="#34C759"
+            color="#7CFBC7"
             colors={colors}
           />
           <AppearanceSelector
@@ -294,7 +294,7 @@ export default function ProfileScreen() {
               <SettingsItem
                 icon="shield-checkmark-outline"
                 title="Privacy"
-                color="#34C759"
+                color="#7CFBC7"
                 isFirst
                 colors={colors}
               />
@@ -358,7 +358,7 @@ function AppearanceSelector({
         ]}
       >
         <View style={styles.itemContent}>
-          <View style={[styles.iconBox, { backgroundColor: "#8E8E93" }]}>
+          <View style={[styles.iconBox, { backgroundColor: "#587A99" }]}>
             <Ionicons name="moon-outline" size={20} color="#fff" />
           </View>
           <View style={styles.itemTextContainer}>

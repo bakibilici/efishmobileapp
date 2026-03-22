@@ -18,9 +18,6 @@ import { ActivityPipeline } from "../sensors/ActivityPipeline";
 import { MockSensorProvider } from "../sensors/MockSensorProvider";
 import { StepStore } from "../sensors/StepStore";
 import { Scenario, getScenario, getScenarioNames } from "./SimulationScenarios";
-
-process.env.IS_SIMULATION = "true";
-
 process.env.IS_SIMULATION = "true";
 
 // ─── ANSI Colors ─────────────────────────────────────────────────────────────
@@ -266,7 +263,7 @@ async function runScenario(
 
   // Wire up real pipeline components
   const provider = new MockSensorProvider();
-  const fsm = new ActivityStateMachine();
+  const fsm = new ActivityStateMachine({ debounceMs: 0 });
   const pipeline = new ActivityPipeline(provider, fsm, 3); // 3s classification window
 
   // Track state transitions

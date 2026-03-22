@@ -15,11 +15,14 @@ interface Props {
   state: ActivityState;
   size?: number;
   color?: string;
+  /** Current speed in km/h to dynamically adjust animation speed */
+  movementSpeed?: number;
 }
 
 const ActivityAnimations = {
   driving: require("../assets/lotties/activity/driving_icon.json"),
   walking: require("../assets/lotties/activity/walking_icon.json"),
+  running: require("../assets/lotties/activity/running_icon.json"),
 } as const;
 
 /**
@@ -28,7 +31,7 @@ const ActivityAnimations = {
  * animation file is missing or not yet provided.
  */
 const ActivityIcon = forwardRef<ActivityIconHandle, Props>(
-  ({ state, size = 24, color = "#000" }, ref) => {
+  ({ state, size = 24, color = "#000", movementSpeed = 0 }, ref) => {
     const lottieRef = useRef<LottieView>(null);
     const { colors, themeScheme } = useTheme();
 
@@ -53,6 +56,10 @@ const ActivityIcon = forwardRef<ActivityIconHandle, Props>(
         break;
       case ActivityState.WALKING:
         lottieSource = ActivityAnimations.walking;
+        fallbackIcon = "walk";
+        break;
+      case ActivityState.RUNNING:
+        lottieSource = ActivityAnimations.running;
         fallbackIcon = "walk";
         break;
       case ActivityState.IDLE:
@@ -80,7 +87,10 @@ const ActivityIcon = forwardRef<ActivityIconHandle, Props>(
         ];
       }
 
-      if (state === ActivityState.WALKING) {
+      const isWalkingOrRunning =
+        state === ActivityState.WALKING || state === ActivityState.RUNNING;
+
+      if (isWalkingOrRunning) {
         return [
           "Union 1",
           "Union 2",
@@ -91,12 +101,12 @@ const ActivityIcon = forwardRef<ActivityIconHandle, Props>(
           "Union 7",
         ].map((name) => ({
           keypath: `${name}.${name}.Fill 1`,
-          color: colors.primary,
+          color: colors.tertiary,
         }));
       }
 
       return [];
-    }, [themeScheme, state, colors.primary]);
+    }, [themeScheme, state, colors.primary, colors.tertiary]);
 
     if (!lottieSource) {
       return <Ionicons name={fallbackIcon as any} size={size} color={color} />;
@@ -117,8 +127,27 @@ const ActivityIcon = forwardRef<ActivityIconHandle, Props>(
           autoPlay
           loop
           style={{ width: size, height: size }}
-          // Idle optimization: slower animation if it's the idle state
-          speed={state === ActivityState.IDLE ? 0.5 : 1}
+          // Dynamic speed adjustment
+          speed={(() => {
+            if (state === ActivityState.IDLE) return 0.5;
+            
+            if (state === ActivityState.RUNNING) {
+              // Base speed at 6 km/h is 0.6. Scale up to 1.6 at 18 km/h.
+              // This makes a slow jog feel "slow" and a fast run feel "intense".
+              const runSpeed = Math.max(6, movementSpeed);
+              const multiplier = 0.6 + ((runSpeed - 6) / 12);
+              return Math.min(1.8, multiplier);
+            }
+            
+            if (state === ActivityState.WALKING) {
+              // Base speed at 3 km/h is 1.0. Scale up to 1.4 at 6 km/h.
+              const walkSpeed = Math.max(3, movementSpeed);
+              const multiplier = 1 + (walkSpeed - 3) / 7.5;
+              return Math.min(1.4, multiplier);
+            }
+            
+            return 1;
+          })()}
           renderMode="SOFTWARE"
           colorFilters={colorFilters}
         />

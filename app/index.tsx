@@ -1,3 +1,4 @@
+import { brandBlue, brandNavy, brandSlate } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
 import { useUser } from "@/context/UserContext";
 import { sendOtp, setAuthToken, verifyOtp } from "@/services/api";
@@ -24,10 +25,7 @@ import {
   View,
 } from "react-native";
 
-const navy = "#0f2f4f";
-const field = "#f8f9fa";
-const border = "#e9ecef";
-const primary = "#2CDD9D";
+// Theme constants are now handled via useTheme hook inside the component
 
 const formatPhone = (value: string) => {
   const digits = value.replace(/\D/g, "").slice(0, 10);
@@ -76,7 +74,7 @@ export default function LoginScreen() {
         useNativeDriver: true,
       }),
     ]).start();
-  }, []);
+  }, [fadeAnim, slideAnim]);
 
   const pathname = usePathname(); // Add usePathname hook
 
@@ -91,13 +89,12 @@ export default function LoginScreen() {
       console.log("Login screen: User found, redirecting to mainpage");
       router.replace("/(tabs)/mainpage");
     }
-  }, [user, isUserLoading, pathname]);
+  }, [user, isUserLoading, pathname, router]);
 
   const isPhoneValid = useMemo(
     () => phone.replace(/\D/g, "").length >= 10,
     [phone],
   );
-  const isOtpValid = useMemo(() => otp.length === 6, [otp]);
 
   const showToast = (message: string) => {
     setToast({ visible: true, message });
@@ -214,10 +211,6 @@ export default function LoginScreen() {
       const msg = error.response?.data?.message || "Invalid verification code";
       showToast(msg);
     }
-  };
-
-  const handleContinueAsGuest = () => {
-    router.replace("/(tabs)/mainpage");
   };
 
   const handleBackToPhone = () => {
@@ -437,7 +430,9 @@ export default function LoginScreen() {
                       styles.primaryButton,
                       {
                         backgroundColor:
-                          themeScheme === "dark" ? colors.primary : navy,
+                          themeScheme === "dark"
+                            ? colors.primary
+                            : colors.secondary,
                       },
                       !isPhoneValid && [
                         styles.buttonDisabled,
@@ -548,7 +543,9 @@ export default function LoginScreen() {
                       styles.primaryButton,
                       {
                         backgroundColor:
-                          themeScheme === "dark" ? colors.primary : navy,
+                          themeScheme === "dark"
+                            ? colors.primary
+                            : colors.secondary,
                       },
                       (otp.length !== 6 || isLoading) && [
                         styles.buttonDisabled,
@@ -648,7 +645,7 @@ const styles = StyleSheet.create({
     right: -40,
     width: 250,
     height: 250,
-    opacity: 0.5,
+    opacity: 0.7,
     transform: [{ rotate: "180deg" }],
   },
   patternTop: {
@@ -662,7 +659,7 @@ const styles = StyleSheet.create({
     left: -40,
     width: 280,
     height: 280,
-    opacity: 0.5,
+    opacity: 0.7,
   },
   patternBottom: {
     width: "100%",
@@ -688,13 +685,13 @@ const styles = StyleSheet.create({
   langText: {
     fontSize: 12,
     fontWeight: "700",
-    color: navy,
+    color: brandNavy,
   },
   card: {
     backgroundColor: "#ffffff",
     borderRadius: 36,
     padding: 32,
-    shadowColor: navy,
+    shadowColor: brandNavy,
     shadowOffset: { width: 0, height: 16 },
     shadowOpacity: 0.12,
     shadowRadius: 32,
@@ -722,9 +719,9 @@ const styles = StyleSheet.create({
   phoneInputWrap: {
     height: 60,
     borderRadius: 20,
-    backgroundColor: field,
+    backgroundColor: "#f8f9fa",
     borderWidth: 1.5,
-    borderColor: border,
+    borderColor: "#e9ecef",
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 8,
@@ -740,7 +737,7 @@ const styles = StyleSheet.create({
   },
   countryText: {
     fontWeight: "700",
-    color: navy,
+    color: brandNavy,
     fontSize: 13,
   },
   phoneInput: {
@@ -748,7 +745,7 @@ const styles = StyleSheet.create({
     height: "100%",
     fontSize: 18,
     fontWeight: "600",
-    color: navy,
+    color: brandNavy,
     letterSpacing: 0.5,
   },
   checkboxRow: {
@@ -762,29 +759,29 @@ const styles = StyleSheet.create({
     height: 20,
     borderRadius: 6,
     borderWidth: 2,
-    borderColor: navy,
+    borderColor: brandNavy,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#fff",
   },
   checkboxChecked: {
-    backgroundColor: navy,
-    borderColor: navy,
+    backgroundColor: brandNavy,
+    borderColor: brandNavy,
   },
   checkboxText: {
-    color: navy,
+    color: brandNavy,
     fontWeight: "600",
     fontSize: 14,
   },
   primaryButton: {
     height: 60,
     borderRadius: 20,
-    backgroundColor: navy,
+    backgroundColor: brandNavy,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
-    shadowColor: navy,
+    shadowColor: brandNavy,
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.25,
     shadowRadius: 16,
@@ -830,36 +827,36 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 60,
     borderRadius: 14,
-    backgroundColor: field,
+    backgroundColor: "#f8f9fa",
     borderWidth: 1.5,
-    borderColor: border,
+    borderColor: "#e9ecef",
     alignItems: "center",
     justifyContent: "center",
   },
   otpBoxActive: {
-    borderColor: primary,
+    borderColor: brandBlue,
     backgroundColor: "#fff",
     borderWidth: 2,
-    shadowColor: primary,
+    shadowColor: brandBlue,
     shadowOpacity: 0.15,
     shadowRadius: 8,
     transform: [{ scale: 1.05 }],
   },
   otpBoxFilled: {
-    borderColor: navy,
+    borderColor: brandNavy,
     backgroundColor: "#fff",
   },
   otpText: {
     fontSize: 24,
     fontWeight: "700",
-    color: navy,
+    color: brandNavy,
   },
   textLink: {
     alignItems: "center",
     paddingVertical: 8,
   },
   textLinkContent: {
-    color: "#64748b",
+    color: brandSlate,
     fontWeight: "600",
     fontSize: 14,
   },
@@ -872,7 +869,7 @@ const styles = StyleSheet.create({
     opacity: 0.8,
   },
   guestText: {
-    color: navy,
+    color: brandNavy,
     fontSize: 15,
     fontWeight: "700",
     opacity: 0.8,

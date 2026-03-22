@@ -38,8 +38,9 @@ export class ActivityPipeline {
 
         // Push step data to the centralized store for UI consumption
         const isCharging = ChargingSessionStore.isCharging;
+        const currentState = this.stateMachine.getState();
         if (data.steps > 0) {
-          StepStore.addSteps(data.steps, isCharging);
+          StepStore.addSteps(data.steps, isCharging, currentState);
         } else {
           StepStore.setChargingState(isCharging);
         }

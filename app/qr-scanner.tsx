@@ -11,8 +11,10 @@ import {
   Text,
   View,
 } from "react-native";
+import { useTheme } from "@/context/ThemeContext";
 
 export default function QRScannerModal() {
+  const { colors } = useTheme();
   const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
@@ -96,12 +98,12 @@ export default function QRScannerModal() {
           </Pressable>
         </View>
         <View style={styles.contentContainer}>
-          <Ionicons name="camera-outline" size={80} color="#0f2f4f" />
+          <Ionicons name="camera-outline" size={80} color="#002331" />
           <Text style={styles.title}>Kamera İzni Gerekli</Text>
           <Text style={styles.subtitle}>
             QR kod taramak için kamera erişimine izin vermen gerekiyor.
           </Text>
-          <Pressable style={styles.button} onPress={requestPermission}>
+          <Pressable style={[styles.button, { backgroundColor: colors.primary }]} onPress={requestPermission}>
             <Text style={styles.buttonText}>İzin Ver</Text>
           </Pressable>
         </View>
@@ -134,7 +136,7 @@ export default function QRScannerModal() {
                   style={styles.closeTextButton}
                   onPress={handleClose}
                 >
-                  <Text style={styles.closeTextWhite}>Cancel</Text>
+                  <Text style={[styles.closeTextWhite, { color: colors.primary }]}>Cancel</Text>
                 </Pressable>
               </View>
             </View>
@@ -147,10 +149,10 @@ export default function QRScannerModal() {
           {/* Scanner Box */}
           <View style={styles.scanBox}>
             {/* Green Corners */}
-            <View style={[styles.corner, styles.topLeft]} />
-            <View style={[styles.corner, styles.topRight]} />
-            <View style={[styles.corner, styles.bottomLeft]} />
-            <View style={[styles.corner, styles.bottomRight]} />
+            <View style={[styles.corner, styles.topLeft, { borderColor: colors.primary }]} />
+            <View style={[styles.corner, styles.topRight, { borderColor: colors.primary }]} />
+            <View style={[styles.corner, styles.bottomLeft, { borderColor: colors.primary }]} />
+            <View style={[styles.corner, styles.bottomRight, { borderColor: colors.primary }]} />
           </View>
           <View style={styles.overlaySide} />
         </View>
@@ -184,7 +186,7 @@ const styles = StyleSheet.create({
     padding: 24,
     gap: 16,
   },
-  title: { fontSize: 28, fontWeight: "800", color: "#0f2f4f" },
+  title: { fontSize: 28, fontWeight: "800", color: "#002331" },
   subtitle: {
     fontSize: 16,
     color: "#3c4a5b",
@@ -196,7 +198,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 32,
     paddingVertical: 14,
     borderRadius: 14,
-    backgroundColor: "#2cdb9b",
+    backgroundColor: "#0093C9",
   },
   buttonText: { color: "#ffffff", fontWeight: "800", fontSize: 16 },
   closeTextButton: {
@@ -215,7 +217,7 @@ const styles = StyleSheet.create({
   closeTextWhite: {
     fontSize: 14,
     fontWeight: "700",
-    color: "#2cdb9b",
+    color: "#0093C9",
   },
 
   // Overlay System
@@ -225,7 +227,7 @@ const styles = StyleSheet.create({
   },
   overlayTop: {
     flex: 1,
-    backgroundColor: "rgba(44, 219, 155, 0.2)",
+    backgroundColor: "rgba(0, 147, 201, 0.2)",
   },
   overlayMiddle: {
     flexDirection: "row",
@@ -233,7 +235,7 @@ const styles = StyleSheet.create({
   },
   overlaySide: {
     flex: 1,
-    backgroundColor: "rgba(44, 219, 155, 0.2)",
+    backgroundColor: "rgba(0, 147, 201, 0.2)",
   },
   scanBox: {
     width: 260,
@@ -243,7 +245,7 @@ const styles = StyleSheet.create({
   },
   overlayBottom: {
     flex: 1,
-    backgroundColor: "rgba(44, 219, 155, 0.2)",
+    backgroundColor: "rgba(0, 147, 201, 0.2)",
     alignItems: "center",
     paddingTop: 40,
   },
@@ -253,7 +255,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     width: 32,
     height: 32,
-    borderColor: "#2cdb9b",
+    borderColor: "#0093C9",
     borderWidth: 5,
     borderRadius: 4,
   },
