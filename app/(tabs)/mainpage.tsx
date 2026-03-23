@@ -85,6 +85,18 @@ const pinImagesUnselected: Record<string, any> = {
   AC: require("../../assets/images/acmappinunselected.png"),
 };
 
+const androidPinImagesSelected: Record<string, any> = {
+  HPC: require("../../assets/images/android/hpcstationmappin.png"),
+  DC: require("../../assets/images/android/dcstationmappin.png"),
+  AC: require("../../assets/images/android/acstationmappin.png"),
+};
+
+const androidPinImagesUnselected: Record<string, any> = {
+  HPC: require("../../assets/images/android/hpcmappinunselected.png"),
+  DC: require("../../assets/images/android/dcmappinunselected.png"),
+  AC: require("../../assets/images/android/acmappinunselected.png"),
+};
+
 // Keep old reference for backward compat
 const pinImages = pinImagesSelected;
 
@@ -94,77 +106,88 @@ const typeLightningCount: Record<StationType, number> = {
   HPC: 3,
 };
 
-// Marker size as percentage of screen width — consistent across all resolutions.
+// ─── Pin dimensions ───────────────────────────────────────────────────────────
 const SCREEN_W = Dimensions.get('window').width;
-const PIN_W = Math.round(SCREEN_W * 0.08);   // 8% of screen width
-const PIN_H = Math.round(PIN_W * 1.78);       // maintain pin aspect ratio
-const PIN_SIZE = { w: PIN_W, h: PIN_H };
-
-// Marker component — fixed size, only image source changes on selection.
+const PIN_W = Math.round(SCREEN_W * 0.10);   // 10 % of screen width
+const PIN_H = Math.round(PIN_W * 1.78);      // source-image aspect ratio
 const isAndroid = Platform.OS === 'android';
 
-const MapPinMarker = React.memo(({ station, isSelected, onPress }: {
-  station: Station;
-  isSelected: boolean;
-  onPress: (station: Station) => void;
+// Count-text positioning
+const COUNT_BOTTOM_PX = Math.round(PIN_H * 0.13);
+const COUNT_FONT = Math.max(10, Math.round(PIN_W * 0.28));
+
+// ─── Android Marker — uses native `image` prop, no View-to-bitmap needed ─────
+const AndroidMarker = React.memo(({ station, isSelected, onPress }: {
+  station: Station; isSelected: boolean; onPress: (s: Station) => void;
 }) => {
-  const typeKey = String(station.type || "DC").toUpperCase();
+  const typeKey = String(station.type || 'DC').toUpperCase();
   const imgSource = isSelected
-    ? (pinImagesSelected[typeKey] || pinImagesSelected.DC)
-    : (pinImagesUnselected[typeKey] || pinImagesUnselected.DC);
-
-  const stationColor = getStationColor(station.type);
-
-  const availableCount = station.socket_stats
-    ? Object.values(station.socket_stats).reduce((acc: number, curr: any) => acc + (curr.available || 0), 0)
-    : 0;
-
-  // Android-only: bitmap tracking for 1.5s after visual changes
-  const [tracking, setTracking] = React.useState(isAndroid);
-  const visKey = `${isSelected} -${availableCount} -${typeKey} `;
-
-  React.useEffect(() => {
-    if (!isAndroid) return; // iOS needs NO tracking — fully static
-    setTracking(true);
-    const timer = setTimeout(() => setTracking(false), 1500);
-    return () => clearTimeout(timer);
-  }, [visKey]);
+    ? (androidPinImagesSelected[typeKey] || androidPinImagesSelected.DC)
+    : (androidPinImagesUnselected[typeKey] || androidPinImagesUnselected.DC);
 
   return (
     <Marker
       coordinate={{ latitude: station.latitude, longitude: station.longitude }}
       onPress={() => onPress(station)}
-      anchor={isAndroid ? { x: 0.5, y: 0.87 } : undefined}
-      tracksViewChanges={isAndroid ? tracking : false}
+      image={imgSource}
+      anchor={{ x: 0.5, y: 0.87 }}
+      tracksViewChanges={false}
+      zIndex={isSelected ? 999 : 0}
+      style={{ width: PIN_W, height: PIN_H }}
+    />
+  );
+});
+
+// ─── iOS Marker — View-based (works natively on iOS) ─────────────────────────
+const IOSMarker = React.memo(({ station, isSelected, onPress }: {
+  station: Station; isSelected: boolean; onPress: (s: Station) => void;
+}) => {
+  const typeKey = String(station.type || 'DC').toUpperCase();
+  const imgSource = isSelected
+    ? (pinImagesSelected[typeKey] || pinImagesSelected.DC)
+    : (pinImagesUnselected[typeKey] || pinImagesUnselected.DC);
+  const stationColor = getStationColor(station.type);
+  const availableCount = station.socket_stats
+    ? Object.values(station.socket_stats).reduce((a: number, c: any) => a + (c.available || 0), 0)
+    : 0;
+
+  return (
+    <Marker
+      coordinate={{ latitude: station.latitude, longitude: station.longitude }}
+      onPress={() => onPress(station)}
+      anchor={{ x: 0.5, y: 0.87 }}
+      tracksViewChanges={false}
       zIndex={isSelected ? 999 : 0}
     >
-      {/* @ts-ignore */}
-      <View collapsable={false} style={{
-        width: PIN_SIZE.w,
-        height: PIN_SIZE.h,
-      }}>
+      <View style={{ width: PIN_W, height: PIN_H }}>
         <Image
           source={imgSource}
-          style={{ width: PIN_SIZE.w, height: PIN_SIZE.h }}
-          resizeMode="stretch"
+          style={{ width: PIN_W, height: PIN_H }}
+          resizeMode="contain"
           fadeDuration={0}
         />
-        <Text style={{
-          position: 'absolute',
-          bottom: '13%',
-          width: '100%',
-          textAlign: 'center',
-          color: stationColor,
-          fontSize: 11,
-          fontWeight: '800',
-          includeFontPadding: false,
-        }}>
+        <Text
+          allowFontScaling={false}
+          style={{
+            position: 'absolute',
+            bottom: COUNT_BOTTOM_PX,
+            left: 0,
+            right: 0,
+            textAlign: 'center',
+            color: stationColor,
+            fontSize: COUNT_FONT,
+            fontWeight: '800',
+          }}
+        >
           {availableCount}
         </Text>
       </View>
     </Marker>
   );
 });
+
+// ─── Platform-aware wrapper ──────────────────────────────────────────────────
+const MapPinMarker = isAndroid ? AndroidMarker : IOSMarker;
 
 
 export default function MapScreen() {
