@@ -18,8 +18,8 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
 
     // Entrance & Exit Animation
     useEffect(() => {
-        if (state.isFinishing) {
-            // Wait 5 seconds to show finishing, then animate out for 500ms
+        if (state.isFinishing && state.sessionStatus !== 'FINISHED') {
+            // Only auto-dismiss for legacy FINISHING, not for STOPPING → FINISHED flow
             Animated.timing(entranceAnim, {
                 toValue: 0,
                 duration: 500,
@@ -34,7 +34,7 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
                 useNativeDriver: true,
             }).start();
         }
-    }, [state.isFinishing]);
+    }, [state.isFinishing, state.sessionStatus]);
 
     // Update progress bar smoothly
     useEffect(() => {
@@ -75,6 +75,11 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
 
     const theme = getTheme();
 
+    // Determine which overlay to show
+    const showStartingOverlay = state.isStarting && !state.isFinishing;
+    const showFinishedOverlay = state.sessionStatus === 'FINISHED' && !state.isFinishing;
+    const showFinishingOverlay = state.isFinishing;
+
     return (
         <Animated.View style={{
             opacity: entranceAnim,
@@ -92,7 +97,7 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
                     styles.container,
                     {
                         backgroundColor: isDark ? 'rgba(40, 40, 40, 0.85)' : 'rgba(255, 255, 255, 0.9)',
-                        borderColor: theme.borderColor,
+                        borderColor: showFinishedOverlay ? '#2CDD9D' : theme.borderColor,
                     }
                 ]}
             >
@@ -100,15 +105,19 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
 
                 <View style={styles.content}>
                     {/* Icon Section */}
-                    <View style={[styles.iconWrapper, { backgroundColor: theme.bg }]}>
-                        <View style={[styles.iconContainer, { backgroundColor: theme.iconBg }]}>
-                            <View style={styles.lightningWrap}>
-                                {Array.from({ length: theme.lightningCount }).map((_, idx) => (
-                                    <View key={idx} style={{ marginLeft: idx > 0 ? -10 : 0, zIndex: idx }}>
-                                        <Ionicons name="flash" size={16} color="#fff" />
-                                    </View>
-                                ))}
-                            </View>
+                    <View style={[styles.iconWrapper, { backgroundColor: showFinishedOverlay ? 'rgba(44, 221, 157, 0.15)' : theme.bg }]}>
+                        <View style={[styles.iconContainer, { backgroundColor: showFinishedOverlay ? '#2CDD9D' : theme.iconBg }]}>
+                            {showFinishedOverlay ? (
+                                <Ionicons name="checkmark" size={20} color="#fff" />
+                            ) : (
+                                <View style={styles.lightningWrap}>
+                                    {Array.from({ length: theme.lightningCount }).map((_, idx) => (
+                                        <View key={idx} style={{ marginLeft: idx > 0 ? -10 : 0, zIndex: idx }}>
+                                            <Ionicons name="flash" size={16} color="#fff" />
+                                        </View>
+                                    ))}
+                                </View>
+                            )}
                         </View>
                     </View>
 
@@ -116,32 +125,54 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
                     <View style={styles.info}>
                         <View style={styles.titleRow}>
                             <Text style={[styles.title, { color: colors.text }]}>
-                                {state.mode} Charging
+                                {showFinishedOverlay
+                                    ? 'Şarj Tamamlandı'
+                                    : showStartingOverlay
+                                        ? 'Şarj Başlatılıyor'
+                                        : `${state.mode} Charging`
+                                }
                             </Text>
-                            {state.mode === 'HPC' && (
+                            {!showFinishedOverlay && !showStartingOverlay && state.mode === 'HPC' && (
                                 <View style={[styles.ultraBadge, { backgroundColor: theme.accent }]}>
                                     <Text style={styles.ultraText}>FAST</Text>
                                 </View>
                             )}
                         </View>
-                        <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-                            <Ionicons name="time-outline" size={12} /> {Math.floor(state.duration / 60)}m {state.duration % 60}s • {state.cost.toFixed(2)} ₺
+                        <Text style={[styles.subtitle, { color: showFinishedOverlay ? '#2CDD9D' : colors.textSecondary }]}>
+                            {showFinishedOverlay
+                                ? 'Soketi aracınızdan çıkartın'
+                                : showStartingOverlay
+                                    ? 'Lütfen bekleyin...'
+                                    : (
+                                        <>
+                                            <Ionicons name="time-outline" size={12} /> {Math.floor(state.duration / 60)}m {state.duration % 60}s • {state.cost.toFixed(2)} ₺
+                                        </>
+                                    )
+                            }
                         </Text>
                     </View>
 
-                    {/* Status Info (Hide percentage for AC) */}
+                    {/* Status Info */}
                     <View style={styles.status}>
-                        {state.mode !== 'AC' && (
-                            <Text style={[styles.percent, { color: theme.accent }]}>
-                                {Math.floor(state.batteryLevel)}%
-                            </Text>
+                        {showFinishedOverlay ? (
+                            <Ionicons name="checkmark-circle" size={28} color="#2CDD9D" />
+                        ) : showStartingOverlay ? (
+                            <FinishingSpinner size={22} color={theme.accent} />
+                        ) : (
+                            <>
+                                {state.mode !== 'AC' && (
+                                    <Text style={[styles.percent, { color: theme.accent }]}>
+                                        {Math.floor(state.batteryLevel)}%
+                                    </Text>
+                                )}
+                                <View style={styles.liveDot} />
+                            </>
                         )}
-                        <View style={styles.liveDot} />
                     </View>
                 </View>
 
-                {/* Progress Visual (Hide for AC or Finishing) */}
-                {state.mode !== 'AC' && !state.isFinishing && (
+                {/* Progress Visual (Hide for AC, Starting, Finishing, or Finished) */}
+                {state.mode !== 'AC' && !showStartingOverlay && !showFinishingOverlay && !showFinishedOverlay && (
                     <View style={styles.progressContainer}>
                         <View style={[styles.progressBarBg, { backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
                             <Animated.View
@@ -162,11 +193,19 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
                     </View>
                 )}
 
-                {/* Finishing Overlay */}
-                {state.isFinishing && (
+                {/* Starting Overlay */}
+                {showStartingOverlay && (
                     <View style={[styles.finishingOverlay, { backgroundColor: isDark ? 'rgba(40, 40, 40, 0.95)' : 'rgba(255, 255, 255, 0.95)' }]}>
                         <FinishingSpinner size={22} color={theme.accent} />
-                        <Text style={[styles.title, { color: colors.text, marginLeft: 10 }]}>Finishing Charge Session...</Text>
+                        <Text style={[styles.title, { color: colors.text, marginLeft: 10 }]}>Şarj Başlatılıyor...</Text>
+                    </View>
+                )}
+
+                {/* Finishing Overlay (STOPPING) */}
+                {showFinishingOverlay && (
+                    <View style={[styles.finishingOverlay, { backgroundColor: isDark ? 'rgba(40, 40, 40, 0.95)' : 'rgba(255, 255, 255, 0.95)' }]}>
+                        <FinishingSpinner size={22} color={theme.accent} />
+                        <Text style={[styles.title, { color: colors.text, marginLeft: 10 }]}>Şarj Durduruluyor...</Text>
                     </View>
                 )}
             </Pressable>
@@ -271,7 +310,7 @@ const styles = StyleSheet.create({
         width: '100%',
     },
     progressBarBg: {
-        height: 6, // Thinner, sharper
+        height: 6,
         borderRadius: 3,
         width: '100%',
         overflow: 'hidden',

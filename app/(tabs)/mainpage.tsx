@@ -477,13 +477,13 @@ export default function MapScreen() {
           }
 
 
-          // Handle generic meter values / socket status for Active Charging Session
+          // Handle generic meter values / socket status / charge_session for Active Charging Session
           let payload: any = {};
           let rawData = data;
 
           // Normalize if wrapped in "data"
           if (data.type === "socket_status" || data.type === "meter_values" || data.type === "charge_session") {
-            rawData = data.data || {};
+            rawData = data.data || data; // if data.data is undefined, fallback to data itself
           }
 
           // If we receive a meter_values payload but NO active simulation, the user probably left the app open
@@ -500,10 +500,18 @@ export default function MapScreen() {
           }
 
           if (data.type === "socket_status" || (rawData.status && rawData.power)) {
+             const upperStatus = (rawData.status || '').toUpperCase();
+            
+             // If socket becomes Available and we were in a FINISHED state, we can close the charging UI.
+             // This happens when the user unplugs the cable after the session is completed.
+             if (data.type === "socket_status" && upperStatus === 'AVAILABLE') {
+                console.log("Socket is AVAILABLE, closing session if completed");
+                charging.handleSessionComplete();
+             }
+
             // Check if this socket status matches our active session (we'd ideally need a socket_uuid check,
             // but for FINISHING let's just use it safely if there is an active simulation)
             if (activeChargeSessionUuidRef.current || charging.isActive) {
-              const upperStatus = (rawData.status || '').toUpperCase();
               if (upperStatus === 'FINISHING' || upperStatus === 'SUSPENDEDEV' || upperStatus === 'SUSPENDEDEVSE' || upperStatus === 'FAULTED') {
                 charging.updateFromMeterValues({
                   status: rawData.status
@@ -513,7 +521,7 @@ export default function MapScreen() {
           }
 
           if (data.type === "meter_values" || data.type === "charge_session") {
-            console.log("🔌 METER VALUES RECEIVED:", JSON.stringify(data, null, 2));
+            console.log("🔌 METER VALUES / CHARGE SESSION RECEIVED:", JSON.stringify(data, null, 2));
             const d = rawData;
             const isCharging = (d.status || "").toLowerCase() === "charging" || !d.isCompleted;
 
@@ -540,6 +548,8 @@ export default function MapScreen() {
             const powerKw = d.power != null ? d.power / 1000 : 0;
             const batteryLevel = d.soc ?? null;
 
+             const chargeSessionPayload = data.type === "charge_session" ? d : undefined;
+
             payload = {
               power_kw: powerKw,
               charged_kwh: chargedKwh,
@@ -548,7 +558,7 @@ export default function MapScreen() {
               started_at: d.started_at
             };
 
-            if (Object.keys(payload).length > 0) {
+            if (Object.keys(payload).length > 0 || d.status) {
               charging.updateFromMeterValues({
                 batteryLevel: payload.batteryLevel,
                 power_kw: payload.power_kw,
@@ -557,7 +567,8 @@ export default function MapScreen() {
                 started_at: payload.started_at,
                 socket_type: d.socket_type, // HPC, DC, AC
                 start_soc: d.start_soc,     // Initial battery level
-                status: d.status,           // INITIATED, CHARGING, etc.
+                status: d.status,           // INITIATING, CHARGING, STOPPING, FINISHED, etc.
+                chargeSessionData: chargeSessionPayload, // Provide full payload for charge sessions
               } as any);
             }
           }

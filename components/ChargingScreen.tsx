@@ -23,7 +23,7 @@ type ChargingScreenProps = {
 };
 
 // Pulse Indicator Component
-const PulseIndicator = ({ isComplete }: { isComplete: boolean }) => {
+const PulseIndicator = ({ isComplete, color: overrideColor }: { isComplete: boolean; color?: string }) => {
     const scaleAnim = useRef(new RNAnimated.Value(1)).current;
 
     useEffect(() => {
@@ -46,12 +46,10 @@ const PulseIndicator = ({ isComplete }: { isComplete: boolean }) => {
             ).start();
         } else {
             scaleAnim.setValue(1);
-            // Stop animation? RNAnimated.loop doesn't have stop easily without ref storing the animation object.
-            // Simplified: just let it run or reset. For visual purity, we'll keep it simple content-wise.
         }
     }, [isComplete]);
 
-    const color = isComplete ? '#2CDD9D' : '#FFD60A'; // Green vs Yellow
+    const color = overrideColor || (isComplete ? '#2CDD9D' : '#FFD60A');
 
     return (
         <View style={styles.pulseContainer}>
@@ -61,7 +59,7 @@ const PulseIndicator = ({ isComplete }: { isComplete: boolean }) => {
                     {
                         backgroundColor: color,
                         transform: [{ scale: scaleAnim }],
-                        opacity: isComplete ? 1 : 0.6 // Pulse effect opacity
+                        opacity: isComplete ? 1 : 0.6
                     }
                 ]}
             />
@@ -82,17 +80,15 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
     const animatedProps = useAnimatedProps(() => {
         const strokeDashoffset = CIRCUMFERENCE * (1 - progress.value);
 
-        // Color Interpolation for DC (Red -> Green)
-        // AC stays constant or standard green
-        let stroke = colors.primary; // Default
+        let stroke = colors.primary;
         if (state.mode === 'DC' || state.mode === 'HPC') {
             stroke = interpolateColor(
                 progress.value,
                 [0, 0.5, 1],
-                ['#FF3B30', '#FFD60A', '#2CDD9D'] // Red -> Yellow -> Green
+                ['#FF3B30', '#FFD60A', '#2CDD9D']
             );
         } else {
-            stroke = '#4BACE4'; // AC Blue
+            stroke = '#4BACE4';
         }
 
         return {
@@ -102,11 +98,23 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
     }, [state.mode, colors.primary]);
 
     const isComplete = state.batteryLevel >= 100;
+    const isStarting = state.isStarting;
+    const isFinished = state.sessionStatus === 'FINISHED';
+    const isStopping = state.isFinishing;
 
     const modeColors: Record<string, string> = {
         HPC: '#7C4DFF',
         DC: '#FF8A1F',
         AC: '#4BACE4',
+    };
+
+    // Format duration for finished summary
+    const formatDuration = (seconds: number) => {
+        const hours = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+        const secs = seconds % 60;
+        if (hours > 0) return `${hours}s ${mins}dk`;
+        return `${mins}dk ${secs}sn`;
     };
 
     return (
@@ -116,11 +124,23 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                 {/* Header */}
                 <View style={styles.header}>
                     <View style={styles.headerStatus}>
-                        <PulseIndicator isComplete={isComplete} />
+                        <PulseIndicator
+                            isComplete={isComplete || isFinished}
+                            color={isStarting ? modeColors[state.mode] : isFinished ? '#2CDD9D' : undefined}
+                        />
                         <Text style={[styles.headerTitle, { color: colors.text }]}>
-                            {isComplete ? 'Charging Complete' : 'Charging...'}
+                            {isStarting
+                                ? 'Şarj Başlatılıyor'
+                                : isFinished
+                                    ? 'Şarj Tamamlandı'
+                                    : isStopping
+                                        ? 'Şarj Durduruluyor'
+                                        : isComplete
+                                            ? 'Charging Complete'
+                                            : 'Charging...'
+                            }
                         </Text>
-                        <View style={[styles.modeBadge, { backgroundColor: modeColors[state.mode] || '#656565' }]}>
+                        <View style={[styles.modeBadge, { backgroundColor: isFinished ? '#2CDD9D' : modeColors[state.mode] || '#656565' }]}>
                             <Text style={styles.modeBadgeText}>{state.mode}</Text>
                         </View>
                     </View>
@@ -128,17 +148,67 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                 </View>
 
                 {/* Main Content */}
-                {state.isFinishing ? (
+                {isStarting ? (
+                    /* ── Starting View ── */
+                    <View style={styles.mainContent}>
+                        <View style={styles.startingContainer}>
+                            <View style={[styles.startingIconCircle, { borderColor: modeColors[state.mode] || colors.primary }]}>
+                                <FinishingSpinner size={60} color={modeColors[state.mode] || colors.primary} />
+                            </View>
+                            <Text style={[styles.percentageText, { color: colors.text, fontSize: 28, marginTop: 32 }]}>
+                                Şarj Oturumu Başlatılıyor...
+                            </Text>
+                            <Text style={[styles.powerText, { color: colors.textSecondary, marginTop: 8, textAlign: 'center', paddingHorizontal: 40 }]}>
+                                Lütfen bekleyin, şarj oturumunuz başlatılıyor.
+                            </Text>
+                            {state.chargeSessionData?.charge_area?.name && (
+                                <View style={[styles.locationBadge, { backgroundColor: isDark ? '#1C1C1E' : '#F2F2F7' }]}>
+                                    <Ionicons name="location" size={16} color={modeColors[state.mode]} />
+                                    <Text style={[styles.locationText, { color: colors.text }]} numberOfLines={1}>
+                                        {state.chargeSessionData.charge_area.name}
+                                    </Text>
+                                </View>
+                            )}
+                        </View>
+                    </View>
+                ) : isFinished ? (
+                    /* ── Finished View (Cable still plugged) ── */
+                    <View style={styles.mainContent}>
+                        <View style={styles.finishedContainer}>
+                            {/* Big Green Check */}
+                            <View style={styles.finishedCheckCircle}>
+                                <Ionicons name="checkmark" size={60} color="#fff" />
+                            </View>
+
+                            <Text style={[styles.percentageText, { color: '#2CDD9D', fontSize: 28, marginTop: 24 }]}>
+                                Şarjınız Tamamlandı!
+                            </Text>
+
+                            <Text style={[styles.powerText, { color: colors.textSecondary, marginTop: 8, textAlign: 'center', paddingHorizontal: 30 }]}>
+                                Lütfen şarj soketini aracınızdan çıkartın.
+                            </Text>
+
+                            {/* Unplug Animation Hint */}
+                            <View style={styles.unplugHintContainer}>
+                                <RNAnimated.View>
+                                    <Ionicons name="exit-outline" size={32} color="#2CDD9D" />
+                                </RNAnimated.View>
+                            </View>
+                        </View>
+                    </View>
+                ) : isStopping ? (
+                    /* ── Stopping/Finishing View ── */
                     <View style={styles.mainContent}>
                         <FinishingSpinner size={50} color={colors.primary} />
                         <Text style={[styles.percentageText, { color: colors.text, fontSize: 32, marginTop: 24 }]}>
-                            Finishing Session...
+                            Şarj Durduruluyor...
                         </Text>
                         <Text style={[styles.powerText, { color: colors.textSecondary }]}>
-                            Please wait while we finalize your charging session.
+                            Lütfen bekleyin, şarj oturumunuz sonlandırılıyor.
                         </Text>
                     </View>
                 ) : (
+                    /* ── Normal Charging View ── */
                     <View style={styles.mainContent}>
 
                         {/* Circular Progress & Visual (Hide for AC) */}
@@ -239,65 +309,71 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                     </View>
                 )}
 
-                {/* Statistics Grid */}
-                <View style={[styles.statsGrid, { backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF' }]}>
+                {/* Statistics Grid — Show for charging and finished */}
+                {!isStarting && (
+                    <View style={[styles.statsGrid, { backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF' }]}>
 
-                    {/* Row 1 */}
-                    <View style={styles.statRow}>
-                        <View style={styles.statItem}>
-                            <View style={[styles.iconBox, { backgroundColor: 'rgba(255, 214, 10, 0.15)' }]}>
-                                <Ionicons name="flash" size={20} color="#FFD60A" />
-                            </View>
-                            <View>
-                                <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Energy</Text>
-                                <Text style={[styles.statValue, { color: colors.text }]}>{state.chargedAmount.toFixed(2)} kWh</Text>
-                            </View>
-                        </View>
-
-                        <View style={styles.statItem}>
-                            <View style={[styles.iconBox, { backgroundColor: 'rgba(48, 176, 199, 0.15)' }]}>
-                                <Ionicons name="wallet-outline" size={20} color="#30B0C7" />
-                            </View>
-                            <View>
-                                <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Cost</Text>
-                                <Text style={[styles.statValue, { color: colors.text }]}>{state.cost.toFixed(2)} ₺</Text>
-                            </View>
-                        </View>
-                    </View>
-
-                    {/* Row 2 */}
-                    <View style={styles.statRow}>
-                        <View style={styles.statItem}>
-                            <View style={[styles.iconBox, { backgroundColor: 'rgba(175, 82, 222, 0.15)' }]}>
-                                <Ionicons name="time-outline" size={20} color="#AF52DE" />
-                            </View>
-                            <View>
-                                <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Duration</Text>
-                                <Text style={[styles.statValue, { color: colors.text }]}>
-                                    {Math.floor(state.duration / 60)}m {state.duration % 60}s
-                                </Text>
-                            </View>
-                        </View>
-
-                        {(state.mode === 'DC' || state.mode === 'HPC') ? (
+                        {/* Row 1 */}
+                        <View style={styles.statRow}>
                             <View style={styles.statItem}>
-                                <View style={[styles.iconBox, { backgroundColor: 'rgba(50, 215, 75, 0.15)' }]}>
-                                    <MaterialCommunityIcons name="battery-charging-100" size={20} color="#32D74B" />
+                                <View style={[styles.iconBox, { backgroundColor: 'rgba(255, 214, 10, 0.15)' }]}>
+                                    <Ionicons name="flash" size={20} color="#FFD60A" />
                                 </View>
                                 <View>
-                                    <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Est. 100%</Text>
+                                    <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Enerji</Text>
+                                    <Text style={[styles.statValue, { color: colors.text }]}>{state.chargedAmount.toFixed(2)} kWh</Text>
+                                </View>
+                            </View>
+
+                            <View style={styles.statItem}>
+                                <View style={[styles.iconBox, { backgroundColor: 'rgba(48, 176, 199, 0.15)' }]}>
+                                    <Ionicons name="wallet-outline" size={20} color="#30B0C7" />
+                                </View>
+                                <View>
+                                    <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Ücret</Text>
                                     <Text style={[styles.statValue, { color: colors.text }]}>
-                                        {state.estTime100 ? Math.ceil(state.estTime100) + 'm' : 'Done'}
+                                        {isFinished && state.chargeSessionData?.total_price != null
+                                            ? state.chargeSessionData.total_price.toFixed(2)
+                                            : state.cost.toFixed(2)
+                                        } ₺
                                     </Text>
                                 </View>
                             </View>
-                        ) : (
-                            // AC placeholder or empty
-                            <View style={styles.statItem} />
-                        )}
-                    </View>
+                        </View>
 
-                </View>
+                        {/* Row 2 */}
+                        <View style={styles.statRow}>
+                            <View style={styles.statItem}>
+                                <View style={[styles.iconBox, { backgroundColor: 'rgba(175, 82, 222, 0.15)' }]}>
+                                    <Ionicons name="time-outline" size={20} color="#AF52DE" />
+                                </View>
+                                <View>
+                                    <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Süre</Text>
+                                    <Text style={[styles.statValue, { color: colors.text }]}>
+                                        {Math.floor(state.duration / 60)}m {state.duration % 60}s
+                                    </Text>
+                                </View>
+                            </View>
+
+                            {!isFinished && (state.mode === 'DC' || state.mode === 'HPC') ? (
+                                <View style={styles.statItem}>
+                                    <View style={[styles.iconBox, { backgroundColor: 'rgba(50, 215, 75, 0.15)' }]}>
+                                        <MaterialCommunityIcons name="battery-charging-100" size={20} color="#32D74B" />
+                                    </View>
+                                    <View>
+                                        <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Est. 100%</Text>
+                                        <Text style={[styles.statValue, { color: colors.text }]}>
+                                            {state.estTime100 ? Math.ceil(state.estTime100) + 'm' : 'Done'}
+                                        </Text>
+                                    </View>
+                                </View>
+                            ) : (
+                                <View style={styles.statItem} />
+                            )}
+                        </View>
+
+                    </View>
+                )}
 
                 {/* Footer Action */}
                 <View style={styles.footer}>
@@ -305,15 +381,27 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                     <Pressable onPress={onMinimize} style={[styles.iconBtn, { backgroundColor: colors.card }]}>
                         <Ionicons name="chevron-down" size={24} color={colors.text} />
                     </Pressable>
-                    <Pressable
-                        onPress={onStop}
-                        style={({ pressed }) => [
-                            styles.stopBtn,
-                            { opacity: pressed ? 0.9 : 1 }
-                        ]}
-                    >
-                        <Text style={styles.stopBtnText}>Stop Charging</Text>
-                    </Pressable>
+
+                    {!isFinished && !isStarting && !isStopping && (
+                        <Pressable
+                            onPress={onStop}
+                            style={({ pressed }) => [
+                                styles.stopBtn,
+                                { opacity: pressed ? 0.9 : 1 }
+                            ]}
+                        >
+                            <Text style={styles.stopBtnText}>Şarjı Durdur</Text>
+                        </Pressable>
+                    )}
+
+                    {isFinished && (
+                        <View style={styles.finishedFooterBadge}>
+                            <Ionicons name="information-circle" size={18} color="#2CDD9D" />
+                            <Text style={[styles.finishedFooterText, { color: colors.textSecondary }]}>
+                                Soket çıkartılınca otomatik kapanacak
+                            </Text>
+                        </View>
+                    )}
                 </View>
 
             </View>
@@ -447,6 +535,63 @@ const styles = StyleSheet.create({
         fontWeight: '700',
     },
 
+    // Starting View
+    startingContainer: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 20,
+    },
+    startingIconCircle: {
+        width: 120,
+        height: 120,
+        borderRadius: 60,
+        borderWidth: 3,
+        borderStyle: 'dashed',
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: 0.8,
+    },
+    locationBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginTop: 24,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderRadius: 12,
+    },
+    locationText: {
+        fontSize: 14,
+        fontWeight: '600',
+        maxWidth: 250,
+    },
+
+    // Finished View
+    finishedContainer: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 20,
+    },
+    finishedCheckCircle: {
+        width: 120,
+        height: 120,
+        borderRadius: 60,
+        backgroundColor: '#2CDD9D',
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: '#2CDD9D',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.4,
+        shadowRadius: 20,
+        elevation: 10,
+    },
+    unplugHintContainer: {
+        marginTop: 32,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+
     // Stats Grid
     statsGrid: {
         marginHorizontal: 20,
@@ -508,5 +653,21 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 17,
         fontWeight: '700',
-    }
+    },
+    finishedFooterBadge: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        height: 50,
+        borderRadius: 18,
+        backgroundColor: 'rgba(44, 221, 157, 0.1)',
+        borderWidth: 1,
+        borderColor: 'rgba(44, 221, 157, 0.3)',
+    },
+    finishedFooterText: {
+        fontSize: 13,
+        fontWeight: '600',
+    },
 });
