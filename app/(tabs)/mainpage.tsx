@@ -116,7 +116,7 @@ const isAndroid = Platform.OS === 'android';
 const COUNT_BOTTOM_PX = Math.round(PIN_H * 0.13);
 const COUNT_FONT = Math.max(10, Math.round(PIN_W * 0.28));
 
-// ─── Android Marker — uses native `image` prop, no View-to-bitmap needed ─────
+// ─── Android Marker — Double-Marker Workaround for Snapshot Bugs ─────────────
 const AndroidMarker = React.memo(({ station, isSelected, onPress }: {
   station: Station; isSelected: boolean; onPress: (s: Station) => void;
 }) => {
@@ -125,19 +125,70 @@ const AndroidMarker = React.memo(({ station, isSelected, onPress }: {
     ? (androidPinImagesSelected[typeKey] || androidPinImagesSelected.DC)
     : (androidPinImagesUnselected[typeKey] || androidPinImagesUnselected.DC);
 
+  const stationColor = getStationColor(station.type);
+  const availableCount = station.socket_stats
+    ? Object.values(station.socket_stats).reduce((a: number, c: any) => a + (c.available || 0), 0)
+    : 0;
+
+  // Since React Native Maps text overlays need a brief moment to map the layout 
+  // onto the canvas, we track changes strictly for the text overlay marker for a few ms.
+  const [tracksViewChanges, setTracksViewChanges] = useState(true);
+
+  useEffect(() => {
+    setTracksViewChanges(true);
+    const timer = setTimeout(() => {
+      setTracksViewChanges(false);
+    }, 400); // 400ms is perfectly sufficient for pure text.
+    return () => clearTimeout(timer);
+  }, [isSelected, availableCount]);
+
+  // React Native Maps on Android notoriously clips Custom Views that contain 
+  // an <Image> component when taking a snapshot. The 100% bug-free solution is 
+  // to use the native 'image' prop without children for the perfect, unclipped pin, 
+  // and render a second identical, overlapping marker strictly for the synchronous <Text> overlay!
+
   return (
-    <Marker
-      coordinate={{ latitude: station.latitude, longitude: station.longitude }}
-      onPress={() => onPress(station)}
-      image={imgSource}
-      anchor={{ x: 0.5, y: 0.87 }}
-      tracksViewChanges={false}
-      zIndex={isSelected ? 999 : 0}
-      style={{ width: PIN_W, height: PIN_H }}
-    />
+    <React.Fragment>
+      {/* 1. Native image pin - perfectly drawn by Google Maps, ZERO clipping */}
+      <Marker
+        coordinate={{ latitude: station.latitude, longitude: station.longitude }}
+        onPress={() => onPress(station)}
+        image={imgSource}
+        anchor={{ x: 0.5, y: 0.87 }}
+        tracksViewChanges={false}
+        zIndex={isSelected ? 999 : 0}
+        style={{ width: PIN_W, height: PIN_H }}
+      />
+      {/* 2. Text overlay - pure text in a transparent view, instant safe snapshot */}
+      <Marker
+        coordinate={{ latitude: station.latitude, longitude: station.longitude }}
+        onPress={() => onPress(station)}
+        anchor={{ x: 0.5, y: 0.87 }} // Exactly the same anchor
+        tracksViewChanges={tracksViewChanges} // Allow Text time to mount onto canvas
+        zIndex={isSelected ? 1000 : 1} // Ensure text renders over the image pin
+      >
+        <View style={{ width: PIN_W, height: PIN_H, backgroundColor: 'transparent' }}>
+          <Text
+            allowFontScaling={false}
+            style={{
+              position: 'absolute',
+              bottom: 38,
+              left: 0,
+              right: 3,
+              textAlign: 'center',
+              color: stationColor,
+              fontSize: 12,
+              fontWeight: '800',
+              zIndex: 999
+            }}
+          >
+            {availableCount}
+          </Text>
+        </View>
+      </Marker>
+    </React.Fragment>
   );
 });
-
 // ─── iOS Marker — View-based (works natively on iOS) ─────────────────────────
 const IOSMarker = React.memo(({ station, isSelected, onPress }: {
   station: Station; isSelected: boolean; onPress: (s: Station) => void;
@@ -500,14 +551,14 @@ export default function MapScreen() {
           }
 
           if (data.type === "socket_status" || (rawData.status && rawData.power)) {
-             const upperStatus = (rawData.status || '').toUpperCase();
-            
-             // If socket becomes Available and we were in a FINISHED state, we can close the charging UI.
-             // This happens when the user unplugs the cable after the session is completed.
-             if (data.type === "socket_status" && upperStatus === 'AVAILABLE') {
-                console.log("Socket is AVAILABLE, closing session if completed");
-                charging.handleSessionComplete();
-             }
+            const upperStatus = (rawData.status || '').toUpperCase();
+
+            // If socket becomes Available and we were in a FINISHED state, we can close the charging UI.
+            // This happens when the user unplugs the cable after the session is completed.
+            if (data.type === "socket_status" && upperStatus === 'AVAILABLE') {
+              console.log("Socket is AVAILABLE, closing session if completed");
+              charging.handleSessionComplete();
+            }
 
             // Check if this socket status matches our active session (we'd ideally need a socket_uuid check,
             // but for FINISHING let's just use it safely if there is an active simulation)
@@ -548,7 +599,7 @@ export default function MapScreen() {
             const powerKw = d.power != null ? d.power / 1000 : 0;
             const batteryLevel = d.soc ?? null;
 
-             const chargeSessionPayload = data.type === "charge_session" ? d : undefined;
+            const chargeSessionPayload = data.type === "charge_session" ? d : undefined;
 
             payload = {
               power_kw: powerKw,
