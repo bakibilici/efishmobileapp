@@ -25,10 +25,8 @@ export default ({ config }) => ({
   android: {
     package: "com.efishmobile.app",
     adaptiveIcon: {
-      backgroundColor: "#E6F4FE",
-      foregroundImage: "./assets/images/android-icon-foreground.png",
-      backgroundImage: "./assets/images/android-icon-background.png",
-      monochromeImage: "./assets/images/android-icon-monochrome.png",
+      backgroundColor: "#2CDB9B",
+      foregroundImage: "./assets/images/efishremovedbge.png",
     },
     config: {
       googleMaps: {
@@ -51,7 +49,7 @@ export default ({ config }) => ({
     [
       "expo-splash-screen",
       {
-        image: "./assets/images/splash-icon.png",
+        image: "./assets/images/efishjuste.png",
         imageWidth: 200,
         resizeMode: "contain",
         backgroundColor: "#ffffff",

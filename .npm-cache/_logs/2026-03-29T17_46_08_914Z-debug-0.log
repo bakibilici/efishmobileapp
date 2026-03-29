@@ -7,8 +7,8 @@
 6 silly config load:file:/usr/local/etc/npmrc
 7 verbose title npm start
 8 verbose argv "start"
-9 verbose logfile logs-max:10 dir:/Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-03-29T13_33_00_107Z-
-10 verbose logfile /Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-03-29T13_33_00_107Z-debug-0.log
+9 verbose logfile logs-max:10 dir:/Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-03-29T17_46_08_914Z-
+10 verbose logfile /Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-03-29T17_46_08_914Z-debug-0.log
 11 silly logfile done cleaning log files
 12 verbose cwd /Users/abdulbakibilici/Projects/efish
 13 verbose os Darwin 25.3.0

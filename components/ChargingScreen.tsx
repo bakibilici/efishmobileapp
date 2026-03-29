@@ -3,7 +3,7 @@ import { ChargingMode, ChargingState } from '@/hooks/useChargingSimulation';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import React, { useEffect, useRef } from 'react';
 import { Dimensions, Easing, Image, Pressable, Animated as RNAnimated, StyleSheet, Text, View } from 'react-native';
-import Animated, { interpolateColor, useAnimatedProps, useDerivedValue, withTiming, useSharedValue, useAnimatedStyle, withDelay } from 'react-native-reanimated';
+import Animated, { interpolateColor, useAnimatedProps, useAnimatedStyle, useDerivedValue, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import Svg, { Circle, Defs, Mask } from 'react-native-svg';
 import FinishingSpinner from './FinishingSpinner';
 
@@ -135,15 +135,6 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
         AC: '#4BACE4',
     };
 
-    // Format duration for finished summary
-    const formatDuration = (seconds: number) => {
-        const hours = Math.floor(seconds / 3600);
-        const mins = Math.floor((seconds % 3600) / 60);
-        const secs = seconds % 60;
-        if (hours > 0) return `${hours}s ${mins}dk`;
-        return `${mins}dk ${secs}sn`;
-    };
-
     return (
         <Animated.View style={[styles.container, animatedContainerStyle]}>
             <View style={{ flex: 1, paddingBottom: 40 }}>
@@ -161,12 +152,12 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                                 : isStarting
                                     ? 'Şarj Başlatılıyor'
                                     : isFinished
-                                    ? 'Şarj Tamamlandı'
-                                    : isStopping
-                                        ? 'Şarj Durduruluyor'
-                                        : isComplete
-                                            ? 'Charging Complete'
-                                            : 'Charging...'
+                                        ? 'Şarj Tamamlandı'
+                                        : isStopping
+                                            ? 'Şarj Durduruluyor'
+                                            : isComplete
+                                                ? 'Charging Complete'
+                                                : 'Charging...'
                             }
                         </Text>
                         <View style={[styles.modeBadge, { backgroundColor: isDismissing ? 'rgba(255,255,255,0.2)' : isFinished ? '#2CDD9D' : modeColors[state.mode] || '#656565' }]}>
@@ -410,31 +401,31 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                 {!isDismissing && (
                     <View style={styles.footer}>
 
-                    <Pressable onPress={onMinimize} style={[styles.iconBtn, { backgroundColor: colors.card }]}>
-                        <Ionicons name="chevron-down" size={24} color={colors.text} />
-                    </Pressable>
-
-                    {!isFinished && !isStarting && !isStopping && (
-                        <Pressable
-                            onPress={onStop}
-                            style={({ pressed }) => [
-                                styles.stopBtn,
-                                { opacity: pressed ? 0.9 : 1 }
-                            ]}
-                        >
-                            <Text style={styles.stopBtnText}>Şarjı Durdur</Text>
+                        <Pressable onPress={onMinimize} style={[styles.iconBtn, { backgroundColor: colors.card }]}>
+                            <Ionicons name="chevron-down" size={24} color={colors.text} />
                         </Pressable>
-                    )}
 
-                    {isFinished && (
-                        <View style={styles.finishedFooterBadge}>
-                            <Ionicons name="information-circle" size={18} color="#2CDD9D" />
-                            <Text style={[styles.finishedFooterText, { color: colors.textSecondary }]}>
-                                Soket çıkartılınca otomatik kapanacak
-                            </Text>
-                        </View>
-                    )}
-                </View>
+                        {!isFinished && !isStarting && !isStopping && (
+                            <Pressable
+                                onPress={onStop}
+                                style={({ pressed }) => [
+                                    styles.stopBtn,
+                                    { opacity: pressed ? 0.9 : 1 }
+                                ]}
+                            >
+                                <Text style={styles.stopBtnText}>Şarjı Durdur</Text>
+                            </Pressable>
+                        )}
+
+                        {isFinished && (
+                            <View style={styles.finishedFooterBadge}>
+                                <Ionicons name="information-circle" size={18} color="#2CDD9D" />
+                                <Text style={[styles.finishedFooterText, { color: colors.textSecondary }]}>
+                                    Soket çıkartılınca otomatik kapanacak
+                                </Text>
+                            </View>
+                        )}
+                    </View>
                 )}
 
             </View>

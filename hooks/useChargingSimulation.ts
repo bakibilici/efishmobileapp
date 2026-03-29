@@ -377,7 +377,7 @@ export const useChargingSimulation = () => {
                     hasError: false,
                 }));
                 stoppingAtRef.current = null;
-            }, 2500); // Wait 2.5s for the green animation to finish
+            }, 3500); // Wait 3.5s for the green animation to finish
         } else {
             setState(prev => ({
                 ...prev,

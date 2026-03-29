@@ -1,8 +1,9 @@
+import ChargeStopErrorModal from '@/components/ChargeStopErrorModal';
 import ChargingScreen from "@/components/ChargingScreen";
 import ChargingWidget from "@/components/ChargingWidget";
-import ChargeStopErrorModal from '@/components/ChargeStopErrorModal';
 import SocketChargeErrorModal from '@/components/SocketChargeErrorModal';
 import SocketErrorModal from "@/components/SocketErrorModal";
+import SocketFaultedModal from '@/components/SocketFaultedModal';
 import { useUser } from "@/context/UserContext";
 import { useChargingSimulation } from "@/hooks/useChargingSimulation";
 import { getRegisteredVehicles, getStationDetails, startChargingSession, stopChargingSession } from "@/services/api";
@@ -273,6 +274,7 @@ export default function MapScreen() {
   // Socket Error State
   const [showSocketError, setShowSocketError] = useState(false);
   const [showStopError, setShowStopError] = useState(false);
+  const [showSocketFaultedModal, setShowSocketFaultedModal] = useState(false);
   const [pendingVehicle, setPendingVehicle] = useState<any>(null);
 
   // Charging Simulation
@@ -572,6 +574,10 @@ export default function MapScreen() {
                 charging.updateFromMeterValues({
                   status: rawData.status
                 });
+
+                if (upperStatus === 'FAULTED') {
+                  setShowSocketFaultedModal(true);
+                }
               }
             }
           }
@@ -2115,6 +2121,11 @@ export default function MapScreen() {
             )
           }
 
+          <SocketFaultedModal
+            visible={showSocketFaultedModal}
+            onClose={() => setShowSocketFaultedModal(false)}
+          />
+
           <SocketErrorModal
             visible={showSocketError}
             onClose={() => setShowSocketError(false)}
@@ -2805,7 +2816,7 @@ const styles = StyleSheet.create({
   },
   floatingWidgetContainer: {
     position: 'absolute',
-    top: 180, // Safely below header + chips
+    top: Platform.OS === 'ios' ? 180 : 155, // Reduced gap on Android
     left: 16,
     right: 16,
     zIndex: 60,
