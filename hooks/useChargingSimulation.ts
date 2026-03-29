@@ -138,28 +138,46 @@ export const useChargingSimulation = () => {
         const hasCharging = power > 0 || (batteryLevel != null && batteryLevel > 0) || isActiveStatus;
 
         setState(prev => {
-            if (prev.isFinishing) {
-                // Allow FINISHED to pass through so we can transition from STOPPING → FINISHED
-                const upperStatus = data.status?.toUpperCase();
-                if (upperStatus === 'FINISHED') {
-                    console.log("[CHARGING_HOOK] FINISHED received while isFinishing, transitioning to FINISHED view");
-                    return {
-                        ...prev,
-                        isFinishing: false,
-                        isStarting: false,
-                        sessionStatus: 'FINISHED' as ChargeSessionStatus,
-                        chargeSessionData: data.chargeSessionData ?? prev.chargeSessionData,
-                        // Update final values from FINISHED payload
-                        chargedAmount: chargedAmount || prev.chargedAmount,
-                        cost: data.chargeSessionData?.total_price ?? cost ?? prev.cost,
-                        power: 0,
-                    };
+            const upperStatus = data.status?.toUpperCase();
+
+            // 1. Handle transitions to FINISHED (always check 2s protection if stoppingAtRef is set)
+            if (upperStatus === 'FINISHED') {
+                if (stoppingAtRef.current) {
+                    const elapsed = Date.now() - stoppingAtRef.current;
+                    if (elapsed < 2000) {
+                        const delay = 2000 - elapsed;
+                        console.log(`[CHARGING_HOOK] Delaying FINISHED by ${delay}ms to guarantee 2s STOPPING display`);
+                        setTimeout(() => {
+                            updateFromMeterValues(data);
+                        }, delay);
+                        return prev; // Return current state (likely STOPPING) to keep the UI fixed
+                    }
                 }
-                console.log("[CHARGING_HOOK] Ignoring update because isFinishing is TRUE");
-                return prev;
+                
+                console.log("[CHARGING_HOOK] Transitioning to FINISHED view");
+                stoppingAtRef.current = null;
+                if (timerRef.current) clearInterval(timerRef.current);
+                return {
+                    ...prev,
+                    isActive: true,
+                    isFinishing: false,
+                    isStarting: false,
+                    isDismissing: false,
+                    sessionStatus: 'FINISHED' as ChargeSessionStatus,
+                    chargeSessionData: data.chargeSessionData ?? prev.chargeSessionData,
+                    // Update final values from FINISHED payload
+                    chargedAmount: chargedAmount || prev.chargedAmount,
+                    cost: data.chargeSessionData?.total_price ?? cost ?? prev.cost,
+                    power: 0,
+                    hasError: false,
+                };
             }
 
-            const upperStatus = data.status?.toUpperCase();
+            // 2. Protect the "Stopping" UI from other updates (WebSocket CHARGING msg etc.)
+            if (prev.isFinishing) {
+                console.log("[CHARGING_HOOK] Ignoring status update during 'Stopping' phase (status:", upperStatus, ")");
+                return prev;
+            }
 
             // If we have an error, ONLY allow the STOPPING/FINISHED status to pass through
             if (prev.hasError && upperStatus !== 'STOPPING' && upperStatus !== 'FINISHED') {
@@ -236,35 +254,9 @@ export const useChargingSimulation = () => {
                     };
                 }
 
-                // FINISHED → Charge complete, cable still plugged
+                // FINISHED → Charge complete, cable still plugged (Handled above in consolidated logic)
                 if (upperStatus === 'FINISHED') {
-                    if (stoppingAtRef.current) {
-                        const elapsed = Date.now() - stoppingAtRef.current;
-                        if (elapsed < 2000) {
-                            const delay = 2000 - elapsed;
-                            console.log(`[CHARGING_HOOK] Delaying FINISHED by ${delay}ms to guarantee 2s STOPPING display`);
-                            setTimeout(() => {
-                                updateFromMeterValues(data);
-                            }, delay);
-                            return prev;
-                        }
-                    }
-                    stoppingAtRef.current = null;
-                    console.log("[CHARGING_HOOK] Status is FINISHED → showing 'unplug cable' UI");
-                    if (timerRef.current) clearInterval(timerRef.current);
-                    return {
-                        ...prev,
-                        isActive: true,
-                        isStarting: false,
-                        isFinishing: false,
-                        isDismissing: false,
-                        sessionStatus: 'FINISHED' as ChargeSessionStatus,
-                        chargeSessionData: data.chargeSessionData ?? prev.chargeSessionData,
-                        chargedAmount: chargedAmount || prev.chargedAmount,
-                        cost: data.chargeSessionData?.total_price ?? cost ?? prev.cost,
-                        power: 0,
-                        hasError: false,
-                    };
+                    return prev;
                 }
 
                 // Legacy: FINISHING (synthetic status from old flow)

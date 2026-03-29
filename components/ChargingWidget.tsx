@@ -18,16 +18,15 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
 
     // Entrance & Exit Animation
     useEffect(() => {
-        if ((state.isFinishing && state.sessionStatus !== 'FINISHED') || state.isDismissing) {
-            // Only auto-dismiss for legacy FINISHING, not for STOPPING → FINISHED flow
-            // OR if we are explicitly DISMISSING (green animation complete)
+        if (state.isDismissing) {
+            // Animate out during explicitly DISMISSING (green animation complete)
             Animated.timing(entranceAnim, {
                 toValue: 0,
                 duration: 500,
-                delay: state.isDismissing ? 2000 : 4800, // wait 2s for green animation before exit
+                delay: 2000, // wait 2s for green animation before exit
                 useNativeDriver: true,
             }).start();
-        } else {
+        } else if (state.isActive) {
             // Animate in when active
             Animated.timing(entranceAnim, {
                 toValue: 1,
@@ -35,7 +34,7 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
                 useNativeDriver: true,
             }).start();
         }
-    }, [state.isFinishing, state.sessionStatus]);
+    }, [state.isDismissing, state.isActive]);
 
     // Update progress bar smoothly
     useEffect(() => {

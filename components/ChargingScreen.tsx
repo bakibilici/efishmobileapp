@@ -123,7 +123,7 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
             backgroundColor: interpolateColor(
                 dismissBgAnim.value,
                 [0, 1],
-                ['transparent', '#2CDD9D']
+                [colors.background, '#2CDD9D']
             ),
             opacity: dismissOpacityAnim.value
         };
