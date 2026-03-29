@@ -1,10 +1,8 @@
 import {
-  getProfile,
-  logout as logoutApi,
-  setAuthToken,
-  UserProfile,
-} from "@/services/api";
-import { clearTokens, getAccessToken } from "@/services/tokenStorage";
+  DemoUserProfile,
+  LocalUserStorage,
+} from "@/services/localUserStorage";
+import { clearTokens } from "@/services/tokenStorage";
 import * as Sentry from "@sentry/react-native";
 import { useRouter } from "expo-router";
 import React, {
@@ -16,9 +14,9 @@ import React, {
 } from "react";
 
 type UserContextType = {
-  user: UserProfile | null;
+  user: DemoUserProfile | null;
   isLoading: boolean;
-  setUser: (user: UserProfile | null) => void;
+  setUser: (user: DemoUserProfile | null) => void;
   refreshProfile: () => Promise<void>;
   logout: () => Promise<void>;
 };
@@ -26,54 +24,50 @@ type UserContextType = {
 const UserContext = createContext<UserContextType | undefined>(undefined);
 
 export const UserProvider = ({ children }: { children: React.ReactNode }) => {
-  const [user, setUserState] = useState<UserProfile | null>(null);
+  const [user, setUserState] = useState<DemoUserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const hasInitialized = useRef(false);
   const router = useRouter();
 
   // Wrapper for setUser that also marks as initialized
-  const setUser = (newUser: UserProfile | null) => {
+  const setUser = (newUser: DemoUserProfile | null) => {
     console.log("setUser called with:", newUser?.id);
     setUserState(newUser);
+    if (newUser) {
+      Sentry.setUser({
+        id: String(newUser.id),
+        username: newUser.username,
+      });
+      void LocalUserStorage.setCurrentUserId(newUser.id);
+    } else {
+      Sentry.setUser(null);
+    }
     hasInitialized.current = true;
   };
 
   const fetchProfile = async () => {
     try {
-      const token = await getAccessToken();
-      console.log("fetchProfile - token exists:", !!token);
+      const profileData = await LocalUserStorage.getCurrentUser();
+      console.log("fetchProfile - local profile exists:", !!profileData);
 
-      // Set token in API memory immediately
-      setAuthToken(token);
-
-      if (token) {
-        const profileData = await getProfile();
-        console.log("fetchProfile - profileData:", profileData);
+      if (profileData) {
         setUserState(profileData);
 
-        // Set user in Sentry
-        if (profileData) {
-          Sentry.setUser({
-            id: String(profileData.id),
-            email: profileData.email,
-            username: profileData.username,
-          });
-        }
+        Sentry.setUser({
+          id: String(profileData.id),
+          username: profileData.username,
+        });
 
         hasInitialized.current = true;
       } else {
-        console.log("fetchProfile - no token, setting user to null");
+        console.log("fetchProfile - no local user, setting user to null");
         setUserState(null);
         Sentry.setUser(null);
       }
     } catch (error: any) {
       console.log("Failed to fetch profile", error);
-      // Only clear user on 401 (unauthorized), not on 404 or other errors
-      if (error.response?.status === 401) {
-        setUserState(null);
-        Sentry.setUser(null);
-      }
-      // For 404 and other errors, DON'T touch user state if already set from login/register
+      setUserState(null);
+      Sentry.setUser(null);
     } finally {
       setIsLoading(false);
       hasInitialized.current = true;
@@ -93,12 +87,7 @@ export const UserProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const logout = async () => {
-    try {
-      await logoutApi();
-    } catch (error) {
-      console.log("Logout API call failed", error);
-    }
-    await clearTokens();
+    await LocalUserStorage.clearCurrentUserId();
     await clearTokens();
     setUser(null);
     Sentry.setUser(null);

@@ -1,398 +1,394 @@
-import { useTheme } from "@/context/ThemeContext";
-import { Ionicons } from "@expo/vector-icons";
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import Ionicons from "@expo/vector-icons/Ionicons";
+import { useFocusEffect, useRouter } from "expo-router";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
-  Animated,
-  Easing,
   FlatList,
-  Keyboard,
-  LayoutAnimation,
-  Platform,
   Pressable,
+  RefreshControl,
   SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
-  UIManager,
-  View
+  View,
 } from "react-native";
 
-// Enable LayoutAnimation on Android
-if (Platform.OS === "android" && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
+import {
+  DriveSessionState,
+  DriveSessionStore,
+} from "@/services/DriveSessionStore";
+import {
+  DriveSessionHistoryStorage,
+  StoredDriveSessionRecord,
+} from "@/services/driveSessionHistory";
+import { useTheme } from "@/context/ThemeContext";
 
-type StationType = "AC" | "DC" | "HPC";
+const formatRelativeTime = (timestamp: number) => {
+  const now = Date.now();
+  const diffMs = Math.max(0, now - timestamp);
+  const minutes = Math.floor(diffMs / 60000);
 
-const typeColors: Record<StationType, string> = {
-  HPC: "#7C4DFF",
-  DC: "#FF8A1F",
-  AC: "#4BACE4",
-};
+  if (minutes < 1) return "Az önce";
+  if (minutes < 60) return `${minutes} dk önce`;
 
-const typeLightningCount: Record<StationType, number> = {
-  AC: 1,
-  DC: 2,
-  HPC: 3,
-};
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} sa önce`;
 
-// Mock data generator
-const generateMockSessions = (startId: number, count: number) => {
-  const stations = [
-    "Metro Market Dudullu",
-    "Meydan AVM Ümraniye",
-    "Kalamış Park",
-    "Zorlu Center",
-    "Akasya AVM",
-    "İstinyePark",
-    "Cevahir AVM",
-    "Kanyon AVM",
-    "Trump Towers",
-    "Maslak 1453",
-    "Emaar Square",
-    "Vadistanbul",
-  ];
-  const types: StationType[] = ["AC", "DC", "HPC"];
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} gün önce`;
 
-  return Array.from({ length: count }, (_, i) => {
-    const id = startId + i;
-    const type = types[Math.floor(Math.random() * types.length)];
-    const energy = Math.floor(Math.random() * 50) + 5;
-    const cost = Math.floor(energy * 8.2);
-    const daysAgo = Math.floor(Math.random() * 60);
-    const date = new Date();
-    date.setDate(date.getDate() - daysAgo);
-
-    return {
-      id: String(id),
-      station: stations[Math.floor(Math.random() * stations.length)],
-      date: date.toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      }),
-      energy: `${energy} kWh`,
-      cost: `₺${cost}`,
-      type,
-      typeColor: typeColors[type],
-      duration: `${Math.floor(Math.random() * 90) + 10} min`,
-      connector: `Connector ${Math.floor(Math.random() * 4) + 1}`,
-    };
+  return new Date(timestamp).toLocaleDateString("tr-TR", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
   });
 };
 
-const INITIAL_COUNT = 15;
-const LOAD_MORE_COUNT = 8;
+const formatDuration = (durationSeconds: number | null) => {
+  if (!durationSeconds || durationSeconds <= 0) return "--";
+  const totalMinutes = Math.round(durationSeconds / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (!hours) return `${minutes} dk`;
+  return `${hours} sa ${minutes} dk`;
+};
+
+const formatDistance = (distanceKm: number | null) => {
+  if (distanceKm == null || Number.isNaN(distanceKm)) return "--";
+  return `${distanceKm.toFixed(distanceKm >= 100 ? 0 : 1)} km`;
+};
 
 export default function SessionsScreen() {
+  const router = useRouter();
   const { colors, themeScheme } = useTheme();
-  const [sessions] = useState(() => generateMockSessions(1, INITIAL_COUNT));
-  const [displayedSessions, setDisplayedSessions] = useState(() =>
-    sessions.slice(0, 10)
-  );
-  const [loading, setLoading] = useState(false);
+  const isDark = themeScheme === "dark";
+
+  const [sessions, setSessions] = useState<StoredDriveSessionRecord[]>([]);
   const [search, setSearch] = useState("");
-  const [typeFilters, setTypeFilters] = useState<StationType[]>([
-    "AC",
-    "DC",
-    "HPC",
-  ]);
-  const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const rotateAnim = useRef(new Animated.Value(0)).current;
-  const heightAnim = useRef(new Animated.Value(0)).current;
-  const opacityAnim = useRef(new Animated.Value(0)).current;
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [activeSessionId, setActiveSessionId] = useState(
+    DriveSessionStore.getContext()?.sessionId ?? null,
+  );
 
-  const toggleFilters = () => {
-    const toValue = filtersExpanded ? 0 : 1;
+  const loadSessions = useCallback(
+    async (mode: "initial" | "refresh" = "initial") => {
+      if (mode === "refresh") {
+        setIsRefreshing(true);
+      } else {
+        setIsLoading(true);
+      }
 
-    Animated.parallel([
-      Animated.spring(rotateAnim, {
-        toValue,
-        useNativeDriver: true,
-        friction: 8,
-      }),
-      Animated.timing(heightAnim, {
-        toValue,
-        duration: 300,
-        easing: Easing.bezier(0.4, 0, 0.2, 1),
-        useNativeDriver: false,
-      }),
-      Animated.timing(opacityAnim, {
-        toValue,
-        duration: 250,
-        useNativeDriver: false,
-      }),
-    ]).start();
+      try {
+        const rows = await DriveSessionHistoryStorage.listSessions();
+        setSessions(rows);
+      } finally {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
+    },
+    [],
+  );
 
-    setFiltersExpanded((prev) => !prev);
-  };
+  useEffect(() => {
+    const unsubscribe = DriveSessionStore.onStateChange(() => {
+      setActiveSessionId(DriveSessionStore.getContext()?.sessionId ?? null);
+    });
 
-  const chevronRotation = rotateAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ["0deg", "180deg"],
-  });
+    return unsubscribe;
+  }, []);
 
-  const filterContentHeight = heightAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 140],
-  });
-
-  const filterContentOpacity = opacityAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, 1],
-  });
-
-  const toggleType = (type: StationType) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setTypeFilters((prev) =>
-      prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
-    );
-  };
+  useFocusEffect(
+    useCallback(() => {
+      void loadSessions();
+    }, [loadSessions]),
+  );
 
   const filteredSessions = useMemo(() => {
-    return displayedSessions.filter((session) => {
-      const matchesType = typeFilters.includes(session.type);
-      const matchesSearch = session.station
-        .toLowerCase()
-        .includes(search.toLowerCase().trim());
-      return matchesType && matchesSearch;
+    const normalizedQuery = search.trim().toLowerCase();
+    if (!normalizedQuery) return sessions;
+
+    return sessions.filter((session) => {
+      const haystack = [
+        session.title,
+        session.originName || "",
+        session.destinationName || "",
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(normalizedQuery);
     });
-  }, [displayedSessions, typeFilters, search]);
+  }, [search, sessions]);
 
-  const loadMore = useCallback(() => {
-    if (loading || displayedSessions.length >= sessions.length) return;
-    setLoading(true);
-
-    setTimeout(() => {
-      const nextBatch = sessions.slice(
-        displayedSessions.length,
-        displayedSessions.length + LOAD_MORE_COUNT
-      );
-      setDisplayedSessions((prev) => [...prev, ...nextBatch]);
-      setLoading(false);
-    }, 600);
-  }, [loading, displayedSessions.length, sessions]);
+  const handleOpenSession = useCallback(
+    (session: StoredDriveSessionRecord, reconnectVoice: boolean) => {
+      DriveSessionStore.restoreSession(session, { reconnectVoice });
+      router.navigate("/(tabs)/mainpage");
+    },
+    [router],
+  );
 
   const renderSession = useCallback(
-    ({ item }: { item: (typeof sessions)[0] }) => {
-      const isDark = themeScheme === "dark";
+    ({ item }: { item: StoredDriveSessionRecord }) => {
+      const isCurrentSession =
+        activeSessionId === item.sessionId &&
+        DriveSessionStore.getState() !== DriveSessionState.IDLE;
+      const statusLabel = isCurrentSession
+        ? "Açık oturum"
+        : item.endedAt
+          ? "Kaydedildi"
+          : "Hazır";
+      const statusColor = isCurrentSession
+        ? colors.primary
+        : item.endedAt
+          ? "#34C759"
+          : "#0A84FF";
+      const routeLabel =
+        item.originName && item.destinationName
+          ? `${item.originName} → ${item.destinationName}`
+          : item.title;
+
       return (
-        <Pressable
+        <View
           style={[
             styles.card,
             {
               backgroundColor: colors.card,
-              borderColor: isDark ? "#2C2C2E" : "transparent",
-              borderWidth: isDark ? 1 : 0,
-              shadowOpacity: isDark ? 0 : 0.05, // Hide shadow in dark mode for cleaner look
+              borderColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(15,35,28,0.06)",
+              shadowOpacity: isDark ? 0 : 0.08,
             },
           ]}
         >
-          {/* Left Accent Bar */}
-          <View style={[styles.accentBar, { backgroundColor: item.typeColor }]} />
-
-          <View style={styles.cardContent}>
-            {/* Header Row */}
-            <View style={styles.cardHeader}>
-              <View style={styles.stationInfo}>
-                <Text style={[styles.station, { color: colors.text }]} numberOfLines={1}>
-                  {item.station}
-                </Text>
-                <View style={styles.metaRow}>
-                  <Ionicons name="calendar-outline" size={12} color={colors.textSecondary} />
-                  <Text style={[styles.metaText, { color: colors.textSecondary }]}>{item.date}</Text>
-                  <Text style={styles.metaDot}>•</Text>
-                  <Text style={[styles.metaText, { color: colors.textSecondary }]}>{item.connector}</Text>
-                </View>
-              </View>
-
-              {/* Type Badge with overlapping icons */}
+          <View style={styles.cardHeader}>
+            <View style={styles.cardTitleStack}>
               <View
-                style={[styles.typeBadge, { backgroundColor: item.typeColor + "15" }]} // Lower opacity background
+                style={[
+                  styles.statusChip,
+                  { backgroundColor: `${statusColor}18` },
+                ]}
               >
-                <View style={styles.lightningContainer}>
-                  {Array.from({
-                    length: typeLightningCount[item.type],
-                  }).map((_, idx) => (
-                    <View
-                      key={idx}
-                      style={{
-                        marginLeft: idx > 0 ? -7 : 0,
-                        zIndex: idx,
-                      }}
-                    >
-                      <Ionicons name="flash" size={12} color={item.typeColor} />
-                    </View>
-                  ))}
-                </View>
-                <Text style={[styles.typeText, { color: item.typeColor }]}>{item.type}</Text>
+                <View
+                  style={[styles.statusChipDot, { backgroundColor: statusColor }]}
+                />
+                <Text style={[styles.statusChipText, { color: statusColor }]}>
+                  {statusLabel}
+                </Text>
               </View>
+              <Text
+                style={[styles.cardTitle, { color: colors.text }]}
+                numberOfLines={1}
+              >
+                {item.destinationName || item.title}
+              </Text>
+              <Text
+                style={[styles.cardSubtitle, { color: colors.textSecondary }]}
+                numberOfLines={2}
+              >
+                {routeLabel}
+              </Text>
             </View>
 
-            {/* Stats Row */}
-            <View style={styles.cardStats}>
-              <View style={styles.statsLeft}>
-                <View style={styles.stat}>
-                  <View style={[styles.statIcon, { backgroundColor: isDark ? "#1C1C1E" : "#E8F9F1" }]}>
-                    <Ionicons name="flash" size={14} color="#0093C9" />
-                  </View>
-                  <Text style={[styles.statValue, { color: colors.text }]}>{item.energy}</Text>
-                </View>
-                <View style={styles.stat}>
-                  <View style={[styles.statIcon, { backgroundColor: isDark ? "#1C1C1E" : "#F0F0F5" }]}>
-                    <Ionicons name="time" size={14} color={colors.textSecondary} />
-                  </View>
-                  <Text style={[styles.statValue, { color: colors.text }]}>{item.duration}</Text>
-                </View>
-              </View>
-              <Text style={styles.cost}>{item.cost}</Text>
-            </View>
-          </View>
-        </Pressable>
-      );
-    },
-    [colors, themeScheme]
-  );
-
-  const renderFooter = useCallback(() => {
-    if (!loading) return null;
-    return (
-      <View style={styles.footer}>
-        <ActivityIndicator size="small" color="#0093C9" />
-      </View>
-    );
-  }, [loading]);
-
-
-  return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
-      <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss}>
-        <View style={[styles.header, { backgroundColor: colors.background }]}>
-          <Text style={[styles.title, { color: colors.text }]}>Sessions</Text>
-          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>Your charging history</Text>
-        </View>
-
-        {/* Filter Section - Outside FlatList to prevent keyboard issues */}
-        <View style={styles.filterWrapper}>
-          <View style={[styles.filtersSection, { backgroundColor: colors.card, borderColor: colors.border, shadowColor: colors.shadow }]}>
-            {/* Collapsible Header */}
-            <Pressable style={styles.filterToggle} onPress={toggleFilters}>
-              <View style={styles.filterToggleLeft}>
-                <Ionicons name="options-outline" size={18} color={colors.text} />
-                <Text style={[styles.filterToggleText, { color: colors.text }]}>Filters</Text>
-                {(typeFilters.length < 3 || search.length > 0) && (
-                  <View style={styles.filterBadge}>
-                    <Text style={styles.filterBadgeText}>
-                      {3 - typeFilters.length + (search.length > 0 ? 1 : 0)}
-                    </Text>
-                  </View>
-                )}
-              </View>
-              <Animated.View style={{ transform: [{ rotate: chevronRotation }] }}>
-                <Ionicons name="chevron-down" size={20} color="#587A99" />
-              </Animated.View>
-            </Pressable>
-
-            {/* Collapsible Content */}
-            <Animated.View
+            <View
               style={[
-                styles.filterContent,
+                styles.routeGlyph,
                 {
-                  height: filterContentHeight,
-                  opacity: filterContentOpacity,
-                  overflow: "hidden",
+                  backgroundColor: isDark
+                    ? "rgba(10,132,255,0.14)"
+                    : "rgba(10,132,255,0.08)",
                 },
               ]}
             >
-              {/* Search */}
-              <View style={[styles.searchContainer, { backgroundColor: colors.inputBackground }]}>
-                <Ionicons name="search" size={18} color={colors.textTertiary} />
-                <TextInput
-                  style={[styles.searchInput, { color: colors.text }]}
-                  placeholder="Search station..."
-                  placeholderTextColor={colors.textTertiary}
-                  value={search}
-                  onChangeText={setSearch}
-                />
-                {search.length > 0 && (
-                  <Pressable onPress={() => setSearch("")}>
-                    <Ionicons name="close-circle" size={18} color="#C7C7CC" />
-                  </Pressable>
-                )}
-              </View>
+              <Ionicons name="map-outline" size={18} color="#0A84FF" />
+            </View>
+          </View>
 
-              {/* Type Chips */}
-              <View style={styles.typeChips}>
-                {(["AC", "DC", "HPC"] as StationType[]).map((type) => {
-                  const active = typeFilters.includes(type);
-                  const color = typeColors[type];
-                  return (
-                    <Pressable
-                      key={type}
-                      onPress={() => toggleType(type)}
-                      style={[
-                        styles.chip,
-                        {
-                          backgroundColor: active ? color : colors.backgroundSecondary,
-                          borderColor: active ? color : colors.border,
-                        },
-                      ]}
-                    >
-                      <View style={styles.chipIcons}>
-                        {Array.from({ length: typeLightningCount[type] }).map(
-                          (_, idx) => (
-                            <View
-                              key={idx}
-                              style={{
-                                marginLeft: idx > 0 ? -7 : 0,
-                                zIndex: idx,
-                              }}
-                            >
-                              <Ionicons
-                                name="flash"
-                                size={14}
-                                color={active ? "#fff" : color}
-                              />
-                            </View>
-                          )
-                        )}
-                      </View>
-                      <Text
-                        style={[
-                          styles.chipText,
-                          { color: active ? "#fff" : colors.text },
-                        ]}
-                      >
-                        {type}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </Animated.View>
+          <View style={styles.metricRow}>
+            <View
+              style={[
+                styles.metricPill,
+                { backgroundColor: colors.backgroundSecondary },
+              ]}
+            >
+              <Ionicons name="navigate-outline" size={15} color={colors.primary} />
+              <Text style={[styles.metricText, { color: colors.text }]}>
+                {formatDistance(item.distanceKm)}
+              </Text>
+            </View>
+
+            <View
+              style={[
+                styles.metricPill,
+                { backgroundColor: colors.backgroundSecondary },
+              ]}
+            >
+              <Ionicons name="time-outline" size={15} color={colors.textSecondary} />
+              <Text style={[styles.metricText, { color: colors.text }]}>
+                {formatDuration(item.durationSeconds)}
+              </Text>
+            </View>
+
+            <View
+              style={[
+                styles.metricPill,
+                { backgroundColor: colors.backgroundSecondary },
+              ]}
+            >
+              <Ionicons name="flash-outline" size={15} color="#FF9F0A" />
+              <Text style={[styles.metricText, { color: colors.text }]}>
+                {item.stationCount ?? 0} durak
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.footerRow}>
+            <Text style={[styles.updatedAtText, { color: colors.textSecondary }]}>
+              Son güncelleme: {formatRelativeTime(item.updatedAt)}
+            </Text>
+
+            <View style={styles.actionRow}>
+              <Pressable
+                onPress={() => handleOpenSession(item, false)}
+                style={[
+                  styles.secondaryAction,
+                  {
+                    backgroundColor: colors.backgroundSecondary,
+                    borderColor: colors.border,
+                  },
+                ]}
+              >
+                <Ionicons name="navigate-circle-outline" size={18} color={colors.text} />
+                <Text
+                  style={[styles.secondaryActionText, { color: colors.text }]}
+                >
+                  Rotayı Aç
+                </Text>
+              </Pressable>
+
+              <Pressable
+                onPress={() => handleOpenSession(item, true)}
+                style={[
+                  styles.primaryAction,
+                  { backgroundColor: colors.primary },
+                ]}
+              >
+                <Ionicons name="mic-outline" size={18} color="#FFFFFF" />
+                <Text style={styles.primaryActionText}>Atlas ile Bağlan</Text>
+              </Pressable>
+            </View>
           </View>
         </View>
+      );
+    },
+    [activeSessionId, colors, handleOpenSession, isDark],
+  );
 
-        <FlatList
-          data={filteredSessions}
-          keyExtractor={(item) => item.id}
-          renderItem={renderSession}
-          contentContainerStyle={styles.list}
-          onEndReached={loadMore}
-          onEndReachedThreshold={0.3}
-          ListFooterComponent={renderFooter}
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Ionicons name="search-outline" size={48} color={colors.textTertiary} />
-              <Text style={[styles.emptyText, { color: colors.textSecondary }]}>No sessions found</Text>
+  if (isLoading) {
+    return (
+      <SafeAreaView
+        style={[styles.safeArea, { backgroundColor: colors.background }]}
+      >
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="small" color={colors.primary} />
+          <Text style={[styles.loadingText, { color: colors.textSecondary }]}>
+            Kaydedilen oturumlar yükleniyor...
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: colors.background }]}>
+      <FlatList
+        data={filteredSessions}
+        keyExtractor={(item) => item.sessionId}
+        renderItem={renderSession}
+        contentContainerStyle={styles.listContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={() => void loadSessions("refresh")}
+            tintColor={colors.primary}
+          />
+        }
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        ListHeaderComponent={
+          <View style={styles.headerBlock}>
+            <View style={styles.headerTopRow}>
+              <Pressable
+                onPress={() => router.navigate("/(tabs)/mainpage")}
+                style={[
+                  styles.backButton,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                ]}
+              >
+                <Ionicons name="chevron-back" size={22} color={colors.text} />
+              </Pressable>
+
+              <View style={styles.headerTextBlock}>
+                <Text style={[styles.headerTitle, { color: colors.text }]}>
+                  Atlas Sessions
+                </Text>
+                <Text
+                  style={[styles.headerSubtitle, { color: colors.textSecondary }]}
+                >
+                  Kaydettiğin rotalara geri dön ve Atlas ile aynı bağlamda yeniden başla.
+                </Text>
+              </View>
             </View>
-          }
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-        />
-      </Pressable>
+
+            <View
+              style={[
+                styles.searchShell,
+                {
+                  backgroundColor: colors.card,
+                  borderColor: colors.border,
+                  shadowColor: colors.shadow,
+                },
+              ]}
+            >
+              <Ionicons name="search-outline" size={18} color={colors.textTertiary} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Hedef veya rota ara"
+                placeholderTextColor={colors.textTertiary}
+                style={[styles.searchInput, { color: colors.text }]}
+              />
+              {search.length > 0 && (
+                <Pressable onPress={() => setSearch("")}>
+                  <Ionicons name="close-circle" size={18} color={colors.textTertiary} />
+                </Pressable>
+              )}
+            </View>
+          </View>
+        }
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <View
+              style={[
+                styles.emptyIconWrap,
+                {
+                  backgroundColor: isDark
+                    ? "rgba(10,132,255,0.16)"
+                    : "rgba(10,132,255,0.08)",
+                },
+              ]}
+            >
+              <Ionicons name="albums-outline" size={28} color="#0A84FF" />
+            </View>
+            <Text style={[styles.emptyTitle, { color: colors.text }]}>
+              Henüz kaydedilmiş rota yok
+            </Text>
+            <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+              Atlas ile rota oluşturduğunuzda oturum burada görünecek.
+            </Text>
+          </View>
+        }
+      />
     </SafeAreaView>
   );
 }
@@ -400,223 +396,203 @@ export default function SessionsScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: "#FFFFFF",
   },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 8,
-    backgroundColor: "#FFFFFF",
+  loadingContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
   },
-  filterWrapper: {
-    paddingHorizontal: 16,
+  loadingText: {
+    fontSize: 14,
+    fontWeight: "500",
   },
-  title: {
-    fontSize: 32,
-    fontWeight: "800",
-    color: "#0f231c",
-  },
-  subtitle: {
-    fontSize: 15,
-    color: "#587A99",
-    marginTop: 2,
-  },
-  list: {
+  listContent: {
     paddingHorizontal: 16,
     paddingBottom: 120,
   },
-
-  // Filters Section
-  filtersSection: {
-    backgroundColor: "#FFFFFF",
-    marginBottom: 16,
-    borderRadius: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 4,
-    borderWidth: 0.5,
-    borderColor: "#E0E0E0",
+  headerBlock: {
+    paddingTop: 8,
+    paddingBottom: 18,
+    gap: 18,
   },
-  filterToggle: {
+  headerTopRow: {
     flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-  },
-  filterToggleLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  filterToggleText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#0f231c",
-  },
-  filterBadge: {
-    backgroundColor: "#0093C9",
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-  },
-  filterBadgeText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#fff",
-  },
-  filterContent: {
-    paddingHorizontal: 16,
+    alignItems: "flex-start",
     gap: 14,
   },
-  searchContainer: {
+  backButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+  },
+  headerTextBlock: {
+    flex: 1,
+    gap: 4,
+  },
+  headerTitle: {
+    fontSize: 30,
+    fontWeight: "800",
+    letterSpacing: -0.6,
+  },
+  headerSubtitle: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  searchShell: {
+    minHeight: 52,
+    borderRadius: 18,
+    borderWidth: 1,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#F8F8F8",
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
     gap: 10,
+    paddingHorizontal: 16,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+    elevation: 4,
   },
   searchInput: {
     flex: 1,
     fontSize: 16,
-    color: "#0f231c",
+    fontWeight: "500",
   },
-  typeChips: {
-    flexDirection: "row",
-    gap: 10,
-  },
-  chip: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 0,
-    gap: 6,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  chipIcons: {
-    flexDirection: "row",
-  },
-  chipText: {
-    fontSize: 14,
-    fontWeight: "700",
-  },
-
-  // Session Card
   card: {
-    flexDirection: "row",
-    backgroundColor: "#FAFAFA",
-    borderRadius: 16,
-    marginBottom: 10,
-    overflow: "hidden",
-  },
-  accentBar: {
-    width: 4,
-  },
-  cardContent: {
-    flex: 1,
-    padding: 14,
-    gap: 12,
+    borderRadius: 26,
+    borderWidth: 1,
+    padding: 18,
+    marginBottom: 14,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 12 },
+    shadowRadius: 28,
+    elevation: 6,
   },
   cardHeader: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "flex-start",
+    gap: 14,
   },
-  stationInfo: {
+  cardTitleStack: {
     flex: 1,
-    marginRight: 10,
+    gap: 8,
   },
-  station: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#0f231c",
-  },
-  metaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 4,
-    gap: 4,
-  },
-  metaText: {
-    fontSize: 12,
-    color: "#587A99",
-  },
-  metaDot: {
-    color: "#C7C7CC",
-    fontSize: 10,
-  },
-  typeBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
-    gap: 4,
-  },
-  lightningContainer: {
-    flexDirection: "row",
-  },
-  typeText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "#fff",
-  },
-  cardStats: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  statsLeft: {
-    flexDirection: "row",
-    gap: 16,
-  },
-  stat: {
+  statusChip: {
+    alignSelf: "flex-start",
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
   },
-  statIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    backgroundColor: "#E8F9F1",
+  statusChipDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  statusChipText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  cardTitle: {
+    fontSize: 22,
+    fontWeight: "800",
+    letterSpacing: -0.4,
+  },
+  cardSubtitle: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  routeGlyph: {
+    width: 42,
+    height: 42,
+    borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
   },
-  statValue: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#0f231c",
+  metricRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 16,
   },
-  cost: {
-    fontSize: 20,
-    fontWeight: "800",
-    color: "#0093C9",
-  },
-  footer: {
-    paddingVertical: 20,
+  metricPill: {
+    flexDirection: "row",
     alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 999,
+  },
+  metricText: {
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  footerRow: {
+    marginTop: 18,
+    gap: 14,
+  },
+  updatedAtText: {
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  actionRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  secondaryAction: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  secondaryActionText: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  primaryAction: {
+    flex: 1.2,
+    minHeight: 48,
+    borderRadius: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  primaryActionText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "800",
   },
   emptyState: {
     alignItems: "center",
     justifyContent: "center",
-    paddingVertical: 60,
+    paddingTop: 72,
     gap: 12,
   },
-  emptyText: {
-    fontSize: 16,
-    color: "#587A99",
+  emptyIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 24,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: "center",
+    maxWidth: 280,
   },
 });
-
-

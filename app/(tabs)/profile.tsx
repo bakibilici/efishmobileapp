@@ -1,9 +1,15 @@
+import {
+  PREDEFINED_USER_INTERESTS,
+  USER_INTERESTS_NOTE,
+} from "@/constants/userInterests";
 import { useTheme } from "@/context/ThemeContext";
 import { useUser } from "@/context/UserContext";
+import { DriveSessionHistoryStorage } from "@/services/driveSessionHistory";
+import { LocalUserStorage } from "@/services/localUserStorage";
 import { Ionicons } from "@expo/vector-icons";
 import * as Sentry from "@sentry/react-native";
-import { useRouter } from "expo-router";
-import React, { useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   Modal,
@@ -12,51 +18,129 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableWithoutFeedback,
   View,
 } from "react-native";
-import { ActivityState, ActivityStateMachine } from "@/services/ActivityStateMachine";
-import { CarModeModal } from "@/components/CarModeModal";
-
-// A global instance for demonstration purposes only!
-// Note: We set debounceMs to 0 here so the button triggers instantly.
-// Otherwise, the FSM would wait 5 seconds to ensure you're actually in a car!
-const demoFsm = new ActivityStateMachine({ debounceMs: 0 });
 
 export default function ProfileScreen() {
   const router = useRouter();
-  const { user, logout } = useUser();
+  const { user, setUser, logout } = useUser();
   const { colors, themePreference, setThemePreference } = useTheme();
 
+  const [sessionCount, setSessionCount] = useState(0);
+  const [profileModalVisible, setProfileModalVisible] = useState(false);
+  const [interestsModalVisible, setInterestsModalVisible] = useState(false);
+  const [firstNameDraft, setFirstNameDraft] = useState("");
+  const [lastNameDraft, setLastNameDraft] = useState("");
+  const [phoneDraft, setPhoneDraft] = useState("");
+  const [interestDraft, setInterestDraft] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!user) return;
+    setFirstNameDraft(user.first_name);
+    setLastNameDraft(user.last_name);
+    setInterestDraft(user.interests || []);
+    setPhoneDraft("");
+  }, [user]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let isMounted = true;
+
+      const loadStats = async () => {
+        const sessions = await DriveSessionHistoryStorage.listSessions();
+        if (!isMounted) return;
+        setSessionCount(sessions.length);
+      };
+
+      void loadStats();
+
+      return () => {
+        isMounted = false;
+      };
+    }, []),
+  );
+
   const handleLogout = async () => {
-    Alert.alert("Log Out", "Are you sure you want to log out?", [
+    Alert.alert("Cikis yapilsin mi?", "Demo oturumu kapatilacak.", [
+      { text: "Vazgec", style: "cancel" },
       {
-        text: "Cancel",
-        style: "cancel",
-      },
-      {
-        text: "Log Out",
+        text: "Cikis Yap",
         style: "destructive",
         onPress: async () => {
-          try {
-            await logout();
-          } catch (error) {
-            console.error("Logout failed", error);
-          }
+          await logout();
         },
       },
     ]);
   };
 
+  const handleSaveProfile = async () => {
+    if (!user) return;
+    if (!firstNameDraft.trim() || !lastNameDraft.trim()) {
+      Alert.alert("Eksik bilgi", "Ad ve soyad alanlarini doldurun.");
+      return;
+    }
+
+    const cleanedPhone = phoneDraft.replace(/\D/g, "");
+    if (cleanedPhone.length > 0 && cleanedPhone.length !== 10) {
+      Alert.alert("Gecersiz numara", "Telefon numarasi 10 haneli olmali.");
+      return;
+    }
+
+    try {
+      const updatedUser = await LocalUserStorage.updateUser(user.id, {
+        firstName: firstNameDraft,
+        lastName: lastNameDraft,
+        phoneNumber: cleanedPhone.length === 10 ? cleanedPhone : undefined,
+        phoneCode: user.phone_code,
+        interests: user.interests,
+      });
+
+      if (updatedUser) {
+        setUser(updatedUser);
+      }
+      setProfileModalVisible(false);
+      setPhoneDraft("");
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Hata", "Profil guncellenemedi.");
+    }
+  };
+
+  const handleSaveInterests = async () => {
+    if (!user) return;
+
+    try {
+      const updatedUser = await LocalUserStorage.updateUser(user.id, {
+        firstName: user.first_name,
+        lastName: user.last_name,
+        phoneCode: user.phone_code,
+        interests: interestDraft,
+      });
+
+      if (updatedUser) {
+        setUser(updatedUser);
+      }
+      setInterestsModalVisible(false);
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Hata", "İlgi alanları güncellenemedi.");
+    }
+  };
+
+  const toggleInterest = (interest: string) => {
+    setInterestDraft((current) =>
+      current.includes(interest)
+        ? current.filter((item) => item !== interest)
+        : [...current, interest],
+    );
+  };
+
   const displayName = user
     ? `${user.first_name} ${user.last_name}`
     : "Guest User";
-  const displayEmail = user
-    ? user.email ||
-    (user.phone_number?.length === 10
-      ? `+${user.phone_code} (${user.phone_number.slice(0, 3)}) ${user.phone_number.slice(3, 6)} ${user.phone_number.slice(6)}`
-      : `+${user.phone_code} ${user.phone_number}`)
-    : "guest@efish.app";
+  const displayPhone = user ? user.phone_number : "Demo user";
 
   return (
     <SafeAreaView
@@ -72,85 +156,28 @@ export default function ProfileScreen() {
             { backgroundColor: colors.backgroundSecondary },
           ]}
         >
-          {user ? (
-            <>
-              <View style={styles.avatarContainer}>
-                <View
-                  style={[
-                    styles.avatarGradient,
-                    { backgroundColor: colors.primary },
-                  ]}
-                >
-                  <Ionicons
-                    name="person"
-                    size={36}
-                    color={colors.primaryText}
-                  />
-                </View>
-                <View
-                  style={[
-                    styles.editBadge,
-                    {
-                      backgroundColor: colors.icon,
-                      borderColor: colors.backgroundSecondary,
-                    },
-                  ]}
-                >
-                  <Ionicons name="pencil" size={12} color="#fff" />
-                </View>
-              </View>
-              <Text style={[styles.name, { color: colors.text }]}>
-                {displayName}
-              </Text>
-              <Text style={[styles.email, { color: colors.textSecondary }]}>
-                {displayEmail}
-              </Text>
-            </>
-          ) : (
+          <View style={styles.avatarContainer}>
             <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-                width: "100%",
-                paddingHorizontal: 10,
-                marginBottom: 10,
-              }}
+              style={[
+                styles.avatarGradient,
+                { backgroundColor: colors.primary },
+              ]}
             >
-              <Text style={[styles.name, { color: colors.text }]}>
-                Guest User
-              </Text>
-              <Pressable
-                onPress={() => {
-                  if (router.canDismiss()) {
-                    router.dismissAll();
-                  }
-                  router.replace("/");
-                }}
-                style={{
-                  backgroundColor: colors.primary,
-                  paddingHorizontal: 20,
-                  paddingVertical: 8,
-                  borderRadius: 20,
-                }}
-              >
-                <Text
-                  style={{
-                    color: colors.primaryText,
-                    fontWeight: "700",
-                    fontSize: 13,
-                  }}
-                >
-                  Log In
-                </Text>
-              </Pressable>
+              <Ionicons name="person" size={36} color={colors.primaryText} />
             </View>
-          )}
+          </View>
+
+          <Text style={[styles.name, { color: colors.text }]}>
+            {displayName}
+          </Text>
+          <Text style={[styles.email, { color: colors.textSecondary }]}>
+            {displayPhone}
+          </Text>
 
           <View style={[styles.statsRow, { borderTopColor: colors.border }]}>
             <View style={styles.statItem}>
               <Text style={[styles.statNumber, { color: colors.text }]}>
-                24
+                {sessionCount}
               </Text>
               <Text style={[styles.statLabel, { color: colors.textTertiary }]}>
                 Sessions
@@ -161,10 +188,10 @@ export default function ProfileScreen() {
             />
             <View style={styles.statItem}>
               <Text style={[styles.statNumber, { color: colors.text }]}>
-                342
+                {user?.interests?.length ?? 0}
               </Text>
               <Text style={[styles.statLabel, { color: colors.textTertiary }]}>
-                kWh
+                Interests
               </Text>
             </View>
             <View
@@ -172,40 +199,16 @@ export default function ProfileScreen() {
             />
             <View style={styles.statItem}>
               <Text style={[styles.statNumber, { color: colors.text }]}>
-                ₺2.8k
+                AI
               </Text>
               <Text style={[styles.statLabel, { color: colors.textTertiary }]}>
-                Spent
+                Ready
               </Text>
             </View>
           </View>
         </View>
 
-        <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
-          Developer Tools
-        </Text>
-        <View style={[styles.group, { backgroundColor: colors.card }]}>
-          <SettingsItem
-            icon="speedometer-outline"
-            title="Simulate Car Drive"
-            subtitle="Triggers FSM Navigation Modal"
-            color="#f43f5e"
-            isFirst
-            isLast
-            onPress={() => {
-              // Force reset to IDLE first, then transition to CAR.
-              // Without this, pressing the button while already in CAR
-              // would be ignored by the FSM (no duplicate state changes).
-              demoFsm.transition('IDLE', false);
-              demoFsm.transition('CAR', false);
-              setTimeout(() => demoFsm.transition(ActivityState.IDLE, false), 3000);
-            }}
-            colors={colors}
-          />
-        </View>
-
-        {/* Settings Groups */}
-        {user && (
+        {user ? (
           <>
             <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
               Account
@@ -214,69 +217,107 @@ export default function ProfileScreen() {
               <SettingsItem
                 icon="person-outline"
                 title="My Profile"
-                subtitle="Edit your information"
+                subtitle="Ad, soyad ve telefon bilgilerinizi duzenleyin"
                 color="#0093C9"
                 isFirst
+                onPress={() => setProfileModalVisible(true)}
                 colors={colors}
               />
               <SettingsItem
-                icon="hardware-chip-outline"
-                title="Devices"
-                subtitle="Manage connected devices"
-                color="#007AFF"
-                onPress={() => router.push("/devices")}
-                colors={colors}
-              />
-              <SettingsItem
-                icon="car-sport-outline"
-                title="My Vehicles"
-                subtitle="Manage your vehicles"
-                color="#AF52DE"
-                onPress={() => router.push("/vehicles")} // Changed from /devices/vehicles to /vehicles based on plan
-                colors={colors}
-              />
-              <SettingsItem
-                icon="card-outline"
-                title="Payment Methods"
-                subtitle="Cards and billing"
-                color="#0093C9"
+                icon="sparkles-outline"
+                title="My Interests"
+                subtitle={
+                  user.interests.length > 0
+                    ? user.interests.join(", ")
+                    : "Atlas icin ilgi alanlari secin"
+                }
+                color="#7C4DFF"
                 isLast
-                onPress={() => router.push("/payment-methods")}
+                onPress={() => setInterestsModalVisible(true)}
                 colors={colors}
               />
             </View>
+
+            <View
+              style={[
+                styles.notePanel,
+                {
+                  backgroundColor: colors.backgroundSecondary,
+                  borderColor: colors.border,
+                },
+              ]}
+            >
+              <Ionicons
+                name="sparkles-outline"
+                size={18}
+                color={colors.primary}
+              />
+              <Text style={[styles.noteText, { color: colors.textSecondary }]}>
+                {USER_INTERESTS_NOTE}
+              </Text>
+            </View>
           </>
+        ) : (
+          <View style={styles.guestRow}>
+            <Text style={[styles.name, { color: colors.text }]}>
+              Guest User
+            </Text>
+            <Pressable
+              onPress={() => {
+                if (router.canDismiss()) {
+                  router.dismissAll();
+                }
+                router.replace("/");
+              }}
+              style={[styles.loginButton, { backgroundColor: colors.primary }]}
+            >
+              <Text
+                style={[styles.loginButtonText, { color: colors.primaryText }]}
+              >
+                Log In
+              </Text>
+            </Pressable>
+          </View>
         )}
 
         <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
           Preferences
         </Text>
         <View style={[styles.group, { backgroundColor: colors.card }]}>
-          <SettingsItem
-            icon="notifications-outline"
-            title="Notifications"
-            subtitle="Push and email alerts"
-            color="#FF9500"
-            isFirst
-            colors={colors}
-          />
-          <SettingsItem
-            icon="globe-outline"
-            title="Language"
-            value="English"
-            color="#7CFBC7"
-            colors={colors}
-          />
           <AppearanceSelector
             preference={themePreference}
             onChange={setThemePreference}
             colors={colors}
           />
           <SettingsItem
+            icon="hardware-chip-outline"
+            title="Devices"
+            subtitle="Manage connected devices"
+            color="#007AFF"
+            onPress={() => router.push("/devices")}
+            colors={colors}
+          />
+          <SettingsItem
+            icon="car-sport-outline"
+            title="My Vehicles"
+            subtitle="Manage your vehicles"
+            color="#AF52DE"
+            onPress={() => router.push("/vehicles")}
+            colors={colors}
+          />
+          <SettingsItem
+            icon="card-outline"
+            title="Payment Methods"
+            subtitle="Cards and billing"
+            color="#0093C9"
+            onPress={() => router.push("/payment-methods")}
+            colors={colors}
+          />
+          <SettingsItem
             icon="chatbox-ellipses-outline"
             title="Give Feedback"
             subtitle="Report a bug or suggest a feature"
-            color="#FF9500" // Orange color often used for feedback/warnings
+            color="#FF9500"
             isLast
             onPress={() => {
               Sentry.showFeedbackWidget();
@@ -284,23 +325,6 @@ export default function ProfileScreen() {
             colors={colors}
           />
         </View>
-
-        {user && (
-          <>
-            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
-              Security
-            </Text>
-            <View style={[styles.group, { backgroundColor: colors.card }]}>
-              <SettingsItem
-                icon="shield-checkmark-outline"
-                title="Privacy"
-                color="#7CFBC7"
-                isFirst
-                colors={colors}
-              />
-            </View>
-          </>
-        )}
 
         {user && (
           <View style={[styles.group, { backgroundColor: colors.card }]}>
@@ -319,13 +343,262 @@ export default function ProfileScreen() {
         )}
 
         <Text style={[styles.version, { color: colors.textTertiary }]}>
-          TUBITAK App v1.0.0 (Build 124)
+          Demo build with local AI profile storage
         </Text>
       </ScrollView>
 
-      {/* Render the modal at the root of this screen for demonstration */}
-      <CarModeModal fsm={demoFsm} />
+      <EditProfileModal
+        visible={profileModalVisible}
+        onClose={() => setProfileModalVisible(false)}
+        onSave={handleSaveProfile}
+        firstName={firstNameDraft}
+        lastName={lastNameDraft}
+        phone={phoneDraft}
+        onChangeFirstName={setFirstNameDraft}
+        onChangeLastName={setLastNameDraft}
+        onChangePhone={setPhoneDraft}
+        currentPhoneMasked={displayPhone}
+        colors={colors}
+      />
+
+      <EditInterestsModal
+        visible={interestsModalVisible}
+        onClose={() => setInterestsModalVisible(false)}
+        onSave={handleSaveInterests}
+        selectedInterests={interestDraft}
+        onToggleInterest={toggleInterest}
+        colors={colors}
+      />
     </SafeAreaView>
+  );
+}
+
+function EditProfileModal({
+  visible,
+  onClose,
+  onSave,
+  firstName,
+  lastName,
+  phone,
+  onChangeFirstName,
+  onChangeLastName,
+  onChangePhone,
+  currentPhoneMasked,
+  colors,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onSave: () => void;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  onChangeFirstName: (value: string) => void;
+  onChangeLastName: (value: string) => void;
+  onChangePhone: (value: string) => void;
+  currentPhoneMasked: string;
+  colors: any;
+}) {
+  return (
+    <Modal transparent animationType="fade" visible={visible}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={styles.modalOverlay}>
+          <TouchableWithoutFeedback>
+            <View
+              style={[styles.modalContent, { backgroundColor: colors.card }]}
+            >
+              <Text style={[styles.modalTitle, { color: colors.text }]}>
+                My Profile
+              </Text>
+
+              <View style={styles.modalField}>
+                <Text
+                  style={[styles.modalLabel, { color: colors.textSecondary }]}
+                >
+                  Ad
+                </Text>
+                <TextInput
+                  value={firstName}
+                  onChangeText={onChangeFirstName}
+                  style={[
+                    styles.modalInput,
+                    {
+                      backgroundColor: colors.inputBackground,
+                      borderColor: colors.inputBorder,
+                      color: colors.text,
+                    },
+                  ]}
+                />
+              </View>
+
+              <View style={styles.modalField}>
+                <Text
+                  style={[styles.modalLabel, { color: colors.textSecondary }]}
+                >
+                  Soyad
+                </Text>
+                <TextInput
+                  value={lastName}
+                  onChangeText={onChangeLastName}
+                  style={[
+                    styles.modalInput,
+                    {
+                      backgroundColor: colors.inputBackground,
+                      borderColor: colors.inputBorder,
+                      color: colors.text,
+                    },
+                  ]}
+                />
+              </View>
+
+              <View style={styles.modalField}>
+                <Text
+                  style={[styles.modalLabel, { color: colors.textSecondary }]}
+                >
+                  Telefon
+                </Text>
+                <TextInput
+                  value={phone}
+                  onChangeText={onChangePhone}
+                  keyboardType="phone-pad"
+                  placeholder={currentPhoneMasked}
+                  placeholderTextColor={colors.textTertiary}
+                  style={[
+                    styles.modalInput,
+                    {
+                      backgroundColor: colors.inputBackground,
+                      borderColor: colors.inputBorder,
+                      color: colors.text,
+                    },
+                  ]}
+                />
+              </View>
+
+              <Pressable
+                style={[
+                  styles.modalPrimaryButton,
+                  { backgroundColor: colors.primary },
+                ]}
+                onPress={onSave}
+              >
+                <Text style={styles.modalPrimaryText}>Kaydet</Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.modalSecondaryButton,
+                  { borderColor: colors.border },
+                ]}
+                onPress={onClose}
+              >
+                <Text
+                  style={[styles.modalSecondaryText, { color: colors.text }]}
+                >
+                  Vazgec
+                </Text>
+              </Pressable>
+            </View>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
+    </Modal>
+  );
+}
+
+function EditInterestsModal({
+  visible,
+  onClose,
+  onSave,
+  selectedInterests,
+  onToggleInterest,
+  colors,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onSave: () => void;
+  selectedInterests: string[];
+  onToggleInterest: (interest: string) => void;
+  colors: any;
+}) {
+  return (
+    <Modal transparent animationType="fade" visible={visible}>
+      <TouchableWithoutFeedback onPress={onClose}>
+        <View style={styles.modalOverlay}>
+          <TouchableWithoutFeedback>
+            <View
+              style={[styles.modalContent, { backgroundColor: colors.card }]}
+            >
+              <Text style={[styles.modalTitle, { color: colors.text }]}>
+                My Interests
+              </Text>
+              <Text
+                style={[
+                  styles.interestsSubtitle,
+                  { color: colors.textSecondary },
+                ]}
+              >
+                {USER_INTERESTS_NOTE}
+              </Text>
+
+              <View style={styles.interestsWrap}>
+                {PREDEFINED_USER_INTERESTS.map((interest) => {
+                  const selected = selectedInterests.includes(interest);
+                  return (
+                    <Pressable
+                      key={interest}
+                      onPress={() => onToggleInterest(interest)}
+                      style={[
+                        styles.interestChip,
+                        {
+                          backgroundColor: selected
+                            ? colors.primary
+                            : colors.backgroundSecondary,
+                          borderColor: selected
+                            ? colors.primary
+                            : colors.border,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.interestChipText,
+                          { color: selected ? "#FFFFFF" : colors.text },
+                        ]}
+                      >
+                        {interest}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <Pressable
+                style={[
+                  styles.modalPrimaryButton,
+                  { backgroundColor: colors.primary },
+                ]}
+                onPress={onSave}
+              >
+                <Text style={styles.modalPrimaryText}>Kaydet</Text>
+              </Pressable>
+
+              <Pressable
+                style={[
+                  styles.modalSecondaryButton,
+                  { borderColor: colors.border },
+                ]}
+                onPress={onClose}
+              >
+                <Text
+                  style={[styles.modalSecondaryText, { color: colors.text }]}
+                >
+                  Vazgec
+                </Text>
+              </Pressable>
+            </View>
+          </TouchableWithoutFeedback>
+        </View>
+      </TouchableWithoutFeedback>
+    </Modal>
   );
 }
 
@@ -341,8 +614,8 @@ function AppearanceSelector({
   isLast?: boolean;
 }) {
   const [modalVisible, setModalVisible] = useState(false);
-
-  const getLabel = (p: string) => p.charAt(0).toUpperCase() + p.slice(1);
+  const getLabel = (value: string) =>
+    value.charAt(0).toUpperCase() + value.slice(1);
 
   return (
     <>
@@ -366,30 +639,21 @@ function AppearanceSelector({
               Appearance
             </Text>
             <View style={styles.rightContainer}>
-              <Text
-                style={[
-                  styles.itemValue,
-                  { color: colors.textSecondary, marginRight: 8 },
-                ]}
-              >
+              <Text style={[styles.itemValue, { color: colors.textSecondary }]}>
                 {getLabel(preference)}
               </Text>
               <Ionicons
                 name="chevron-forward"
                 size={16}
                 color={colors.textTertiary}
+                style={{ marginLeft: 6 }}
               />
             </View>
           </View>
         </View>
       </Pressable>
 
-      <Modal
-        animationType="fade"
-        transparent={true}
-        visible={modalVisible}
-        onRequestClose={() => setModalVisible(false)}
-      >
+      <Modal transparent animationType="fade" visible={modalVisible}>
         <TouchableWithoutFeedback onPress={() => setModalVisible(false)}>
           <View style={styles.modalOverlay}>
             <TouchableWithoutFeedback>
@@ -400,35 +664,32 @@ function AppearanceSelector({
                   Select Appearance
                 </Text>
                 {(["system", "light", "dark"] as const).map(
-                  (opt, index, arr) => (
+                  (option, index, array) => (
                     <Pressable
-                      key={opt}
+                      key={option}
                       onPress={() => {
-                        onChange(opt);
+                        onChange(option);
                         setModalVisible(false);
                       }}
-                      style={({ pressed }) => [
+                      style={[
                         styles.modalOption,
                         { borderBottomColor: colors.border },
-                        index === arr.length - 1 && styles.noBorder,
-                        pressed && {
-                          backgroundColor: colors.backgroundSecondary,
-                        },
+                        index === array.length - 1 && styles.noBorder,
                       ]}
                     >
                       <Text
                         style={[
                           styles.modalOptionText,
                           { color: colors.text },
-                          preference === opt && {
+                          preference === option && {
                             color: colors.primary,
                             fontWeight: "700",
                           },
                         ]}
                       >
-                        {getLabel(opt)}
+                        {getLabel(option)}
                       </Text>
-                      {preference === opt && (
+                      {preference === option && (
                         <Ionicons
                           name="checkmark"
                           size={20}
@@ -482,14 +743,13 @@ function SettingsItem({
         isLast && styles.itemLast,
         pressed && {
           backgroundColor: colors.highlight || colors.backgroundSecondary,
-        }, // Fallback logic
+        },
       ]}
     >
       <View style={styles.itemContent}>
         <View style={[styles.iconBox, { backgroundColor: color }]}>
           <Ionicons name={icon} size={20} color="#fff" />
         </View>
-
         <View style={styles.itemTextContainer}>
           <View style={styles.titleContainer}>
             <Text
@@ -501,24 +761,24 @@ function SettingsItem({
             >
               {title}
             </Text>
-            {subtitle && (
+            {subtitle ? (
               <Text
                 style={[styles.itemSubtitle, { color: colors.textTertiary }]}
               >
                 {subtitle}
               </Text>
-            )}
+            ) : null}
           </View>
 
           {!destructive && (
             <View style={styles.rightContainer}>
-              {value && (
+              {value ? (
                 <Text
                   style={[styles.itemValue, { color: colors.textSecondary }]}
                 >
                   {value}
                 </Text>
-              )}
+              ) : null}
               {!hideChevron && (
                 <Ionicons
                   name="chevron-forward"
@@ -538,7 +798,6 @@ function SettingsItem({
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   container: { paddingBottom: 200 },
-
   profileCard: {
     alignItems: "center",
     paddingVertical: 32,
@@ -549,7 +808,6 @@ const styles = StyleSheet.create({
     borderRadius: 24,
   },
   avatarContainer: {
-    position: "relative",
     marginBottom: 16,
   },
   avatarGradient: {
@@ -559,24 +817,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  editBadge: {
-    position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 3,
-  },
   name: {
     fontSize: 22,
     fontWeight: "700",
   },
   email: {
     fontSize: 14,
-    marginTop: 2,
+    marginTop: 4,
   },
   statsRow: {
     flexDirection: "row",
@@ -600,8 +847,6 @@ const styles = StyleSheet.create({
     width: 1,
     height: 32,
   },
-
-  // Section Title
   sectionTitle: {
     fontSize: 13,
     fontWeight: "600",
@@ -611,19 +856,47 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginTop: 8,
   },
-
-  // Grouped List
   group: {
     marginHorizontal: 16,
     borderRadius: 16,
     marginBottom: 20,
     overflow: "hidden",
   },
+  notePanel: {
+    marginHorizontal: 16,
+    marginBottom: 24,
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 14,
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "flex-start",
+  },
+  noteText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  guestRow: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 24,
+    gap: 12,
+    alignItems: "center",
+  },
+  loginButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+  },
+  loginButtonText: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
   itemContainer: {
     paddingLeft: 14,
     minHeight: 60,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: "#e2e8f0",
   },
   itemFirst: {
     borderTopLeftRadius: 16,
@@ -656,9 +929,6 @@ const styles = StyleSheet.create({
     paddingRight: 14,
     paddingVertical: 8,
   },
-  noBorder: {
-    borderBottomWidth: 0,
-  },
   titleContainer: {
     flex: 1,
   },
@@ -677,27 +947,10 @@ const styles = StyleSheet.create({
   itemValue: {
     fontSize: 15,
   },
-
   version: {
     textAlign: "center",
     fontSize: 12,
     marginTop: 8,
-  },
-
-  // Appearance Selector
-  segmentContainer: {
-    flexDirection: "row",
-    backgroundColor: "transparent",
-    gap: 4,
-  },
-  segmentBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-  },
-  segmentText: {
-    fontSize: 13,
-    fontWeight: "500",
   },
   modalOverlay: {
     flex: 1,
@@ -708,23 +961,81 @@ const styles = StyleSheet.create({
   },
   modalContent: {
     width: "100%",
-    maxWidth: 320,
+    maxWidth: 340,
     borderRadius: 20,
     padding: 20,
     shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 18,
+    elevation: 10,
   },
   modalTitle: {
     fontSize: 18,
     fontWeight: "700",
     marginBottom: 16,
     textAlign: "center",
+  },
+  modalField: {
+    gap: 8,
+    marginBottom: 12,
+  },
+  modalLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  modalInput: {
+    height: 52,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    fontSize: 15,
+  },
+  modalPrimaryButton: {
+    marginTop: 8,
+    minHeight: 50,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalPrimaryText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  modalSecondaryButton: {
+    marginTop: 10,
+    minHeight: 48,
+    borderRadius: 16,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalSecondaryText: {
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  interestsSubtitle: {
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: "center",
+    marginBottom: 16,
+  },
+  interestsWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    marginBottom: 8,
+  },
+  interestChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  interestChipText: {
+    fontSize: 13,
+    fontWeight: "700",
   },
   modalOption: {
     flexDirection: "row",
@@ -736,5 +1047,8 @@ const styles = StyleSheet.create({
   modalOptionText: {
     fontSize: 16,
     fontWeight: "500",
+  },
+  noBorder: {
+    borderBottomWidth: 0,
   },
 });

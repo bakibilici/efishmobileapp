@@ -4,6 +4,7 @@ import React, { useEffect, useRef } from "react";
 import {
   Animated,
   DeviceEventEmitter,
+  Image,
   Platform,
   Pressable,
   View,
@@ -12,6 +13,8 @@ import {
 import { HapticTab } from "@/components/haptic-tab";
 import { useTheme } from "@/context/ThemeContext";
 import { Profile, SmartCar } from "iconsax-react-native";
+
+import { DriveSessionStore, DriveSessionState } from "@/services/DriveSessionStore";
 
 export default function TabLayout() {
   const { colors, themeScheme } = useTheme();
@@ -26,14 +29,26 @@ export default function TabLayout() {
       "toggleBottomSheet",
       (isOpen: boolean) => {
         Animated.timing(tabBarAnim, {
-          toValue: isOpen ? 150 : 0, // Slide down out of view
+          toValue: isOpen ? 150 : 0,
           duration: 350,
           useNativeDriver: true,
         }).start();
       },
     );
 
-    return () => sub.remove();
+    const unsubDrive = DriveSessionStore.onStateChange((state) => {
+      const isCarMode = state !== DriveSessionState.IDLE && state !== DriveSessionState.PROMPTING;
+      Animated.timing(tabBarAnim, {
+        toValue: isCarMode ? 200 : 0,
+        duration: 500,
+        useNativeDriver: true,
+      }).start();
+    });
+
+    return () => {
+      sub.remove();
+      unsubDrive();
+    };
   }, [tabBarAnim]);
 
   return (
@@ -78,24 +93,9 @@ export default function TabLayout() {
       />
       <Tabs.Screen
         name="sessions"
-        options={({ navigation }) => ({
+        options={() => ({
           title: "Sessions",
-          headerShown: true,
-          headerTitle: "",
-          headerShadowVisible: false,
-          headerLeft: () => (
-            <Pressable
-              hitSlop={12}
-              onPress={() => navigation.navigate("mainpage")}
-              style={{ paddingHorizontal: 4 }}
-            >
-              <Ionicons name="chevron-back" size={24} color={colors.text} />
-            </Pressable>
-          ),
-          headerStyle: {
-            backgroundColor: colors.background,
-          },
-          headerTintColor: colors.text,
+          headerShown: false,
           tabBarIcon: ({ color, focused }) => (
             <SmartCar
               size={28}
@@ -133,10 +133,14 @@ export default function TabLayout() {
                 marginTop: -20, // Make it pop out of the tab bar
               }}
             >
-              <Ionicons
-                name="qr-code"
-                size={32}
-                color={focused ? "#fff" : colors.primary}
+              <Image
+                source={require("../../assets/images/app_logo.png")}
+                style={{
+                  width: 36,
+                  height: 36,
+                  tintColor: focused ? "#fff" : colors.primary,
+                }}
+                resizeMode="contain"
               />
             </View>
           ),

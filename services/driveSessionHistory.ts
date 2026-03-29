@@ -1,0 +1,237 @@
+import * as SQLite from "expo-sqlite";
+
+const DB_NAME = "atlas_drive_sessions.db";
+
+export interface DriveSessionSnapshotInput {
+  sessionId: string;
+  title: string;
+  originName?: string | null;
+  destinationName?: string | null;
+  state: string;
+  startedAt: number;
+  updatedAt?: number;
+  endedAt?: number | null;
+  durationSeconds?: number | null;
+  distanceKm?: number | null;
+  stationCount?: number | null;
+  routeContext: Record<string, any>;
+}
+
+interface DriveSessionRow {
+  id: number;
+  session_id: string;
+  title: string | null;
+  origin_name: string | null;
+  destination_name: string | null;
+  state: string;
+  started_at: number;
+  updated_at: number;
+  ended_at: number | null;
+  duration_seconds: number | null;
+  distance_km: number | null;
+  station_count: number | null;
+  route_context_json: string;
+}
+
+export interface StoredDriveSessionRecord {
+  id: number;
+  sessionId: string;
+  title: string;
+  originName: string | null;
+  destinationName: string | null;
+  state: string;
+  startedAt: number;
+  updatedAt: number;
+  endedAt: number | null;
+  durationSeconds: number | null;
+  distanceKm: number | null;
+  stationCount: number | null;
+  routeContext: Record<string, any>;
+}
+
+class DriveSessionHistoryStorageImpl {
+  private db: SQLite.SQLiteDatabase | null = null;
+  private isInitialized = false;
+
+  constructor() {
+    void this.init();
+  }
+
+  private async init() {
+    try {
+      this.db = await SQLite.openDatabaseAsync(DB_NAME);
+      await this.db.execAsync(`
+        CREATE TABLE IF NOT EXISTS drive_sessions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT NOT NULL UNIQUE,
+          title TEXT,
+          origin_name TEXT,
+          destination_name TEXT,
+          state TEXT NOT NULL,
+          started_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          ended_at INTEGER,
+          duration_seconds INTEGER,
+          distance_km REAL,
+          station_count INTEGER,
+          route_context_json TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_drive_sessions_updated_at
+          ON drive_sessions(updated_at DESC);
+      `);
+      this.isInitialized = true;
+      console.log("[DriveSessionHistoryStorage] Initialized");
+    } catch (error) {
+      console.error("[DriveSessionHistoryStorage] Init error:", error);
+    }
+  }
+
+  private async waitForInit() {
+    if (this.isInitialized) return;
+    await new Promise<void>((resolve) => {
+      const check = setInterval(() => {
+        if (this.isInitialized) {
+          clearInterval(check);
+          resolve();
+        }
+      }, 50);
+    });
+  }
+
+  private hydrateRow(row: DriveSessionRow): StoredDriveSessionRecord | null {
+    try {
+      return {
+        id: row.id,
+        sessionId: row.session_id,
+        title: row.title || "Kaydedilen rota",
+        originName: row.origin_name,
+        destinationName: row.destination_name,
+        state: row.state,
+        startedAt: row.started_at,
+        updatedAt: row.updated_at,
+        endedAt: row.ended_at,
+        durationSeconds: row.duration_seconds,
+        distanceKm: row.distance_km,
+        stationCount: row.station_count,
+        routeContext: JSON.parse(row.route_context_json),
+      };
+    } catch (error) {
+      console.error(
+        "[DriveSessionHistoryStorage] Failed to hydrate session row:",
+        error,
+      );
+      return null;
+    }
+  }
+
+  public async upsertSession(snapshot: DriveSessionSnapshotInput) {
+    if (!this.isInitialized) await this.waitForInit();
+    if (!this.db) return;
+
+    const updatedAt = snapshot.updatedAt ?? Date.now();
+    const title =
+      snapshot.title?.trim() ||
+      snapshot.destinationName?.trim() ||
+      "Kaydedilen rota";
+
+    try {
+      await this.db.runAsync(
+        `
+          INSERT INTO drive_sessions (
+            session_id,
+            title,
+            origin_name,
+            destination_name,
+            state,
+            started_at,
+            updated_at,
+            ended_at,
+            duration_seconds,
+            distance_km,
+            station_count,
+            route_context_json
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(session_id) DO UPDATE SET
+            title = excluded.title,
+            origin_name = excluded.origin_name,
+            destination_name = excluded.destination_name,
+            state = excluded.state,
+            started_at = excluded.started_at,
+            updated_at = excluded.updated_at,
+            ended_at = excluded.ended_at,
+            duration_seconds = excluded.duration_seconds,
+            distance_km = excluded.distance_km,
+            station_count = excluded.station_count,
+            route_context_json = excluded.route_context_json
+        `,
+        [
+          snapshot.sessionId,
+          title,
+          snapshot.originName ?? null,
+          snapshot.destinationName ?? null,
+          snapshot.state,
+          snapshot.startedAt,
+          updatedAt,
+          snapshot.endedAt ?? null,
+          snapshot.durationSeconds ?? null,
+          snapshot.distanceKm ?? null,
+          snapshot.stationCount ?? null,
+          JSON.stringify(snapshot.routeContext),
+        ],
+      );
+    } catch (error) {
+      console.error("[DriveSessionHistoryStorage] Upsert error:", error);
+    }
+  }
+
+  public async listSessions(): Promise<StoredDriveSessionRecord[]> {
+    if (!this.isInitialized) await this.waitForInit();
+    if (!this.db) return [];
+
+    try {
+      const rows = await this.db.getAllAsync<DriveSessionRow>(
+        `
+          SELECT *
+          FROM drive_sessions
+          ORDER BY updated_at DESC
+        `,
+      );
+
+      return rows
+        .map((row) => this.hydrateRow(row))
+        .filter((row): row is StoredDriveSessionRecord => row !== null);
+    } catch (error) {
+      console.error("[DriveSessionHistoryStorage] List error:", error);
+      return [];
+    }
+  }
+
+  public async getSessionBySessionId(
+    sessionId: string,
+  ): Promise<StoredDriveSessionRecord | null> {
+    if (!this.isInitialized) await this.waitForInit();
+    if (!this.db) return null;
+
+    try {
+      const row = await this.db.getFirstAsync<DriveSessionRow>(
+        `
+          SELECT *
+          FROM drive_sessions
+          WHERE session_id = ?
+          LIMIT 1
+        `,
+        [sessionId],
+      );
+      if (!row) return null;
+      return this.hydrateRow(row);
+    } catch (error) {
+      console.error("[DriveSessionHistoryStorage] Get error:", error);
+      return null;
+    }
+  }
+}
+
+export const DriveSessionHistoryStorage =
+  new DriveSessionHistoryStorageImpl();

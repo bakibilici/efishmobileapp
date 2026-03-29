@@ -1,5 +1,6 @@
 import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { ConversationProvider } from "@elevenlabs/react-native";
+
 import {
   DarkTheme,
   DefaultTheme,
@@ -12,18 +13,17 @@ import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
 import {
-  Animated,
   AppState,
-  PanResponder,
-  Pressable,
-  StyleSheet,
   Text,
   TextInput,
 } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { startNetworkLogging } from "react-native-network-logger";
+
+
 import "react-native-reanimated";
 
+import { CarModeView } from "@/components/CarModeView";
 import { DailyStepStore } from "@/services/sensors/DailyStepStore";
 
 import {
@@ -34,6 +34,35 @@ import { UserProvider, useUser } from "@/context/UserContext";
 import { PaymentProvider } from "@/context/payment/PaymentContext";
 import { ActivityService } from "@/services/ActivityService";
 import * as Sentry from "@sentry/react-native";
+
+// --- Polyfills required for ElevenLabs / LiveKit on React Native ---
+if (typeof global.Event === "undefined") {
+  global.Event = class Event {
+    type: string;
+    constructor(type: string) {
+      this.type = type;
+    }
+  } as any;
+}
+
+if (typeof global.CloseEvent === "undefined") {
+  global.CloseEvent = class CloseEvent extends global.Event {
+    code: number;
+    reason: string;
+    wasClean: boolean;
+
+    constructor(
+      type: string,
+      init?: { code?: number; reason?: string; wasClean?: boolean },
+    ) {
+      super(type);
+      this.code = init?.code ?? 0;
+      this.reason = init?.reason ?? "";
+      this.wasClean = init?.wasClean ?? false;
+    }
+  } as any;
+}
+// -----------------------------------------------------------------
 
 Sentry.init({
   dsn: "https://96fccd63cdc72c7b4aa5e0a3874f44e8@o4510855506624512.ingest.de.sentry.io/4510905892405328",
@@ -190,139 +219,49 @@ function RootLayoutNav() {
       // Hide splash screen after checking user status
       SplashScreen.hideAsync();
     }
-  }, [fontsLoaded, defaultsApplied, isUserLoading, user]);
+  }, [fontsLoaded, defaultsApplied, isUserLoading, user, router]);
 
   if (!fontsLoaded || !defaultsApplied) {
     return null;
   }
 
   return (
-    <BottomSheetModalProvider>
-      <ThemeProvider value={themeScheme === "dark" ? DarkTheme : DefaultTheme}>
-        <Stack>
-          <Stack.Screen name="index" options={{ headerShown: false }} />
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-          <Stack.Screen
-            name="modal"
-            options={{
-              presentation: "transparentModal",
-              headerShown: false,
-              animation: "slide_from_bottom",
-            }}
-          />
-          <Stack.Screen
-            name="auth/register"
-            options={{ presentation: "card", headerShown: false }}
-          />
-          <Stack.Screen
-            name="qr-scanner"
-            options={{ presentation: "modal", headerShown: false }}
-          />
-          <Stack.Screen
-            name="route-plan"
-            options={{ headerShown: false }}
-          />
-        </Stack>
-        <StatusBar style={themeScheme === "dark" ? "light" : "dark"} />
-        {__DEV__ && <DraggableDevButton />}
-      </ThemeProvider>
-    </BottomSheetModalProvider>
+    <ConversationProvider>
+      <BottomSheetModalProvider>
+        <ThemeProvider value={themeScheme === "dark" ? DarkTheme : DefaultTheme}>
+          <Stack>
+            <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen
+              name="modal"
+              options={{
+                presentation: "transparentModal",
+                headerShown: false,
+                animation: "slide_from_bottom",
+              }}
+            />
+            <Stack.Screen
+              name="auth/register"
+              options={{ presentation: "card", headerShown: false }}
+            />
+            <Stack.Screen
+              name="qr-scanner"
+              options={{ presentation: "modal", headerShown: false }}
+            />
+            <Stack.Screen
+              name="route-plan"
+              options={{ headerShown: false }}
+            />
+          </Stack>
+          <StatusBar style={themeScheme === "dark" ? "light" : "dark"} />
+          {user && (
+            <>
+              <CarModeView />
+            </>
+          )}
+        </ThemeProvider>
+      </BottomSheetModalProvider>
+    </ConversationProvider>
   );
 }
 
-const styles = StyleSheet.create({
-  devBubbleWrapper: {
-    position: "absolute",
-    right: 16,
-    bottom: 40,
-  },
-  devBubble: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "rgba(0,0,0,0.8)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  devBubbleText: {
-    color: "white",
-    fontSize: 12,
-    fontWeight: "600",
-  },
-});
-
-function DraggableDevButton() {
-  const router = useRouter();
-  const pan = useRef(new Animated.ValueXY()).current;
-  const panValue = useRef({ x: 0, y: 0 });
-  const [isReady, setIsReady] = useState(false);
-
-  useEffect(() => {
-    const listenerId = pan.addListener((value) => {
-      panValue.current = value;
-    });
-
-    AsyncStorage.getItem("dev_button_pos").then((val) => {
-      if (val) {
-        try {
-          const { x, y } = JSON.parse(val);
-          pan.setValue({ x, y });
-          panValue.current = { x, y };
-        } catch (e) {}
-      }
-      setIsReady(true);
-    });
-
-    return () => {
-      pan.removeListener(listenerId);
-    };
-  }, [pan]);
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (evt, gestureState) => {
-        return Math.abs(gestureState.dx) > 5 || Math.abs(gestureState.dy) > 5;
-      },
-      onPanResponderGrant: () => {
-        pan.setOffset({
-          x: panValue.current.x,
-          y: panValue.current.y,
-        });
-        pan.setValue({ x: 0, y: 0 });
-      },
-      onPanResponderMove: Animated.event([null, { dx: pan.x, dy: pan.y }], {
-        useNativeDriver: false,
-      }),
-      onPanResponderRelease: () => {
-        pan.flattenOffset();
-        AsyncStorage.setItem(
-          "dev_button_pos",
-          JSON.stringify({ x: panValue.current.x, y: panValue.current.y }),
-        );
-      },
-    }),
-  ).current;
-
-  if (!isReady) return null;
-
-  return (
-    <Animated.View
-      {...panResponder.panHandlers}
-      style={[
-        styles.devBubbleWrapper,
-        {
-          transform: [{ translateX: pan.x }, { translateY: pan.y }],
-        },
-      ]}
-    >
-      <Pressable
-        onPress={() => {
-          router.push("/network-logger");
-        }}
-        style={styles.devBubble}
-      >
-        <Text style={styles.devBubbleText}>NET</Text>
-      </Pressable>
-    </Animated.View>
-  );
-}

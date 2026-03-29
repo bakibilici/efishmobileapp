@@ -1,8 +1,7 @@
 import { brandBlue, brandNavy, brandSlate } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
 import { useUser } from "@/context/UserContext";
-import { sendOtp, setAuthToken, verifyOtp } from "@/services/api";
-import { saveTokens } from "@/services/tokenStorage";
+import { LocalUserStorage } from "@/services/localUserStorage";
 import { Ionicons } from "@expo/vector-icons";
 import { usePathname, useRouter } from "expo-router";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -36,7 +35,7 @@ const formatPhone = (value: string) => {
 
 export default function LoginScreen() {
   const router = useRouter();
-  const { user, setUser, refreshProfile, isLoading: isUserLoading } = useUser();
+  const { user, setUser, isLoading: isUserLoading } = useUser();
   const { colors, themeScheme } = useTheme();
 
   // State
@@ -111,20 +110,12 @@ export default function LoginScreen() {
 
     setIsLoading(true);
     try {
-      const cleanPhone = phone.replace(/\D/g, "");
-      const fullPhone = countryCode.replace("+", "") + cleanPhone;
-
-      // Call Send OTP API
-      await sendOtp(fullPhone);
-
       setIsLoading(false);
-      // Smooth layout transition between steps
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setStep("OTP");
-    } catch (error: any) {
+    } catch {
       setIsLoading(false);
-      const msg = error.response?.data?.message || "Failed to send OTP";
-      showToast(msg);
+      showToast("Unable to continue");
     }
   };
 
@@ -137,64 +128,31 @@ export default function LoginScreen() {
     setIsLoading(true);
     try {
       const cleanPhone = phone.replace(/\D/g, "");
-      const fullPhone = countryCode.replace("+", "") + cleanPhone;
+      const cleanOtp = otp.replace(/\D/g, "");
 
-      const response = await verifyOtp(fullPhone, otp);
-      console.log(
-        "verifyOtp FULL response:",
-        JSON.stringify(response, null, 2),
+      if (cleanOtp !== "111111") {
+        setIsLoading(false);
+        showToast("Demo kodu 111111");
+        return;
+      }
+
+      const existingUser = await LocalUserStorage.getUserByPhone(
+        cleanPhone,
+        countryCode.replace("+", ""),
       );
 
       setIsLoading(false);
 
-      if (response.message_key === "auth.otp.verified_for_register") {
-        // Navigate to Register Screen
+      if (!existingUser) {
         router.push({
           pathname: "/auth/register",
           params: {
             phone_number: cleanPhone,
             phone_code: countryCode.replace("+", ""),
-            registered_token: response.registered_token, // Pass the token
           },
         });
       } else {
-        // Login Success
-        console.log("Login flow - checking for tokens...");
-        console.log("response.data:", response.data);
-        console.log("response.access_token:", response.access_token);
-
-        // Try both response.data.access_token and response.access_token
-        const accessToken =
-          response.data?.access_token || response.access_token;
-        const refreshToken =
-          response.data?.refresh_token || response.refresh_token;
-        const userData = response.data?.user || response.user;
-
-        console.log("accessToken found:", !!accessToken);
-        console.log("refreshToken found:", !!refreshToken);
-
-        if (accessToken && refreshToken) {
-          console.log("Saving tokens...");
-          await saveTokens(accessToken, refreshToken);
-
-          // Set in-memory token immediately
-          setAuthToken(accessToken);
-
-          console.log("Tokens saved!");
-
-          // Small delay to ensure SecureStore write completes
-          await new Promise((resolve) => setTimeout(resolve, 100));
-
-          if (userData) {
-            console.log("Setting user from response:", userData);
-            setUser(userData);
-          } else {
-            console.log("No user in response, calling refreshProfile...");
-            await refreshProfile();
-          }
-        } else {
-          console.log("WARNING: No tokens found in response!");
-        }
+        setUser(existingUser);
 
         if (router.canGoBack()) {
           router.dismissAll();
@@ -204,10 +162,9 @@ export default function LoginScreen() {
           params: { showLoginSuccess: "true" },
         });
       }
-    } catch (error: any) {
+    } catch {
       setIsLoading(false);
-      const msg = error.response?.data?.message || "Invalid verification code";
-      showToast(msg);
+      showToast("Invalid verification code");
     }
   };
 
@@ -286,7 +243,7 @@ export default function LoginScreen() {
             >
               <View style={styles.titleBlock}>
                 <Text style={[styles.welcomeTitle, { color: colors.text }]}>
-                  {step === "PHONE" ? "Welcome Back" : "Verify It's You"}
+                  {step === "PHONE" ? "Welcome Back" : "Demo Verification"}
                 </Text>
                 <Text
                   style={[
@@ -296,7 +253,7 @@ export default function LoginScreen() {
                 >
                   {step === "PHONE"
                     ? "Enter your mobile number"
-                    : `Enter code sent to ${countryCode} ${phone}`}
+                    : `Demo code: 111111 for ${countryCode} ${phone}`}
                 </Text>
               </View>
 
@@ -535,6 +492,15 @@ export default function LoginScreen() {
                       ))}
                     </View>
                   </Pressable>
+
+                  <Text
+                    style={[
+                      styles.otpHelperText,
+                      { color: colors.textSecondary },
+                    ]}
+                  >
+                    Bu demo icin SMS gonderilmiyor. 111111 koduyla devam edebilirsiniz.
+                  </Text>
 
                   <Pressable
                     style={({ pressed }) => [
@@ -829,6 +795,12 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: "700",
     color: brandNavy,
+  },
+  otpHelperText: {
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: "center",
+    marginTop: -6,
   },
   textLink: {
     alignItems: "center",

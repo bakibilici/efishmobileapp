@@ -141,7 +141,11 @@ class DailyStepStoreImpl {
     return this.currentData;
   }
 
-  public async incrementSteps(count: number, isCharging: boolean, activityState?: ActivityState) {
+  public async incrementSteps(
+    count: number,
+    isCharging: boolean,
+    activityState?: ActivityState,
+  ) {
     if (!this.isInitialized) await this.waitForInit();
     if (!this.currentData) return;
 
@@ -210,7 +214,7 @@ class DailyStepStoreImpl {
           lastUpdatedAt,
         ],
       );
-      console.debug(`[DailyStepStore] Persisted ${date}: ${totalSteps} steps`);
+      //console.debug(`[DailyStepStore] Persisted ${date}: ${totalSteps} steps`);
     } catch (error) {
       console.error("[DailyStepStore] Persist error:", error);
     }

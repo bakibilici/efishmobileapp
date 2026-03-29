@@ -2,6 +2,7 @@ import { BlurView } from "expo-blur";
 import { AnimatedTextView } from "expo-ios-text-animations";
 import React, { useEffect, useState } from "react";
 import {
+  Dimensions,
   LayoutAnimation,
   Platform,
   Pressable,
@@ -20,6 +21,7 @@ import { useActivityState } from "../hooks/useActivityState";
 import { useSpeed } from "../hooks/useSpeed";
 import { useStepCount } from "../hooks/useStepCount";
 import { ActivityState } from "../services/ActivityStateMachine";
+import { DriveSessionState, DriveSessionStore } from "../services/DriveSessionStore";
 import ActivityIcon from "./ActivityIcon";
 import { RollingNumber } from "./RollingNumber";
 
@@ -43,6 +45,12 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
   const speed = useSpeed();
   const { colors, themeScheme } = useTheme();
   const isDark = themeScheme === "dark";
+  const [driveSessionState, setDriveSessionState] = useState(
+    DriveSessionStore.getState(),
+  );
+
+  const { width: SCREEN_WIDTH } = Dimensions.get("window");
+  const FULL_WIDTH = SCREEN_WIDTH - 32;
 
   const [displaySpeed, setDisplaySpeed] = useState(speed);
 
@@ -58,6 +66,13 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
   }, [activityState]);
 
+  useEffect(() => {
+    const unsub = DriveSessionStore.onStateChange((next) =>
+      setDriveSessionState(next),
+    );
+    return unsub;
+  }, []);
+
   // Entrance animation values
   const opacity = useSharedValue(0);
   const scale = useSharedValue(0.96);
@@ -71,6 +86,7 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
 
   const animatedStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
+    width: FULL_WIDTH,
     transform: [{ scale: scale.value }, { translateY: translateY.value }],
   }));
 
@@ -179,25 +195,37 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
   };
 
   const config = getConfig();
+  const showDriveCta =
+    activityState === ActivityState.CAR &&
+    driveSessionState === DriveSessionState.IDLE;
 
   return (
     <Pressable onPress={onPress}>
       <Animated.View style={[animatedStyle, styles.outerContainer]}>
         <BlurView
-          intensity={isDark ? 30 : 60}
+          intensity={mode === "FULL" ? 80 : 0} // Only blur when in header flow
           tint={isDark ? "dark" : "light"}
           style={[
             styles.container,
             {
-              backgroundColor: config.bgColor,
-              borderColor: config.borderColor,
+              backgroundColor:
+                mode === "FULL"
+                  ? isDark
+                    ? "rgba(25, 25, 25, 0.45)"
+                    : "rgba(255, 255, 255, 0.5)"
+                  : isDark
+                    ? "#1E1E1E"
+                    : "#FFFFFF",
+              borderColor: isDark
+                ? "rgba(255, 255, 255, 0.15)"
+                : "rgba(0, 0, 0, 0.05)",
             },
           ]}
         >
           <View style={styles.leftContent}>
             <ActivityIcon
               state={activityState}
-              size={24}
+              size={28} // slightly larger icon
               color={config.color}
               movementSpeed={speed}
             />
@@ -268,6 +296,17 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
                     {config.data}
                   </Text>
                 )}
+                {showDriveCta && (
+                  <Pressable
+                    onPress={() => DriveSessionStore.startPrompt()}
+                    style={[
+                      styles.driveModeButton,
+                      { backgroundColor: colors.primary },
+                    ]}
+                  >
+                    <Text style={styles.driveModeButtonText}>Sürüşe Geç</Text>
+                  </Pressable>
+                )}
               </View>
             </View>
           )}
@@ -279,41 +318,41 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
 
 const styles = StyleSheet.create({
   outerContainer: {
-    marginHorizontal: 16,
-    marginTop: 12,
+    alignSelf: "center",
+    marginTop: 4,
     marginBottom: 8,
-    borderRadius: 30, // Pill shape
-    // Premium subtle shadow
+    borderRadius: 100, // Fully Rounded (Capsule)
+    // Soft, premium shadow to avoid "blackish" bottom effect
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 4,
   },
   container: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 30, // Pill shape
-    borderWidth: StyleSheet.hairlineWidth, // Soft border
-    overflow: "hidden", // Required for BlurView radius
+    paddingHorizontal: 20, // slightly more horizontal padding
+    paddingVertical: 14, // increased height
+    borderRadius: 100, // Matching outerContainer
+    borderWidth: 0.5, // Razor-thin refined border
+    overflow: "hidden",
   },
   leftContent: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 10, // slightly more gap
   },
   label: {
-    fontSize: 16,
-    fontWeight: "600", // Apple semibold
-    letterSpacing: -0.3,
+    fontSize: 17, // slightly larger font
+    fontWeight: "700", // Bolder for high-contrast visibility
+    letterSpacing: -0.4,
   },
   rightContent: {
-    paddingHorizontal: 12, // slightly more padding for premium feel
-    paddingVertical: 6,
-    borderRadius: 16,
+    paddingHorizontal: 16, // more horizontal padding
+    paddingVertical: 8, // slightly more vertical height
+    borderRadius: 100, // Matching the main bar (Capsule)
   },
   dataText: {
     fontSize: 14,
@@ -343,5 +382,16 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#000",
     letterSpacing: -0.2,
+  },
+  driveModeButton: {
+    marginLeft: 10,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  driveModeButtonText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700",
   },
 });

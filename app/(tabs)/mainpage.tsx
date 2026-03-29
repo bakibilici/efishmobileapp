@@ -48,22 +48,28 @@ import {
   StatusBar,
   StyleSheet,
   Text,
-  TextInput,
+  TouchableOpacity,
   TouchableWithoutFeedback,
   UIManager,
   View,
 } from "react-native";
-import MapView, { Marker, PROVIDER_GOOGLE, Region } from "react-native-maps";
+import MapView, { Marker, PROVIDER_GOOGLE, Region, Polyline } from "react-native-maps";
+import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 
 // ... existing imports ...
 
 import { ActivityContextBar } from "@/components/ActivityContextBar";
+import { RoutePlanSheet } from "@/components/RoutePlanSheet";
+import { DriveSessionStore, DriveSessionState } from "@/services/DriveSessionStore";
+import { decodePolyline } from "@/services/GoogleMapsService";
 import { Station, StationType } from "@/constants/stations";
 import { Colors } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
 import { useActivityState } from "@/hooks/useActivityState";
 import { useHeaderAutoCollapse } from "@/hooks/useHeaderAutoCollapse";
 import Voice from "@react-native-voice/voice";
+
+
 import {
   Flash,
   Microphone2,
@@ -96,8 +102,7 @@ const pinImagesUnselected: Record<string, any> = {
   AC: require("../../assets/images/acmappinunselected.png"),
 };
 
-// Keep old reference for backward compat
-const pinImages = pinImagesSelected;
+
 
 const typeLightningCount: Record<StationType, number> = {
   AC: 1,
@@ -196,6 +201,55 @@ const MapPinMarker = React.memo(
 
 MapPinMarker.displayName = "MapPinMarker";
 
+// ── Slider Component ──
+const BatterySelector = ({ 
+  label, 
+  value, 
+  onValueChange, 
+  isDark, 
+  colors,
+}: { 
+  label: string; 
+  value: number; 
+  onValueChange: (val: number) => void;
+  isDark: boolean;
+  colors: any;
+}) => {
+  const handleDecrement = () => {
+    onValueChange(Math.max(0, value - 5));
+  };
+  const handleIncrement = () => {
+    onValueChange(Math.min(100, value + 5));
+  };
+
+  return (
+    <View style={{ marginBottom: 16 }}>
+      <Text style={{ fontSize: 13, fontWeight: "600", color: isDark ? "#A1A1AA" : "#71717A", marginBottom: 8 }}>{label}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: isDark ? "#121214" : "#F4F4F5", borderRadius: 12, padding: 6 }}>
+        <TouchableOpacity 
+          onPress={handleDecrement}
+          activeOpacity={0.7}
+          style={{ width: 44, height: 44, borderRadius: 10, backgroundColor: isDark ? "#27272A" : "#E4E4E7", justifyContent: 'center', alignItems: 'center' }}
+        >
+          <Ionicons name="remove" size={20} color={isDark ? "#FFF" : "#000"} />
+        </TouchableOpacity>
+        
+        <View style={{ flex: 1, alignItems: 'center' }}>
+          <Text style={{ fontSize: 18, fontWeight: "800", color: colors.primary }}>%{value}</Text>
+        </View>
+
+        <TouchableOpacity 
+          onPress={handleIncrement}
+          activeOpacity={0.7}
+          style={{ width: 44, height: 44, borderRadius: 10, backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center' }}
+        >
+          <Ionicons name="add" size={20} color="#FFF" />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+};
+
 export default function MapScreen() {
   const router = useRouter();
   const navigation = useNavigation<any>();
@@ -215,7 +269,11 @@ export default function MapScreen() {
   const [targetSocketUuid, setTargetSocketUuid] = useState<string | null>(null);
   const [myVehicles, setMyVehicles] = useState<any[]>([]);
   const [isLoadingVehicles, setIsLoadingVehicles] = useState(false);
+  const [measuredFilterHeight, setMeasuredFilterHeight] = useState(160); // Much smaller now
+  const [isBatteryQuickAdjustMounted, setIsBatteryQuickAdjustMounted] = useState(false);
+  const [routePlanSheetIndex, setRoutePlanSheetIndex] = useState(1);
   const isSwitchingMode = useRef(false);
+  const batteryQuickAdjustAnim = useRef(new Animated.Value(0)).current;
 
   // Meter values WebSocket
   const meterWsRef = useRef<WebSocket | null>(null);
@@ -235,9 +293,114 @@ export default function MapScreen() {
   // Charging Simulation
   const charging = useChargingSimulation();
   const chargingIsActiveRef = useRef(false);
+
+  // Drive Mode: hide header when drive session is active and observe route changes
+  const [driveStateObj, setDriveStateObj] = useState({ state: DriveSessionStore.getState(), tick: 0 });
+  const driveState = driveStateObj.state;
+  const isDriveModeActive = driveState !== DriveSessionState.IDLE && driveState !== DriveSessionState.PROMPTING;
+  const routePlanData = DriveSessionStore.getRoutePlanData();
+  const routeLocations = routePlanData?.locations ?? [];
+  const shouldShowOnlyRouteMarkers =
+    isDriveModeActive && routeLocations.length > 0;
+  const hasActiveRoutePlanSheet = isDriveModeActive && routeLocations.length > 0;
+  const shouldHideMapActionButtons = hasActiveRoutePlanSheet && routePlanSheetIndex > 0;
+  const mapActionButtonBottom = isDriveModeActive ? 132 : 120;
+  const mapActionButtonZIndex = hasActiveRoutePlanSheet ? 10 : 2500;
+  
+  useEffect(() => {
+    const unsub = DriveSessionStore.onStateChange((s) => setDriveStateObj({ state: s, tick: Date.now() }));
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (!hasActiveRoutePlanSheet) {
+      setRoutePlanSheetIndex(-1);
+      return;
+    }
+    setRoutePlanSheetIndex(1);
+  }, [hasActiveRoutePlanSheet, routePlanData]);
+
+  // Fit map to route when route plan data arrives
+  useEffect(() => {
+    const unsub = DriveSessionStore.onStateChange(() => {
+      const context = DriveSessionStore.getContext();
+      const planData = context?.routePlanData;
+      const currentRouteId = context?.route?.routeId || null;
+
+      // [FIX] Only auto-fit map if the route ID has actually changed.
+      // This prevents snapping back during AI speaking/listening state changes.
+      if (currentRouteId && currentRouteId !== lastHandledRouteIdRef.current) {
+        lastHandledRouteIdRef.current = currentRouteId;
+
+        if (planData?.locations && planData.locations.length >= 2 && mapRef.current) {
+          const coords = planData.locations
+            .filter((loc: any) => loc.coordinates)
+            .map((loc: any) => ({
+              latitude: parseFloat(loc.coordinates.lat),
+              longitude: parseFloat(loc.coordinates.lon),
+            }));
+            
+          if (coords.length >= 2) {
+            // Delay slightly to let the bottom sheet render first
+            setTimeout(() => {
+              mapRef.current?.fitToCoordinates(coords, {
+                edgePadding: { top: 120, right: 60, bottom: Dimensions.get('window').height * 0.55, left: 60 },
+                animated: true,
+              });
+            }, 500);
+          }
+        }
+      }
+    });
+    return unsub;
+  }, []);
+
   useEffect(() => {
     chargingIsActiveRef.current = charging.isActive;
   }, [charging.isActive]);
+
+  const openBatteryQuickAdjust = useCallback(() => {
+    setIsBatteryQuickAdjustMounted(true);
+    batteryQuickAdjustAnim.setValue(0);
+    Animated.spring(batteryQuickAdjustAnim, {
+      toValue: 1,
+      tension: 90,
+      friction: 11,
+      useNativeDriver: true,
+    }).start();
+  }, [batteryQuickAdjustAnim]);
+
+  const closeBatteryQuickAdjust = useCallback(() => {
+    Animated.timing(batteryQuickAdjustAnim, {
+      toValue: 0,
+      duration: 180,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) {
+        setIsBatteryQuickAdjustMounted(false);
+      }
+    });
+  }, [batteryQuickAdjustAnim]);
+
+  const toggleBatteryQuickAdjust = useCallback(() => {
+    if (isBatteryQuickAdjustMounted) {
+      closeBatteryQuickAdjust();
+      return;
+    }
+    openBatteryQuickAdjust();
+  }, [closeBatteryQuickAdjust, isBatteryQuickAdjustMounted, openBatteryQuickAdjust]);
+
+  useEffect(() => {
+    if (!isBatteryQuickAdjustMounted) return;
+    if (charging.isActive || shouldHideMapActionButtons) {
+      closeBatteryQuickAdjust();
+    }
+  }, [
+    charging.isActive,
+    closeBatteryQuickAdjust,
+    isBatteryQuickAdjustMounted,
+    shouldHideMapActionButtons,
+  ]);
 
   const handleStartPress = async (socketUuid: string) => {
     setTargetSocketUuid(socketUuid);
@@ -376,12 +539,10 @@ export default function MapScreen() {
 
                   // Calculate total available sockets from socket_stats
                   // Example stats: {"AC": {"available": 0, "total": 1}, "HPC": {"available": 1, "total": 1}}
-                  let availableCount = 0;
-                  let totalCount = 0;
                   if (s.socket_stats) {
                     Object.values(s.socket_stats).forEach((stat: any) => {
-                      availableCount += stat.available || 0;
-                      totalCount += stat.total || 0;
+                      // availableCount += stat.available || 0;
+                      // totalCount += stat.total || 0;
                     });
                   }
 
@@ -958,6 +1119,7 @@ export default function MapScreen() {
 
   const bottomSheetRef = useRef<BottomSheetModal>(null);
   const mapRef = useRef<MapView>(null);
+  const lastHandledRouteIdRef = useRef<string | null>(null);
   const snapPoints = useMemo(() => ["50%", "90%"], []);
 
   const typeListBottomSheetRef = useRef<BottomSheetModal>(null);
@@ -1429,18 +1591,62 @@ export default function MapScreen() {
                 : []
             }
           >
-            {filteredStations.map((station) => (
-              <MapPinMarker
-                key={station.id}
-                station={station}
-                isSelected={selectedStation?.id === station.id}
-                onPress={handleMarkerPress}
-              />
-            ))}
+            {(() => {
+              const poly = DriveSessionStore.getContext()?.route?.polyline;
+              if (!poly) return null;
+              
+              // Handle both direct coordinate arrays and encoded strings
+              const coordinates = typeof poly === 'string' 
+                ? decodePolyline(poly) 
+                : (Array.isArray(poly) ? poly : []);
+
+              if (coordinates.length === 0) return null;
+
+              return (
+                <Polyline
+                  coordinates={coordinates as { latitude: number; longitude: number }[]}
+                  strokeColor={colors.primary}
+                  strokeWidth={5}
+                  geodesic={true}
+                />
+              );
+            })()}
+
+            {/* Route Plan Markers: origin, stations, destination */}
+            {routeLocations.map((loc: any, idx: number) => {
+              if (!loc.coordinates) return null;
+              const lat = parseFloat(loc.coordinates.lat);
+              const lon = parseFloat(loc.coordinates.lon);
+              if (isNaN(lat) || isNaN(lon)) return null;
+              
+              const pinColor = loc.type === 'origin' ? '#22C55E' : loc.type === 'station' ? '#FF6B35' : '#EF4444';
+              
+              return (
+                <Marker
+                  key={`route-loc-${idx}`}
+                  coordinate={{ latitude: lat, longitude: lon }}
+                  title={loc.name}
+                  description={loc.type === 'station' ? `${loc.brand || ''} • ${loc.dc_count || 0} DC` : undefined}
+                  pinColor={pinColor}
+                  zIndex={500}
+                />
+              );
+            })}
+            
+            {!shouldShowOnlyRouteMarkers &&
+              filteredStations.map((station) => (
+                <MapPinMarker
+                  key={station.id}
+                  station={station}
+                  isSelected={selectedStation?.id === station.id}
+                  onPress={handleMarkerPress}
+                />
+              ))}
           </MapView>
 
           <View style={[styles.overlay, { paddingTop: topInset }]}>
-            {/* Main Header Card Container */}
+            {/* Main Header Card Container — hidden during driving mode */}
+            {!isDriveModeActive && (
             <Animated.View
               style={{
                 position: "absolute",
@@ -1487,72 +1693,90 @@ export default function MapScreen() {
                     <View
                       style={{
                         flex: 1,
-                        height: 48, // Slightly taller
-                        backgroundColor: isDark ? "#333" : "#fff", // Use white in light mode for contrast
-                        borderRadius: 99,
-                        justifyContent: "center",
-                        borderWidth: 1,
-                        borderColor: isDark ? "#444" : "#e0e0e0", // Subtle borde
+                        height: 48,
+                        zIndex: 100, // Ensure autocomplete dropdown is on top
                       }}
                     >
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          flex: 1,
+                      <GooglePlacesAutocomplete
+                        placeholder="Search Stations or Locations"
+                        onPress={(data, details = null) => {
+                          if (details) {
+                            const { lat, lng } = details.geometry.location;
+                            mapRef.current?.animateToRegion({
+                              latitude: lat,
+                              longitude: lng,
+                              latitudeDelta: 0.05,
+                              longitudeDelta: 0.05,
+                            }, 1000);
+                          } else {
+                            // Fallback if details not provided
+                            setSearch(data.description);
+                          }
                         }}
-                      >
-                        <TextInput
-                          placeholder={
-                            isTypeListOpen && bottomSheetSelectedType
-                              ? `${bottomSheetSelectedType} Stations`
-                              : "Search"
-                          }
-                          placeholderTextColor={
-                            isTypeListOpen && bottomSheetSelectedType
-                              ? colors.text
-                              : colors.textTertiary
-                          }
-                          value={search}
-                          onChangeText={setSearch}
-                          editable={!isTypeListOpen}
-                          style={{
-                            flex: 1,
+                        query={{
+                          key: Platform.OS === 'ios' 
+                            ? process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY 
+                            : process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY,
+                          language: 'tr',
+                        }}
+                        fetchDetails={true}
+                        styles={{
+                          container: {
+                            flex: 0,
+                          },
+                          textInputContainer: {
+                            backgroundColor: 'transparent',
+                            height: 48,
+                            borderTopWidth: 0,
+                            borderBottomWidth: 0,
+                          },
+                          textInput: {
+                            backgroundColor: isDark ? "#333" : "#fff",
+                            height: 48,
+                            borderRadius: 99,
                             paddingHorizontal: 16,
                             fontSize: 16,
                             color: colors.text,
-                            fontWeight:
-                              isTypeListOpen && bottomSheetSelectedType
-                                ? "700"
-                                : "normal",
-                          }}
-                        />
-                        {isTypeListOpen && bottomSheetSelectedType ? (
-                          <Pressable
-                            onPress={() => {
-                              LayoutAnimation.configureNext(
-                                LayoutAnimation.Presets.easeInEaseOut,
-                              );
-                              setBottomSheetSelectedType(null);
-                              setIsTypeListOpen(false);
-                              typeListBottomSheetRef.current?.dismiss();
-                              DeviceEventEmitter.emit(
-                                "toggleBottomSheet",
-                                false,
-                              );
-                            }}
-                            style={{ paddingRight: 12 }}
-                          >
-                            <Ionicons
-                              name="close-circle"
-                              size={20}
-                              color={colors.textSecondary}
-                            />
-                          </Pressable>
-                        ) : (
-                          <Pressable
+                            borderWidth: 1,
+                            borderColor: isDark ? "#444" : "#e0e0e0",
+                          },
+                          predefinedPlacesDescription: {
+                            color: '#1faadb',
+                          },
+                          listView: {
+                            backgroundColor: isDark ? "#1E1E1E" : "#FFF",
+                            borderRadius: 12,
+                            marginTop: 4,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            elevation: 5,
+                            shadowColor: "#000",
+                            shadowOffset: { width: 0, height: 4 },
+                            shadowOpacity: 0.2,
+                            shadowRadius: 8,
+                          },
+                          row: {
+                            backgroundColor: 'transparent',
+                            padding: 13,
+                            height: 44,
+                            flexDirection: 'row',
+                          },
+                          separator: {
+                            height: 0.5,
+                            backgroundColor: colors.border,
+                          },
+                          description: {
+                            color: colors.text,
+                          },
+                        }}
+                        textInputProps={{
+                          placeholderTextColor: colors.textTertiary,
+                          clearButtonMode: 'never',
+                        }}
+                        renderRightButton={() => (
+                           <Pressable
                             onPress={toggleListening}
-                            style={{ paddingRight: 12 }}
+                            style={{ position: 'absolute', right: 12, top: 14 }}
                           >
                             <Microphone2
                               size={20}
@@ -1565,7 +1789,7 @@ export default function MapScreen() {
                             />
                           </Pressable>
                         )}
-                      </View>
+                      />
                     </View>
                     <Pressable
                       onPress={toggleFilters}
@@ -1634,7 +1858,7 @@ export default function MapScreen() {
                     style={{
                       height: filterDrawerAnim.interpolate({
                         inputRange: [0, 1],
-                        outputRange: [0, 90], // Enough height for exactly 2 lines + gaps
+                        outputRange: [0, measuredFilterHeight], // Dynamic height
                       }),
                       opacity: filterDrawerAnim,
                       overflow: "hidden",
@@ -1643,38 +1867,49 @@ export default function MapScreen() {
                       gap: 12,
                     }}
                   >
-                    {/* Row 1: Types */}
-                    <View style={{ flexDirection: "row", gap: 10 }}>
-                      {types.map((item) => (
-                        <FilterChip
-                          key={item.key}
-                          label={item.label}
-                          color={item.color}
-                          active={item.active}
-                          lightningCount={item.lightningCount}
-                          onPress={item.onPress}
-                          colors={colors}
-                          compact
-                          style={{ flex: 1 }}
-                        />
-                      ))}
-                    </View>
+                    {/* Inner wrapper View to measure actual content height */}
+                    <View 
+                      onLayout={(e) => {
+                        const { height } = e.nativeEvent.layout;
+                        if (height > 0 && Math.abs(height - measuredFilterHeight) > 1) {
+                          setMeasuredFilterHeight(height);
+                        }
+                      }}
+                      style={{ gap: 12, paddingBottom: 8 }}
+                    >
+                      {/* Row 1: Types */}
+                      <View style={{ flexDirection: "row", gap: 10 }}>
+                        {types.map((item) => (
+                          <FilterChip
+                            key={item.key}
+                            label={item.label}
+                            color={item.color}
+                            active={item.active}
+                            lightningCount={item.lightningCount}
+                            onPress={item.onPress}
+                            colors={colors}
+                            compact
+                            style={{ flex: 1 }}
+                          />
+                        ))}
+                      </View>
 
-                    {/* Row 2: Toggles (now rendering as FilterChips) */}
-                    <View style={{ flexDirection: "row", gap: 10 }}>
-                      {toggles.map((item) => (
-                        <FilterChip
-                          key={item.key}
-                          label={item.label}
-                          color={item.color}
-                          active={item.active}
-                          icon={item.icon}
-                          onPress={item.onPress}
-                          colors={colors}
-                          compact
-                          style={{ flex: 1 }}
-                        />
-                      ))}
+                      {/* Row 2: Toggles (now rendering as FilterChips) */}
+                      <View style={{ flexDirection: "row", gap: 10 }}>
+                        {toggles.map((item) => (
+                          <FilterChip
+                            key={item.key}
+                            label={item.label}
+                            color={item.color}
+                            active={item.active}
+                            icon={item.icon}
+                            onPress={item.onPress}
+                            colors={colors}
+                            compact
+                            style={{ flex: 1 }}
+                          />
+                        ))}
+                      </View>
                     </View>
                   </Animated.View>
 
@@ -1788,8 +2023,11 @@ export default function MapScreen() {
                 </View>
               </Animated.View>
 
-              <ActivityContextBar mode={headerMode} onPress={forceExpand} />
+              <View style={{ marginTop: 12, paddingBottom: 4 }}>
+                <ActivityContextBar mode={headerMode} onPress={forceExpand} />
+              </View>
             </Animated.View>
+            )}
           </View>
 
           {/* Floating Charging Widget at Bottom */}
@@ -1804,9 +2042,17 @@ export default function MapScreen() {
             </View>
           )}
 
-          {/* Re-center Button - Hide when widget is active to avoid clutter? Or keep? Keeping for now. */}
-          {showRecenter && !charging.isActive && (
-            <Animated.View style={styles.recenterBtnWrapper}>
+          {/* Re-center Button */}
+          {showRecenter && !charging.isActive && !shouldHideMapActionButtons && (
+            <Animated.View
+              style={[
+                styles.recenterBtnWrapper,
+                {
+                  bottom: mapActionButtonBottom,
+                  zIndex: mapActionButtonZIndex,
+                },
+              ]}
+            >
               <Pressable
                 onPress={handleRecenter}
                 style={[
@@ -1821,6 +2067,105 @@ export default function MapScreen() {
                 />
               </Pressable>
             </Animated.View>
+          )}
+
+          {isBatteryQuickAdjustMounted && !shouldHideMapActionButtons && (
+            <Animated.View
+              pointerEvents="box-none"
+              style={[
+                StyleSheet.absoluteFillObject,
+                {
+                  zIndex: mapActionButtonZIndex - 1,
+                  opacity: batteryQuickAdjustAnim,
+                },
+              ]}
+            >
+              <Pressable
+                style={styles.quickAdjustBackdrop}
+                onPress={closeBatteryQuickAdjust}
+              />
+            </Animated.View>
+          )}
+
+          {/* Battery Quick Adjust Button & Card */}
+          {!shouldHideMapActionButtons && (
+            <View
+              style={[
+                styles.recenterBtnWrapper,
+                {
+                  right: undefined,
+                  left: 20,
+                  bottom: mapActionButtonBottom,
+                  zIndex: mapActionButtonZIndex,
+                },
+              ]}
+            >
+              {isBatteryQuickAdjustMounted && (
+                <Animated.View 
+                  style={[
+                    styles.quickAdjustCard,
+                    {
+                      backgroundColor: colors.card,
+                      borderColor: colors.border,
+                      opacity: batteryQuickAdjustAnim,
+                      transform: [
+                        {
+                          translateY: batteryQuickAdjustAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [18, 0],
+                          }),
+                        },
+                        {
+                          scale: batteryQuickAdjustAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0.96, 1],
+                          }),
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                    <Text style={{ fontSize: 16, fontWeight: '800', color: colors.text }}>Batarya Ayarları</Text>
+                    <TouchableOpacity onPress={closeBatteryQuickAdjust}>
+                      <Ionicons name="close-circle" size={24} color={colors.textTertiary} />
+                    </TouchableOpacity>
+                  </View>
+                  
+                  <BatterySelector
+                    label="Başlangıç Şarjı"
+                    value={DriveSessionStore.getContext()?.userStartBattery ?? 100}
+                    onValueChange={(val: number) => DriveSessionStore.setBatteryPreferences(val, DriveSessionStore.getContext()?.userArrivalBattery ?? 80)}
+                    isDark={isDark}
+                    colors={colors}
+                  />
+                  <BatterySelector
+                    label="Hedef Varış Şarjı"
+                    value={DriveSessionStore.getContext()?.userArrivalBattery ?? 80}
+                    onValueChange={(val: number) => DriveSessionStore.setBatteryPreferences(DriveSessionStore.getContext()?.userStartBattery ?? 100, val)}
+                    isDark={isDark}
+                    colors={colors}
+                  />
+                </Animated.View>
+              )}
+              
+              <Pressable
+                onPress={toggleBatteryQuickAdjust}
+                style={[
+                  styles.recenterBtn,
+                  { 
+                    backgroundColor: isBatteryQuickAdjustMounted ? colors.primary : colors.card, 
+                    shadowColor: colors.shadow 
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="battery-charging"
+                  size={26}
+                  color={isBatteryQuickAdjustMounted ? "#fff" : colors.primary}
+                />
+              </Pressable>
+            </View>
           )}
 
           <BottomSheetModal
@@ -3009,6 +3354,11 @@ export default function MapScreen() {
               />
             </View>
           </BottomSheetModal>
+
+          {/* Route Plan Bottom Sheet — shown when Atlas creates a route */}
+          {isDriveModeActive && (
+            <RoutePlanSheet onSheetIndexChange={setRoutePlanSheetIndex} />
+          )}
         </View>
       </View>
     </TouchableWithoutFeedback>
@@ -3485,7 +3835,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     bottom: 120, // Enough to be above potential bottom sheet tab or bottom nav
     right: 20,
-    zIndex: 50,
+    zIndex: 2500,
   },
   floatingWidgetContainer: {
     position: "absolute",
@@ -3505,6 +3855,24 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
+  },
+  quickAdjustBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(9, 17, 24, 0.1)",
+  },
+  quickAdjustCard: {
+    position: "absolute",
+    bottom: 76,
+    left: 0,
+    width: 268,
+    borderRadius: 28,
+    padding: 18,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.18,
+    shadowRadius: 28,
+    elevation: 12,
+    borderWidth: 1,
   },
   recenterText: {
     fontWeight: "700",

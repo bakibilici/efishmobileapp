@@ -279,11 +279,11 @@ async function runScenario(
 
   // Subscribe to StepStore updates
   const unsubSteps = StepStore.subscribe((snapshot) => {
-    logStepStore(
-      snapshot.rawSteps,
-      snapshot.effectiveSteps,
-      snapshot.isCharging,
-    );
+    // logStepStore(
+    //   snapshot.rawSteps,
+    //   snapshot.effectiveSteps,
+    //   snapshot.isCharging,
+    // );
   });
 
   // Intercept classification by overriding console.debug to capture pipeline logs
@@ -294,7 +294,7 @@ async function runScenario(
       // Extract classification from pipeline log
       const match = msg.match(/Classification: (\w+)/);
       if (match) {
-        logClassification(match[1]);
+        // logClassification(match[1]);
       }
     }
   };
@@ -328,12 +328,12 @@ async function runScenario(
     };
 
     // Log sensor data
-    logSensor(i, tick.label ?? "", {
-      steps: tick.steps,
-      speed: tick.speed,
-      isCharging: tick.isCharging,
-      motionVariance: tick.motionVariance,
-    });
+    // logSensor(i, tick.label ?? "", {
+    //   steps: tick.steps,
+    //   speed: tick.speed,
+    //   isCharging: tick.isCharging,
+    //   motionVariance: tick.motionVariance,
+    // });
 
     // Emit data directly into the pipeline's subscriber chain
     provider.simulateTickNow();

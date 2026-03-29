@@ -123,9 +123,9 @@ export class ActivityPipeline {
     const classifiedState: ClassifierState = classifyActivity(windowData);
 
     // Optional: Log the instantaneous "raw" classification state for debugging
-    console.debug(
-      `[ActivityPipeline] Instantaneous Window Classification: ${classifiedState}`,
-    );
+    // console.debug(
+    //   `[ActivityPipeline] Instantaneous Window Classification: ${classifiedState}`,
+    // );
 
     // C. Calculate average speed over the window and update store
     let totalSpeed = 0;
