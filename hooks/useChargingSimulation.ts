@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 export type ChargingMode = 'AC' | 'DC' | 'HPC';
 
-export type ChargeSessionStatus = 'INITIATING' | 'INITIATED' | 'CHARGING' | 'STOPPING' | 'FINISHED';
+export type ChargeSessionStatus = 'INITIATING' | 'INITIATED' | 'PREPARING' | 'CHARGING' | 'STOPPING' | 'FINISHED' | 'DISMISSING';
 
 export type ChargeSessionPayload = {
     charge_session_uuid?: string;
@@ -46,11 +46,13 @@ export type ChargeSessionPayload = {
 export type ChargingState = {
     isActive: boolean;
     isMinimized: boolean;
+    isFinishing: boolean;
+    isDismissing: boolean;
     mode: ChargingMode;
     sessionStatus: ChargeSessionStatus | null;
     chargeSessionData: ChargeSessionPayload | null;
     isStarting?: boolean;
-    batteryLevel: number; // 0-100
+    batteryLevel: number | null; // 0-100
     power: number; // kW
     chargedAmount: number; // kWh
     cost: number; // TL
@@ -62,7 +64,6 @@ export type ChargingState = {
     estTime80: number | null; // minutes remaining to 80%
     estTime100: number | null; // minutes remaining to 100%
     hasError?: boolean;
-    isFinishing?: boolean;
 };
 
 export const useChargingSimulation = () => {
@@ -85,10 +86,12 @@ export const useChargingSimulation = () => {
         estTime100: null,
         hasError: false,
         isFinishing: false,
+        isDismissing: false,
     });
 
     const timerRef = useRef<any>(null);
     const isLiveFromBackendRef = useRef(false);
+    const stoppingAtRef = useRef<number | null>(null);
 
     /** Update charging state from backend WebSocket meter values. When power > 0 or session is active, widget is shown. */
     const updateFromMeterValues = (data: {
@@ -110,6 +113,12 @@ export const useChargingSimulation = () => {
         status?: string; // INITIATING, INITIATED, CHARGING, STOPPING, FINISHED etc. from backend
         chargeSessionData?: ChargeSessionPayload; // Full session payload
     }) => {
+        // Set stoppingAtRef immediately synchronously upon receive, outside React state dispatch!
+        // This prevents race conditions where FINISHED closely follows STOPPING
+        if (data.status?.toUpperCase() === 'STOPPING' && !stoppingAtRef.current) {
+            stoppingAtRef.current = Date.now();
+        }
+
         const batteryLevel = data.batteryLevel ?? data.soc ?? data.state_of_charge;
         const power = data.power_kw ?? data.power ?? 0;
         const chargedAmount = data.charged_kwh ?? data.chargedAmount ?? data.energy_kwh ?? 0;
@@ -124,7 +133,7 @@ export const useChargingSimulation = () => {
         const startSoc = data.start_soc ?? null;
 
         // Consider session active if power > 0, batteryLevel is known, OR status indicates an active session
-        const activeStatuses = ['INITIATING', 'INITIATED', 'CHARGING', 'STOPPING', 'FINISHED'];
+        const activeStatuses = ['INITIATING', 'INITIATED', 'PREPARING', 'CHARGING', 'STOPPING', 'FINISHED'];
         const isActiveStatus = data.status ? activeStatuses.includes(data.status.toUpperCase()) : false;
         const hasCharging = power > 0 || (batteryLevel != null && batteryLevel > 0) || isActiveStatus;
 
@@ -161,8 +170,8 @@ export const useChargingSimulation = () => {
             if (data.status) {
                 console.log("[CHARGING_HOOK] Received status:", upperStatus);
 
-                // INITIATING / INITIATED → Show starting animation
-                if (upperStatus === 'INITIATING' || upperStatus === 'INITIATED') {
+                // INITIATING / INITIATED / PREPARING → Show starting animation
+                if (upperStatus === 'INITIATING' || upperStatus === 'INITIATED' || upperStatus === 'PREPARING') {
                     console.log("[CHARGING_HOOK] Status is", upperStatus, "→ showing starting UI");
                     isLiveFromBackendRef.current = true;
                     return {
@@ -171,6 +180,7 @@ export const useChargingSimulation = () => {
                         isMinimized: true,
                         isStarting: true,
                         isFinishing: false,
+                        isDismissing: false,
                         sessionStatus: upperStatus as ChargeSessionStatus,
                         chargeSessionData: data.chargeSessionData ?? prev.chargeSessionData,
                         mode,
@@ -191,6 +201,7 @@ export const useChargingSimulation = () => {
                         isMinimized: prev.isStarting ? true : prev.isMinimized, // Keep minimized if was starting
                         isStarting: false,
                         isFinishing: false,
+                        isDismissing: false,
                         sessionStatus: 'CHARGING' as ChargeSessionStatus,
                         chargeSessionData: data.chargeSessionData ?? prev.chargeSessionData,
                         mode,
@@ -206,8 +217,12 @@ export const useChargingSimulation = () => {
                     };
                 }
 
-                // STOPPING → Show finishing/stopping animation
                 if (upperStatus === 'STOPPING') {
+                    // Prevent regression if we're already FINISHED (Completed)
+                    if (prev.sessionStatus === 'FINISHED') {
+                        console.log("[CHARGING_HOOK] Ignoring STOPPING because session is already FINISHED");
+                        return prev;
+                    }
                     console.log("[CHARGING_HOOK] Status is STOPPING → showing finishing UI");
                     if (timerRef.current) clearInterval(timerRef.current);
                     return {
@@ -215,6 +230,7 @@ export const useChargingSimulation = () => {
                         isActive: true,
                         isStarting: false,
                         isFinishing: true,
+                        isDismissing: false,
                         sessionStatus: 'STOPPING' as ChargeSessionStatus,
                         hasError: prev.hasError,
                     };
@@ -222,6 +238,18 @@ export const useChargingSimulation = () => {
 
                 // FINISHED → Charge complete, cable still plugged
                 if (upperStatus === 'FINISHED') {
+                    if (stoppingAtRef.current) {
+                        const elapsed = Date.now() - stoppingAtRef.current;
+                        if (elapsed < 2000) {
+                            const delay = 2000 - elapsed;
+                            console.log(`[CHARGING_HOOK] Delaying FINISHED by ${delay}ms to guarantee 2s STOPPING display`);
+                            setTimeout(() => {
+                                updateFromMeterValues(data);
+                            }, delay);
+                            return prev;
+                        }
+                    }
+                    stoppingAtRef.current = null;
                     console.log("[CHARGING_HOOK] Status is FINISHED → showing 'unplug cable' UI");
                     if (timerRef.current) clearInterval(timerRef.current);
                     return {
@@ -229,6 +257,7 @@ export const useChargingSimulation = () => {
                         isActive: true,
                         isStarting: false,
                         isFinishing: false,
+                        isDismissing: false,
                         sessionStatus: 'FINISHED' as ChargeSessionStatus,
                         chargeSessionData: data.chargeSessionData ?? prev.chargeSessionData,
                         chargedAmount: chargedAmount || prev.chargedAmount,
@@ -240,21 +269,21 @@ export const useChargingSimulation = () => {
 
                 // Legacy: FINISHING (synthetic status from old flow)
                 if (upperStatus === 'FINISHING') {
-                    console.log("[CHARGING_HOOK] Status is FINISHING! Enabling timeout.");
+                    // Prevent regression if we're already FINISHED (Completed)
+                    if (prev.sessionStatus === 'FINISHED') {
+                        console.log("[CHARGING_HOOK] Ignoring FINISHING because session is already FINISHED");
+                        return prev;
+                    }
+                    console.log("[CHARGING_HOOK] Status is FINISHING! Waiting for socket update.");
                     if (timerRef.current) clearInterval(timerRef.current);
-
-                    // Show finishing state for 5.5 seconds before stopping
-                    setTimeout(() => {
-                        console.log("[CHARGING_HOOK] 5.5 second timeout elapsed. Calling stopSimulation()");
-                        stopSimulation();
-                    }, 5500);
 
                     return {
                         ...prev,
                         isActive: true,
                         hasError: prev.hasError,
                         isStarting: false,
-                        isFinishing: true
+                        isFinishing: true,
+                        isDismissing: false,
                     };
                 }
 
@@ -277,6 +306,8 @@ export const useChargingSimulation = () => {
                     sessionStatus: (upperStatus as ChargeSessionStatus) ?? prev.sessionStatus,
                     chargeSessionData: data.chargeSessionData ?? prev.chargeSessionData,
                     isStarting: false,
+                    isFinishing: false,
+                    isDismissing: false,
                     batteryLevel: batteryLevel ?? prev.batteryLevel,
                     power: power || prev.power,
                     chargedAmount: chargedAmount || prev.chargedAmount,
@@ -288,7 +319,6 @@ export const useChargingSimulation = () => {
                     estTime80: null,
                     estTime100: null,
                     hasError: false,
-                    isFinishing: false,
                 };
             }
 
@@ -312,7 +342,7 @@ export const useChargingSimulation = () => {
                 if (timerRef.current) clearInterval(timerRef.current);
                 isLiveFromBackendRef.current = false;
                 if (prev.isActive) {
-                    return { ...prev, isActive: false, startTime: null, startedAt: null, startSoc: null, hasError: false, isFinishing: false, isStarting: false, sessionStatus: null, chargeSessionData: null };
+                    return { ...prev, isActive: false, startTime: null, startedAt: null, startSoc: null, hasError: false, isFinishing: false, isStarting: false, isDismissing: false, sessionStatus: null, chargeSessionData: null };
                 }
             }
 
@@ -321,25 +351,63 @@ export const useChargingSimulation = () => {
     };
 
     /** Called when socket_status_update → Available is received. Closes all charging UI. */
-    const handleSessionComplete = () => {
+    const handleSessionComplete = (withAnimation = false) => {
         console.log("[CHARGING_HOOK] handleSessionComplete → Socket Available, closing UI");
         isLiveFromBackendRef.current = false;
         if (timerRef.current) {
             clearInterval(timerRef.current);
         }
-        setState(prev => ({
-            ...prev,
-            isActive: false,
-            isMinimized: false,
-            isStarting: false,
-            isFinishing: false,
-            sessionStatus: null,
-            chargeSessionData: null,
-            startTime: null,
-            startedAt: null,
-            startSoc: null,
-            hasError: false,
-        }));
+
+        if (withAnimation) {
+            setState(prev => ({
+                ...prev,
+                isDismissing: true,
+                sessionStatus: 'DISMISSING',
+            }));
+            setTimeout(() => {
+                setState(prev => ({
+                    ...prev,
+                    isActive: false,
+                    isMinimized: false,
+                    sessionStatus: null,
+                    chargeSessionData: null,
+                    power: 0,
+                    batteryLevel: null,
+                    chargedAmount: 0,
+                    duration: 0,
+                    cost: 0,
+                    isStarting: false,
+                    isFinishing: false,
+                    isDismissing: false,
+                    startTime: null,
+                    startedAt: null,
+                    startSoc: null,
+                    hasError: false,
+                }));
+                stoppingAtRef.current = null;
+            }, 2500); // Wait 2.5s for the green animation to finish
+        } else {
+            setState(prev => ({
+                ...prev,
+                isActive: false,
+                isMinimized: false,
+                sessionStatus: null,
+                chargeSessionData: null,
+                power: 0,
+                batteryLevel: null,
+                chargedAmount: 0,
+                duration: 0,
+                cost: 0,
+                isStarting: false,
+                isFinishing: false,
+                isDismissing: false,
+                startTime: null,
+                startedAt: null,
+                startSoc: null,
+                hasError: false,
+            }));
+            stoppingAtRef.current = null;
+        }
     };
 
     const startSimulation = (mode: ChargingMode = 'DC') => {
@@ -366,6 +434,7 @@ export const useChargingSimulation = () => {
             estTime80: mode !== 'AC' ? 20 : null,
             estTime100: mode !== 'AC' ? 40 : null,
             isFinishing: false,
+            isDismissing: false,
             hasError: false,
         });
     };
@@ -376,7 +445,7 @@ export const useChargingSimulation = () => {
             clearInterval(timerRef.current);
         }
         // Do not reset hasError so error modal persists until specifically dismissed
-        setState(prev => ({ ...prev, isActive: false, startTime: null, startedAt: null, startSoc: null, isFinishing: false, isStarting: false, sessionStatus: null, chargeSessionData: null }));
+        setState(prev => ({ ...prev, isActive: false, startTime: null, startedAt: null, startSoc: null, isFinishing: false, isStarting: false, isDismissing: false, sessionStatus: null, chargeSessionData: null }));
     };
 
     const clearError = () => {
@@ -426,18 +495,19 @@ export const useChargingSimulation = () => {
 
                     // Simulation Logic (Only if not from backend)
                     if (!isLiveFromBackendRef.current) {
+                        const currentLevel = prev.batteryLevel ?? 0;
                         if (prev.mode === 'AC') {
-                            newLevel = Math.min(100, prev.batteryLevel + 0.5);
+                            newLevel = Math.min(100, currentLevel + 0.5);
                             newCharged = prev.chargedAmount + (22 / 3600);
                             newCost = prev.cost + ((22 / 3600) * 8.5);
                         } else if (prev.mode === 'DC') {
-                            let increment = prev.batteryLevel < 80 ? 1.5 : 0.2;
-                            newLevel = Math.min(100, prev.batteryLevel + increment);
-                            newCharged = prev.chargedAmount + (120 / 3600);
+                            let increment = currentLevel < 80 ? 1.5 : 0.2;
+                            newLevel = Math.min(100, currentLevel + increment);
+                            newCharged = prev.chargedAmount + (120 * increment / 100);
                             newCost = prev.cost + ((120 / 3600) * 12.0);
                         } else {
-                            let increment = prev.batteryLevel < 80 ? 3.0 : 0.5;
-                            newLevel = Math.min(100, prev.batteryLevel + increment);
+                            let increment = currentLevel < 80 ? 3.0 : 0.5;
+                            newLevel = Math.min(100, currentLevel + increment);
                             newCharged = prev.chargedAmount + (300 / 3600);
                             newCost = prev.cost + ((300 / 3600) * 12.0);
                         }

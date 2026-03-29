@@ -3,7 +3,7 @@ import { ChargingMode, ChargingState } from '@/hooks/useChargingSimulation';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import React, { useEffect, useRef } from 'react';
 import { Dimensions, Easing, Image, Pressable, Animated as RNAnimated, StyleSheet, Text, View } from 'react-native';
-import Animated, { interpolateColor, useAnimatedProps, useDerivedValue, withTiming } from 'react-native-reanimated';
+import Animated, { interpolateColor, useAnimatedProps, useDerivedValue, withTiming, useSharedValue, useAnimatedStyle, withDelay } from 'react-native-reanimated';
 import Svg, { Circle, Defs, Mask } from 'react-native-svg';
 import FinishingSpinner from './FinishingSpinner';
 
@@ -74,7 +74,7 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
 
     // Derived values for progress
     const progress = useDerivedValue(() => {
-        return withTiming(state.batteryLevel / 100, { duration: 1000 });
+        return withTiming((state.batteryLevel ?? 0) / 100, { duration: 1000 });
     }, [state.batteryLevel]);
 
     const animatedProps = useAnimatedProps(() => {
@@ -97,10 +97,37 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
         };
     }, [state.mode, colors.primary]);
 
-    const isComplete = state.batteryLevel >= 100;
+    const isComplete = (state.batteryLevel ?? 0) >= 100;
     const isStarting = state.isStarting;
     const isFinished = state.sessionStatus === 'FINISHED';
-    const isStopping = state.isFinishing;
+    const isStopping = state.isFinishing && !state.isDismissing;
+    const isDismissing = state.isDismissing;
+
+    // Dismissing Animation Values
+    const dismissBgAnim = useSharedValue(0);
+    const dismissOpacityAnim = useSharedValue(1);
+
+    useEffect(() => {
+        if (isDismissing) {
+            dismissBgAnim.value = withTiming(1, { duration: 600 });
+            // Fade out the entire screen near the end of the 2.5s timer
+            dismissOpacityAnim.value = withDelay(1800, withTiming(0, { duration: 500 }));
+        } else {
+            dismissBgAnim.value = 0;
+            dismissOpacityAnim.value = 1;
+        }
+    }, [isDismissing]);
+
+    const animatedContainerStyle = useAnimatedStyle(() => {
+        return {
+            backgroundColor: interpolateColor(
+                dismissBgAnim.value,
+                [0, 1],
+                ['transparent', '#2CDD9D']
+            ),
+            opacity: dismissOpacityAnim.value
+        };
+    });
 
     const modeColors: Record<string, string> = {
         HPC: '#7C4DFF',
@@ -118,7 +145,7 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
     };
 
     return (
-        <View style={styles.container}>
+        <Animated.View style={[styles.container, animatedContainerStyle]}>
             <View style={{ flex: 1, paddingBottom: 40 }}>
 
                 {/* Header */}
@@ -128,10 +155,12 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                             isComplete={isComplete || isFinished}
                             color={isStarting ? modeColors[state.mode] : isFinished ? '#2CDD9D' : undefined}
                         />
-                        <Text style={[styles.headerTitle, { color: colors.text }]}>
-                            {isStarting
-                                ? 'Şarj Başlatılıyor'
-                                : isFinished
+                        <Text style={[styles.headerTitle, { color: isDismissing ? '#fff' : colors.text }]}>
+                            {isDismissing
+                                ? 'Şarj Başarıyla Tamamlandı'
+                                : isStarting
+                                    ? 'Şarj Başlatılıyor'
+                                    : isFinished
                                     ? 'Şarj Tamamlandı'
                                     : isStopping
                                         ? 'Şarj Durduruluyor'
@@ -140,7 +169,7 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                                             : 'Charging...'
                             }
                         </Text>
-                        <View style={[styles.modeBadge, { backgroundColor: isFinished ? '#2CDD9D' : modeColors[state.mode] || '#656565' }]}>
+                        <View style={[styles.modeBadge, { backgroundColor: isDismissing ? 'rgba(255,255,255,0.2)' : isFinished ? '#2CDD9D' : modeColors[state.mode] || '#656565' }]}>
                             <Text style={styles.modeBadgeText}>{state.mode}</Text>
                         </View>
                     </View>
@@ -171,29 +200,31 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                             )}
                         </View>
                     </View>
-                ) : isFinished ? (
-                    /* ── Finished View (Cable still plugged) ── */
+                ) : isFinished || isDismissing ? (
+                    /* ── Finished View (Cable still plugged) or Dismissing ── */
                     <View style={styles.mainContent}>
                         <View style={styles.finishedContainer}>
                             {/* Big Green Check */}
-                            <View style={styles.finishedCheckCircle}>
-                                <Ionicons name="checkmark" size={60} color="#fff" />
+                            <View style={[styles.finishedCheckCircle, isDismissing && { backgroundColor: '#fff', shadowColor: 'transparent' }]}>
+                                <Ionicons name="checkmark" size={60} color={isDismissing ? '#2CDD9D' : '#fff'} />
                             </View>
 
-                            <Text style={[styles.percentageText, { color: '#2CDD9D', fontSize: 28, marginTop: 24 }]}>
-                                Şarjınız Tamamlandı!
+                            <Text style={[styles.percentageText, { color: isDismissing ? '#fff' : '#2CDD9D', fontSize: 28, marginTop: 24, textAlign: 'center' }]}>
+                                {isDismissing ? 'Şarj Oturumu Tamamlandı!' : 'Şarjınız Tamamlandı!'}
                             </Text>
 
-                            <Text style={[styles.powerText, { color: colors.textSecondary, marginTop: 8, textAlign: 'center', paddingHorizontal: 30 }]}>
-                                Lütfen şarj soketini aracınızdan çıkartın.
+                            <Text style={[styles.powerText, { color: isDismissing ? 'rgba(255,255,255,0.8)' : colors.textSecondary, marginTop: 8, textAlign: 'center', paddingHorizontal: 30 }]}>
+                                {isDismissing ? 'Soket ayrıldı, iyi yolculuklar dileriz.' : 'Lütfen şarj soketini aracınızdan çıkartın.'}
                             </Text>
 
                             {/* Unplug Animation Hint */}
-                            <View style={styles.unplugHintContainer}>
-                                <RNAnimated.View>
-                                    <Ionicons name="exit-outline" size={32} color="#2CDD9D" />
-                                </RNAnimated.View>
-                            </View>
+                            {!isDismissing && (
+                                <View style={styles.unplugHintContainer}>
+                                    <RNAnimated.View>
+                                        <Ionicons name="exit-outline" size={32} color="#2CDD9D" />
+                                    </RNAnimated.View>
+                                </View>
+                            )}
                         </View>
                     </View>
                 ) : isStopping ? (
@@ -266,7 +297,7 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                                         resizeMode="contain"
                                     />
                                     <Text style={[styles.percentageText, { color: colors.text }]}>
-                                        {Math.floor(state.batteryLevel)}%
+                                        {Math.floor(state.batteryLevel ?? 0)}%
                                     </Text>
                                     <Text style={[styles.powerText, { color: colors.textSecondary }]}>
                                         {state.power} kW
@@ -302,7 +333,7 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                                 <View style={[styles.divider, { backgroundColor: colors.border }]} />
                                 <View style={styles.batteryStat}>
                                     <Text style={[styles.bLabel, { color: colors.textSecondary }]}>Current</Text>
-                                    <Text style={[styles.bValue, { color: colors.text }]}>{Math.floor(state.batteryLevel)}%</Text>
+                                    <Text style={[styles.bValue, { color: colors.text }]}>{Math.floor(state.batteryLevel ?? 0)}%</Text>
                                 </View>
                             </View>
                         )}
@@ -310,7 +341,7 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                 )}
 
                 {/* Statistics Grid — Show for charging and finished */}
-                {!isStarting && (
+                {!isStarting && !isDismissing && (
                     <View style={[styles.statsGrid, { backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF' }]}>
 
                         {/* Row 1 */}
@@ -376,7 +407,8 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                 )}
 
                 {/* Footer Action */}
-                <View style={styles.footer}>
+                {!isDismissing && (
+                    <View style={styles.footer}>
 
                     <Pressable onPress={onMinimize} style={[styles.iconBtn, { backgroundColor: colors.card }]}>
                         <Ionicons name="chevron-down" size={24} color={colors.text} />
@@ -403,9 +435,10 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                         </View>
                     )}
                 </View>
+                )}
 
             </View>
-        </View>
+        </Animated.View>
     );
 }
 

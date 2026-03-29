@@ -1,5 +1,6 @@
 import ChargingScreen from "@/components/ChargingScreen";
 import ChargingWidget from "@/components/ChargingWidget";
+import ChargeStopErrorModal from '@/components/ChargeStopErrorModal';
 import SocketChargeErrorModal from '@/components/SocketChargeErrorModal';
 import SocketErrorModal from "@/components/SocketErrorModal";
 import { useUser } from "@/context/UserContext";
@@ -213,7 +214,7 @@ const IOSMarker = React.memo(({ station, isSelected, onPress }: {
       <View style={{ width: PIN_W, height: PIN_H }}>
         <Image
           source={imgSource}
-          style={{ width: PIN_W, height: PIN_H }}
+          style={{ width: PIN_W * 0.75, height: PIN_H }}
           resizeMode="contain"
           fadeDuration={0}
         />
@@ -221,12 +222,12 @@ const IOSMarker = React.memo(({ station, isSelected, onPress }: {
           allowFontScaling={false}
           style={{
             position: 'absolute',
-            bottom: COUNT_BOTTOM_PX,
+            bottom: 17,
             left: 0,
-            right: 0,
+            right: 11,
             textAlign: 'center',
             color: stationColor,
-            fontSize: COUNT_FONT,
+            fontSize: 10,
             fontWeight: '800',
           }}
         >
@@ -271,6 +272,7 @@ export default function MapScreen() {
 
   // Socket Error State
   const [showSocketError, setShowSocketError] = useState(false);
+  const [showStopError, setShowStopError] = useState(false);
   const [pendingVehicle, setPendingVehicle] = useState<any>(null);
 
   // Charging Simulation
@@ -410,6 +412,7 @@ export default function MapScreen() {
           }
 
           if (data.type === "charge_areas_update") {
+            console.log("🔌 WS CHARGE AREAS UPDATE:", JSON.stringify(data.charge_areas, null, 2));
             if (Array.isArray(data.charge_areas)) {
               const stations = data.charge_areas.map((s: any) => {
                 const lat = Number(s.lat);
@@ -455,6 +458,7 @@ export default function MapScreen() {
           }
 
           if (data.type === "charge_area_detail") {
+            console.log("🔌 WS CHARGE AREA DETAIL:", JSON.stringify(data.data, null, 2));
             const detailData = data.data;
             if (detailData) {
               // Convert to our app's internal format if needed, mainly lat/lng are string in JSON
@@ -472,7 +476,7 @@ export default function MapScreen() {
 
           if (data.type === "socket_status") {
             const statusData = data.data;
-            console.log("🔌 SOCKET CHANGE RECEIVED:", JSON.stringify(statusData, null, 2));
+            console.log("🔌 WS SOCKET STATUS UPDATE:", JSON.stringify(statusData, null, 2));
             if (statusData) {
               // 1. Update StationDetails (if open)
               setStationDetails((currentDetails: any) => {
@@ -553,11 +557,12 @@ export default function MapScreen() {
           if (data.type === "socket_status" || (rawData.status && rawData.power)) {
             const upperStatus = (rawData.status || '').toUpperCase();
 
-            // If socket becomes Available and we were in a FINISHED state, we can close the charging UI.
-            // This happens when the user unplugs the cable after the session is completed.
+            // If socket becomes Available, we can close the charging UI.
+            // This happens when the user unplugs the cable.
             if (data.type === "socket_status" && upperStatus === 'AVAILABLE') {
-              console.log("Socket is AVAILABLE, closing session if completed");
-              charging.handleSessionComplete();
+              console.log("Socket is AVAILABLE, closing session with animation");
+              activeChargeSessionUuidRef.current = null;
+              charging.handleSessionComplete(true);
             }
 
             // Check if this socket status matches our active session (we'd ideally need a socket_uuid check,
@@ -673,16 +678,25 @@ export default function MapScreen() {
 
   const handleStopCharging = useCallback(async () => {
     const uuid = activeChargeSessionUuidRef.current;
+    if (!uuid) return;
+
     try {
-      if (uuid) {
-        await stopChargingSession({ charge_session_uuid: uuid });
-      }
+      // Show "Stopping" immediately during the request
+      charging.updateFromMeterValues({ status: 'STOPPING' } as any);
+
+      await stopChargingSession(uuid);
+
+      // Success: show "Completed/Unplug Socket" UI
+      // The useChargingSimulation hook will handle enforcing the minimum 2s stopping delay automatically
+      charging.updateFromMeterValues({ status: 'FINISHED' } as any);
+
     } catch (e: any) {
       console.error("Stop charging session error", e);
-      Alert.alert("Error", e.response?.data?.message || "Failed to stop charging session.");
-    } finally {
-      activeChargeSessionUuidRef.current = null;
-      charging.updateFromMeterValues({ status: 'FINISHING' } as any);
+      // Revert to "Charging" state so the stop button is visible again
+      if (activeChargeSessionUuidRef.current === uuid) {
+        charging.updateFromMeterValues({ status: 'CHARGING' } as any);
+      }
+      setShowStopError(true);
     }
   }, [charging]);
 
@@ -690,10 +704,15 @@ export default function MapScreen() {
     if (!targetSocketUuid) return;
     try {
       bottomSheetRef.current?.dismiss(); // Close sheet immediately
-      const res = await startChargingSession({
-        vehicle_id: vehicle.id,
-        socket_uuid: targetSocketUuid
-      });
+      if (!user?.id) {
+        Alert.alert("Error", "User profile not found.");
+        return;
+      }
+
+      const res = await startChargingSession(
+        { user: user.id, vehicle: vehicle.id },
+        targetSocketUuid
+      );
 
       // Start başarılı: session uuid'yi sakla (Stop'ta kullanılacak)
       const session = res?.data ?? res;
@@ -2110,6 +2129,10 @@ export default function MapScreen() {
               // so the background Finishing animation or session stays intact.
               charging.clearError();
             }}
+          />
+          <ChargeStopErrorModal
+            visible={showStopError}
+            onClose={() => setShowStopError(false)}
           />
 
           {/* Full Screen Charging Bottom Sheet */}

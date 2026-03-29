@@ -377,18 +377,21 @@ export const deleteRegisteredVehicle = async (uuid: string) => {
   return response.data;
 };
 
-export const startChargingSession = async (data: {
-  vehicle_id: number;
-  socket_uuid: string;
-}) => {
-  const response = await api.post("/api/v1/web/chargesessions/start/", data);
+export const startChargingSession = async (
+  data: { user: number; vehicle: number },
+  socket_uuid: string,
+) => {
+  const response = await api.post(
+    `/api/v1/web/chargesessions/${socket_uuid}/start/`,
+    data,
+  );
   return response.data;
 };
 
-export const stopChargingSession = async (data: {
-  charge_session_uuid: string;
-}) => {
-  const response = await api.post("/api/v1/web/chargesessions/stop/", data);
+export const stopChargingSession = async (charge_session_uuid: string) => {
+  const response = await api.post(
+    `/api/v1/web/chargesessions/${charge_session_uuid}/stop/`,
+  );
   return response.data;
 };
 
