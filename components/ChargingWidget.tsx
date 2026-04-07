@@ -218,7 +218,7 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
                                         ? 'Lütfen bekleyin...'
                                         : (
                                             <>
-                                                <Ionicons name="time-outline" size={13} /> {Math.floor(displayState.duration / 60)}m {displayState.duration % 60}s • {displayState.cost.toFixed(2)} ₺
+                                                <Ionicons name="time-outline" size={13} /> {Math.floor(state.duration / 60)}m {state.duration % 60}s • {state.cost.toFixed(2)} ₺
                                             </>
                                         )
                             }
@@ -235,7 +235,7 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
                             <View style={styles.percentageColumn}>
                                 {displayState.mode !== 'AC' && (
                                     <Text style={[styles.percent, { color: displayTheme.accent }]}>
-                                        {Math.floor(displayState.batteryLevel ?? 0)}%
+                                        {Math.floor(state.batteryLevel ?? 0)}%
                                     </Text>
                                 )}
                                 <View style={styles.liveDot} />

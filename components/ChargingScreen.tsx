@@ -119,11 +119,12 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
     }, [isDismissing]);
 
     const animatedContainerStyle = useAnimatedStyle(() => {
+        const baseBg = isDark ? '#121212' : '#F2F2F7';
         return {
             backgroundColor: interpolateColor(
                 dismissBgAnim.value,
                 [0, 1],
-                [colors.background, '#2CDD9D']
+                [baseBg, '#2CDD9D']
             ),
             opacity: dismissOpacityAnim.value
         };

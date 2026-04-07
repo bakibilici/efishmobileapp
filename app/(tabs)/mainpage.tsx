@@ -15,15 +15,17 @@ import {
   BottomSheetModal,
   BottomSheetScrollView
 } from "@gorhom/bottom-sheet";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import * as Localization from "expo-localization";
-import * as Location from "expo-location";
+import * as LocationExpo from "expo-location";
 import {
   useFocusEffect,
   useLocalSearchParams,
   useNavigation,
   useRouter,
 } from "expo-router";
+import { Flash, Heart, Location, Lock1, Microphone2, Notification, Setting4, Timer1 } from "iconsax-react-native";
 import React, {
   useCallback,
   useEffect,
@@ -36,7 +38,6 @@ import {
   Alert,
   Animated,
   DeviceEventEmitter,
-  Dimensions,
   Image,
   Keyboard,
   LayoutAnimation,
@@ -51,6 +52,15 @@ import {
   View
 } from "react-native";
 import MapView, { Marker, PROVIDER_GOOGLE, Region } from "react-native-maps";
+import ClusteredMapView from "react-native-map-clustering";
+import Reanimated, { 
+  useSharedValue, 
+  useAnimatedStyle, 
+  withTiming, 
+  interpolate, 
+  Extrapolation 
+} from 'react-native-reanimated';
+
 
 // ... existing imports ...
 
@@ -59,7 +69,6 @@ import { Station, StationType } from "@/constants/stations";
 import { Colors } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
 import Voice from '@react-native-voice/voice';
-import { Flash, Microphone2, Notification, Setting4 } from "iconsax-react-native";
 
 
 const typeColors: Record<StationType, string> = {
@@ -75,32 +84,6 @@ const getStationColor = (type: string | null | undefined) => {
   return color || "#000000";
 };
 
-const pinImagesSelected: Record<string, any> = {
-  HPC: require("../../assets/images/hpcstationmappin.png"),
-  DC: require("../../assets/images/dcstationmappin.png"),
-  AC: require("../../assets/images/acstationmappin.png"),
-};
-
-const pinImagesUnselected: Record<string, any> = {
-  HPC: require("../../assets/images/hpcmappinunselected.png"),
-  DC: require("../../assets/images/dcmappinunselected.png"),
-  AC: require("../../assets/images/acmappinunselected.png"),
-};
-
-const androidPinImagesSelected: Record<string, any> = {
-  HPC: require("../../assets/images/android/hpcstationmappin.png"),
-  DC: require("../../assets/images/android/dcstationmappin.png"),
-  AC: require("../../assets/images/android/acstationmappin.png"),
-};
-
-const androidPinImagesUnselected: Record<string, any> = {
-  HPC: require("../../assets/images/android/hpcmappinunselected.png"),
-  DC: require("../../assets/images/android/dcmappinunselected.png"),
-  AC: require("../../assets/images/android/acmappinunselected.png"),
-};
-
-// Keep old reference for backward compat
-const pinImages = pinImagesSelected;
 
 const typeLightningCount: Record<StationType, number> = {
   AC: 1,
@@ -108,139 +91,184 @@ const typeLightningCount: Record<StationType, number> = {
   HPC: 3,
 };
 
-// ─── Pin dimensions ───────────────────────────────────────────────────────────
-const SCREEN_W = Dimensions.get('window').width;
-const PIN_W = Math.round(SCREEN_W * 0.10);   // 10 % of screen width
-const PIN_H = Math.round(PIN_W * 1.78);      // source-image aspect ratio
-const isAndroid = Platform.OS === 'android';
 
-// Count-text positioning
-const COUNT_BOTTOM_PX = Math.round(PIN_H * 0.13);
-const COUNT_FONT = Math.max(10, Math.round(PIN_W * 0.28));
+// --- Animated Pressable Component ---
+const AnimatedPressable = ({ onPress, disabled, style, children, activeScale = 0.96, ...rest }: any) => {
+  const scale = useRef(new Animated.Value(1)).current;
 
-// ─── Android Marker — Double-Marker Workaround for Snapshot Bugs ─────────────
-const AndroidMarker = React.memo(({ station, isSelected, onPress }: {
-  station: Station; isSelected: boolean; onPress: (s: Station) => void;
-}) => {
-  const typeKey = String(station.type || 'DC').toUpperCase();
-  const imgSource = isSelected
-    ? (androidPinImagesSelected[typeKey] || androidPinImagesSelected.DC)
-    : (androidPinImagesUnselected[typeKey] || androidPinImagesUnselected.DC);
+  const handlePressIn = () => {
+    Animated.spring(scale, {
+      toValue: activeScale,
+      useNativeDriver: true,
+      speed: 40,
+      bounciness: 5,
+    }).start();
+  };
 
-  const stationColor = getStationColor(station.type);
-  const availableCount = station.socket_stats
-    ? Object.values(station.socket_stats).reduce((a: number, c: any) => a + (c.available || 0), 0)
-    : 0;
-
-  // Since React Native Maps text overlays need a brief moment to map the layout 
-  // onto the canvas, we track changes strictly for the text overlay marker for a few ms.
-  const [tracksViewChanges, setTracksViewChanges] = useState(true);
-
-  useEffect(() => {
-    setTracksViewChanges(true);
-    const timer = setTimeout(() => {
-      setTracksViewChanges(false);
-    }, 400); // 400ms is perfectly sufficient for pure text.
-    return () => clearTimeout(timer);
-  }, [isSelected, availableCount]);
-
-  // React Native Maps on Android notoriously clips Custom Views that contain 
-  // an <Image> component when taking a snapshot. The 100% bug-free solution is 
-  // to use the native 'image' prop without children for the perfect, unclipped pin, 
-  // and render a second identical, overlapping marker strictly for the synchronous <Text> overlay!
+  const handlePressOut = () => {
+    Animated.spring(scale, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 40,
+      bounciness: 5,
+    }).start();
+  };
 
   return (
-    <React.Fragment>
-      {/* 1. Native image pin - perfectly drawn by Google Maps, ZERO clipping */}
-      <Marker
-        coordinate={{ latitude: station.latitude, longitude: station.longitude }}
-        onPress={() => onPress(station)}
-        image={imgSource}
-        anchor={{ x: 0.5, y: 0.87 }}
-        tracksViewChanges={false}
-        zIndex={isSelected ? 999 : 0}
-        style={{ width: PIN_W, height: PIN_H }}
-      />
-      {/* 2. Text overlay - pure text in a transparent view, instant safe snapshot */}
-      <Marker
-        coordinate={{ latitude: station.latitude, longitude: station.longitude }}
-        onPress={() => onPress(station)}
-        anchor={{ x: 0.5, y: 0.87 }} // Exactly the same anchor
-        tracksViewChanges={tracksViewChanges} // Allow Text time to mount onto canvas
-        zIndex={isSelected ? 1000 : 1} // Ensure text renders over the image pin
-      >
-        <View style={{ width: PIN_W, height: PIN_H, backgroundColor: 'transparent' }}>
-          <Text
-            allowFontScaling={false}
-            style={{
-              position: 'absolute',
-              bottom: 38,
-              left: 0,
-              right: 3,
-              textAlign: 'center',
-              color: stationColor,
-              fontSize: 12,
-              fontWeight: '800',
-              zIndex: 999
-            }}
-          >
+    <Pressable
+      onPress={onPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
+      disabled={disabled}
+      {...rest}
+    >
+      {({ pressed }: { pressed: boolean }) => (
+        <Animated.View style={[typeof style === 'function' ? style({ pressed }) : style, { transform: [{ scale }] }]}>
+          {typeof children === 'function' ? children({ pressed }) : children}
+        </Animated.View>
+      )}
+    </Pressable>
+  );
+};
+
+// --- Pulse Component ---
+const PulsingDot = ({ color, isPulsing = true }: { color: string, isPulsing?: boolean }) => {
+  const anim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (isPulsing) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(anim, { toValue: 1, duration: 1000, useNativeDriver: true }),
+          Animated.timing(anim, { toValue: 0, duration: 1000, useNativeDriver: true })
+        ])
+      ).start();
+    } else {
+      anim.setValue(0);
+    }
+  }, [anim, isPulsing]);
+
+  return (
+    <View style={{ width: 10, height: 10, justifyContent: 'center', alignItems: 'center' }}>
+      {isPulsing && (
+        <Animated.View style={{
+          position: 'absolute', width: 12, height: 12, borderRadius: 6, backgroundColor: color,
+          opacity: anim.interpolate({ inputRange: [0, 1], outputRange: [0.6, 0] }),
+          transform: [{ scale: anim.interpolate({ inputRange: [0, 1], outputRange: [1, 2.5] }) }]
+        }} />
+      )}
+      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
+    </View>
+  );
+};
+
+// ==========================================
+// ─── Custom Pure-View Marker ───────────────────────────────────────────────
+const DIAMOND_BASE_SIZE = 40;
+const DIAMOND_DIAGONAL = DIAMOND_BASE_SIZE * 1.4142; // ~56.56
+
+const MapPinContent = React.memo(({ station, isSelected, availableCount: propAvailableCount }: {
+  station: Station; isSelected: boolean;
+  availableCount?: number;
+}) => {
+  const stationColor = getStationColor(station.type);
+  const availableCount = propAvailableCount !== undefined ? propAvailableCount : (station.socket_stats
+    ? Object.values(station.socket_stats).reduce((a: number, c: any) => a + (c.available || 0), 0)
+    : 0);
+
+  // Reanimated value for flip (0 to 180)
+  const rotateValue = useSharedValue(isSelected ? 180 : 0);
+
+  useEffect(() => {
+    rotateValue.value = withTiming(isSelected ? 180 : 0, { duration: 500 });
+  }, [isSelected, availableCount]);
+
+  // Container style (fixed size for maximum crispness)
+  const markerContainerStyle = useAnimatedStyle(() => ({
+    width: DIAMOND_DIAGONAL,
+    height: DIAMOND_DIAGONAL,
+    justifyContent: 'center',
+    alignItems: 'center',
+  }));
+
+  // Front Face Animation (Count)
+  const frontStyle = useAnimatedStyle(() => {
+    const rotateY = rotateValue.value;
+    const opacity = interpolate(rotateValue.value, [89, 91], [1, 0], Extrapolation.CLAMP);
+    return {
+      transform: [
+        { perspective: 1000 },
+        { rotate: '-45deg' },
+        { rotateY: `${rotateY}deg` }
+      ],
+      opacity,
+      backfaceVisibility: 'hidden',
+    };
+  });
+
+  // Back Face Animation (Logo)
+  const backStyle = useAnimatedStyle(() => {
+    const rotateY = interpolate(rotateValue.value, [0, 180], [180, 360]);
+    const opacity = interpolate(rotateValue.value, [89, 91], [0, 1], Extrapolation.CLAMP);
+    return {
+      transform: [
+        { perspective: 1000 },
+        { rotate: '-45deg' },
+        { rotateY: `${rotateY}deg` }
+      ],
+      opacity,
+      backfaceVisibility: 'hidden',
+      position: 'absolute',
+    };
+  });
+
+  const commonPinStyle = {
+    width: DIAMOND_BASE_SIZE,
+    height: DIAMOND_BASE_SIZE,
+    backgroundColor: stationColor,
+    borderTopLeftRadius: DIAMOND_BASE_SIZE / 2,
+    borderTopRightRadius: DIAMOND_BASE_SIZE / 2,
+    borderBottomRightRadius: DIAMOND_BASE_SIZE / 2,
+    borderBottomLeftRadius: 2,
+    borderWidth: 2,
+    borderColor: 'white',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+  } as const;
+
+  return (
+    <Reanimated.View style={markerContainerStyle}>
+      {/* Front Face: Count */}
+      <Reanimated.View style={[commonPinStyle, frontStyle]}>
+        <View style={{ transform: [{ rotate: '45deg' }] }}>
+          <Text allowFontScaling={false} style={{ color: 'white', fontWeight: '900', fontSize: 16 }}>
             {availableCount}
           </Text>
         </View>
-      </Marker>
-    </React.Fragment>
-  );
-});
-// ─── iOS Marker — View-based (works natively on iOS) ─────────────────────────
-const IOSMarker = React.memo(({ station, isSelected, onPress }: {
-  station: Station; isSelected: boolean; onPress: (s: Station) => void;
-}) => {
-  const typeKey = String(station.type || 'DC').toUpperCase();
-  const imgSource = isSelected
-    ? (pinImagesSelected[typeKey] || pinImagesSelected.DC)
-    : (pinImagesUnselected[typeKey] || pinImagesUnselected.DC);
-  const stationColor = getStationColor(station.type);
-  const availableCount = station.socket_stats
-    ? Object.values(station.socket_stats).reduce((a: number, c: any) => a + (c.available || 0), 0)
-    : 0;
+      </Reanimated.View>
 
-  return (
-    <Marker
-      coordinate={{ latitude: station.latitude, longitude: station.longitude }}
-      onPress={() => onPress(station)}
-      anchor={{ x: 0.5, y: 0.87 }}
-      tracksViewChanges={false}
-      zIndex={isSelected ? 999 : 0}
-    >
-      <View style={{ width: PIN_W, height: PIN_H }}>
-        <Image
-          source={imgSource}
-          style={{ width: PIN_W * 0.75, height: PIN_H }}
-          resizeMode="contain"
-          fadeDuration={0}
-        />
-        <Text
-          allowFontScaling={false}
-          style={{
-            position: 'absolute',
-            bottom: 17,
-            left: 0,
-            right: 11,
-            textAlign: 'center',
-            color: stationColor,
-            fontSize: 10,
-            fontWeight: '800',
-          }}
-        >
-          {availableCount}
-        </Text>
-      </View>
-    </Marker>
+      {/* Back Face: Logo */}
+      <Reanimated.View style={[commonPinStyle, backStyle]}>
+        <View style={{ transform: [{ rotate: '45deg' }] }}>
+          <Image
+            source={require('../../assets/images/efishremovedbge.png')}
+            style={{ width: 24, height: 24 }}
+            resizeMode="contain"
+          />
+        </View>
+      </Reanimated.View>
+    </Reanimated.View>
   );
 });
 
-// ─── Platform-aware wrapper ──────────────────────────────────────────────────
-const MapPinMarker = isAndroid ? AndroidMarker : IOSMarker;
+
+
+
 
 
 export default function MapScreen() {
@@ -253,7 +281,7 @@ export default function MapScreen() {
   const [selectedStation, setSelectedStation] = useState<Station | null>(null);
   const [stationDetails, setStationDetails] = useState<any>(null); // For detail view
   const [isFetchingDetails, setIsFetchingDetails] = useState(false);
-  const [showAddress, setShowAddress] = useState(false);
+  const [isFavorited, setIsFavorited] = useState(false);
 
   // Charge Start Flow State
   const [bottomSheetMode, setBottomSheetMode] = useState<'details' | 'vehicle_select'>('details');
@@ -800,8 +828,25 @@ export default function MapScreen() {
   const [onlyEfish, setOnlyEfish] = useState(false);
   const [showPublic, setShowPublic] = useState(false);
   const [showFavorites, setShowFavorites] = useState(false);
+  const [showOnlyAvailable, setShowOnlyAvailable] = useState(false);
+
+  // Load persisted showOnlyAvailable setting
+  useEffect(() => {
+    AsyncStorage.getItem('efish_show_only_available').then((val) => {
+      if (val === 'true') setShowOnlyAvailable(true);
+    });
+  }, []);
+
+  const toggleShowOnlyAvailable = () => {
+    withAnimation();
+    setShowOnlyAvailable((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem('efish_show_only_available', next ? 'true' : 'false');
+      return next;
+    });
+  };
   const [userLocation, setUserLocation] =
-    useState<Location.LocationObject | null>(null);
+    useState<LocationExpo.LocationObject | null>(null);
   const [locationPermission, setLocationPermission] = useState<boolean>(false);
 
   const topInset =
@@ -994,11 +1039,11 @@ export default function MapScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
+        const { status } = await LocationExpo.requestForegroundPermissionsAsync();
         if (status === "granted") {
           setLocationPermission(true);
-          const location = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.Balanced,
+          const location = await LocationExpo.getCurrentPositionAsync({
+            accuracy: LocationExpo.Accuracy.Balanced,
           });
           setUserLocation(location);
 
@@ -1117,17 +1162,40 @@ export default function MapScreen() {
   const filteredStations = useMemo(
     () =>
       stationsList.filter((station) => {
-        // The API already filters by Type (AC/DC/HPC).
-        // We might still filter by name (search) or other client-side toggles here.
         const matchesQuery = station.name
           .toLowerCase()
           .includes(search.toLowerCase().trim());
-        // For now ignoring onlyEfish / showPublic if API data doesn't provide enough info, 
-        // or filtering based on what we have.
+        // Filter by availability if toggle is on
+        if (showOnlyAvailable) {
+          const status = (station.status || '').toLowerCase();
+          if (status !== 'available' && status !== 'preparing') return false;
+        }
         return matchesQuery;
       }),
-    [stationsList, search, onlyEfish, showPublic]
+    [stationsList, search, onlyEfish, showPublic, showOnlyAvailable]
   );
+
+  // External lookup map for 100% cluster count accuracy
+  const stationCountsMap = useMemo(() => {
+    const counts: Record<string, number> = {};
+    filteredStations.forEach(s => {
+      const count = s.socket_stats 
+        ? Object.values(s.socket_stats).reduce((acc: number, stat: any) => acc + (stat.available || 0), 0) 
+        : 0;
+      counts[String(s.id)] = count;
+    });
+    return counts;
+  }, [filteredStations]);
+
+  // Data prop for native clustering support
+  const stationData = useMemo(() => {
+    return filteredStations.map(s => ({
+      ...s,
+      latitude: Number(s.latitude),
+      longitude: Number(s.longitude),
+      availableCount: stationCountsMap[String(s.id)] || 0,
+    }));
+  }, [filteredStations, stationCountsMap]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1207,7 +1275,6 @@ export default function MapScreen() {
     bottomSheetRef.current?.dismiss();
     setSelectedStation(null);
     setStationDetails(null);
-    setShowAddress(false);
     setBottomSheetMode('details');
   };
 
@@ -1282,7 +1349,6 @@ export default function MapScreen() {
         },
       },
     ];
-
     return { types, toggles };
   }, [typeFilters, onlyEfish, showPublic, showFavorites]);
 
@@ -1290,7 +1356,7 @@ export default function MapScreen() {
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <View style={[styles.page, { backgroundColor: colors.background }]}>
         <View style={styles.container}>
-          <MapView
+          <ClusteredMapView
             ref={mapRef}
             onPress={() => Keyboard.dismiss()}
             provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined}
@@ -1304,6 +1370,113 @@ export default function MapScreen() {
             tintColor={colors.tint}
             onRegionChangeComplete={onRegionChangeComplete}
             userInterfaceStyle={themeScheme === 'dark' ? 'dark' : 'light'}
+            clusterColor={colors.primary}
+            clusterTextColor="#fff"
+            spiralEnabled={false}
+            animationEnabled={true}
+            maxZoomLevel={20}
+            minPoints={2}
+            preserveClusterPressBehavior={false}
+            radius={25}
+            extent={512}
+            // @ts-ignore
+            map={(props: any) => ({
+              availableCount: props.availableCount || 0,
+            })}
+            // @ts-ignore
+            reduce={(acc: any, props: any) => {
+              acc.availableCount += props.availableCount;
+            }}
+            // @ts-ignore
+            superClusterConfig={{
+              map: (props: any) => ({
+                availableCount: props.availableCount || 0,
+              }),
+              reduce: (acc: any, props: any) => {
+                acc.availableCount += props.availableCount;
+              },
+            }}
+            renderCluster={(cluster: any) => {
+              const { cluster_id } = cluster.properties;
+              
+              // FAIL-SAFE: Manual calculation of available sockets using external lookup map
+              let totalAvailable = 0;
+              try {
+                if (mapRef.current) {
+                  const leaves = (mapRef.current as any).getClusterLeaves(cluster_id, 200, 0);
+                  if (Array.isArray(leaves)) {
+                    totalAvailable = leaves.reduce((acc: number, leaf: any) => {
+                      // EXHAUSTIVE ID LOOKUP: title is often the most reliable for mapping
+                      const sId = leaf.properties?.title || leaf.properties?.identifier || leaf.properties?.id || leaf.id || leaf.properties?.key;
+                      
+                      // 1. Try ID-based lookup map
+                      if (sId !== undefined && stationCountsMap[String(sId)] !== undefined) {
+                        return acc + (stationCountsMap[String(sId)] || 0);
+                      }
+                      
+                      // 2. COORDINATE FALLBACK: If ID fails, match by exact location
+                      const coords = leaf.geometry?.coordinates;
+                      if (coords) {
+                        const lon = coords[0];
+                        const lat = coords[1];
+                        const stationByCoord = filteredStations.find(s => 
+                          Math.abs(Number(s.latitude) - lat) < 0.0001 && 
+                          Math.abs(Number(s.longitude) - lon) < 0.0001
+                        );
+                        if (stationByCoord) {
+                          return acc + (stationCountsMap[String(stationByCoord.id)] || 0);
+                        }
+                      }
+
+                      // 3. Raw property access
+                      return acc + (leaf.properties?.availableCount || 0);
+                    }, 0);
+                  }
+                }
+              } catch (e) {
+                // If ref fails, attempt fallback
+                totalAvailable = cluster.properties.availableCount || 0;
+              }
+
+              const coordinate = cluster.coordinate || {
+                latitude: cluster.geometry.coordinates[1],
+                longitude: cluster.geometry.coordinates[0],
+              };
+
+              return (
+                <Marker
+                  key={`cluster-${cluster_id}`}
+                  coordinate={coordinate}
+                  onPress={cluster.onPress}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                >
+                  <View style={{
+                    minWidth: 44,
+                    height: 44,
+                    borderRadius: 22,
+                    backgroundColor: colors.primary,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    borderWidth: 3,
+                    borderColor: 'white',
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.35,
+                    shadowRadius: 5,
+                    elevation: 8,
+                    paddingHorizontal: 10,
+                  }}>
+                    <Text allowFontScaling={false} style={{
+                      color: 'white',
+                      fontWeight: '900',
+                      fontSize: 17,
+                    }}>
+                      {totalAvailable}
+                    </Text>
+                  </View>
+                </Marker>
+              );
+            }}
             customMapStyle={themeScheme === 'dark' ? [
               {
                 "elementType": "geometry",
@@ -1394,15 +1567,32 @@ export default function MapScreen() {
               }
             ] : []}>
 
-            {filteredStations.map((station) => (
-              <MapPinMarker
-                key={station.id}
-                station={station}
-                isSelected={selectedStation?.id === station.id}
-                onPress={handleMarkerPress}
-              />
-            ))}
-          </MapView>
+            {filteredStations.map((station) => {
+                const availableCount = station.socket_stats
+                 ? Object.values(station.socket_stats).reduce((a: number, c: any) => a + (c.available || 0), 0)
+                 : 0;
+                return (
+                  <Marker
+                    key={station.id}
+                    id={String(station.id)}
+                    identifier={String(station.id)}
+                    title={String(station.id)}
+                    coordinate={{ latitude: station.latitude, longitude: station.longitude }}
+                    onPress={() => handleMarkerPress(station)}
+                    anchor={{ x: 0.5, y: 1 }}
+                    zIndex={selectedStation?.id === station.id ? 999 : 0}
+                    // @ts-ignore - custom prop for clustering reduction
+                    availableCount={availableCount}
+                  >
+                    <MapPinContent
+                      station={station}
+                      availableCount={availableCount}
+                      isSelected={selectedStation?.id === station.id}
+                    />
+                  </Marker>
+                );
+              })}
+          </ClusteredMapView>
 
           <View style={[styles.overlay, { paddingTop: topInset }]}>
             {/* Main Header Card Container */}
@@ -1532,7 +1722,7 @@ export default function MapScreen() {
               <Animated.View style={{
                 height: filterDrawerAnim.interpolate({
                   inputRange: [0, 1],
-                  outputRange: [0, 90] // Enough height for exactly 2 lines + gaps
+                  outputRange: [0, 90] // Enough height for filter rows + gaps
                 }),
                 opacity: filterDrawerAnim,
                 overflow: 'hidden',
@@ -1558,7 +1748,7 @@ export default function MapScreen() {
                 </View>
 
                 {/* Row 2: Toggles (now rendering as FilterChips) */}
-                <View style={{ flexDirection: 'row', gap: 10 }}>
+                <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
                   {toggles.map((item) => (
                     <FilterChip
                       key={item.key}
@@ -1740,355 +1930,378 @@ export default function MapScreen() {
                   ) : (
                     <View style={{ gap: 12 }}>
                       {myVehicles.map((v) => (
-                        <Pressable
+                        <AnimatedPressable
+                          activeScale={0.97}
                           key={v.id || v.uuid}
-                          onPress={() => handleVehicleSelect(v)}
-                          style={({ pressed }) => [{
+                          onPress={() => {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            handleVehicleSelect(v);
+                          }}
+                          style={({ pressed }: { pressed: boolean }) => [{
                             flexDirection: 'row',
                             alignItems: 'center',
                             padding: 16,
-                            backgroundColor: colors.card,
+                            backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#fff',
                             borderRadius: 16,
                             borderWidth: 1,
-                            borderColor: colors.border,
+                            borderColor: pressed ? 'rgba(44,219,155,0.4)' : (isDark ? 'rgba(255,255,255,0.07)' : '#edf2f7'),
+                            ...(Platform.OS === 'ios' ? {
+                              shadowColor: isDark ? '#000' : '#8a95a5',
+                              shadowOffset: { width: 0, height: 4 },
+                              shadowOpacity: 0.12,
+                              shadowRadius: 10,
+                            } : {
+                              elevation: 0,
+                            }),
                             gap: 12,
-                          }, pressed && { opacity: 0.8 }]}
+                          }]}
                         >
                           <View style={{
                             width: 40,
                             height: 40,
-                            borderRadius: 20,
-                            backgroundColor: colors.backgroundSecondary,
+                            borderRadius: 12,
+                            backgroundColor: isDark ? 'rgba(255,255,255,0.07)' : '#f4f6f9',
                             alignItems: 'center',
                             justifyContent: 'center'
                           }}>
                             <Ionicons name="car-sport" size={20} color={colors.primary} />
                           </View>
                           <View>
-                            <Text style={{ fontSize: 16, fontWeight: '700', color: colors.text }}>
+                            <Text style={{ fontSize: 16, fontWeight: '800', color: isDark ? '#fff' : '#0f1a2e' }}>
                               {v.plate_number}
                             </Text>
-                            <Text style={{ fontSize: 13, color: colors.textSecondary }}>
+                            <Text style={{ fontSize: 12, fontWeight: '600', color: isDark ? '#666' : '#9aa5b4', marginTop: 1 }}>
                               {`${v.vehicle?.model?.brand?.name} - ${v.vehicle?.model?.name}`}
                             </Text>
                           </View>
                           <View style={{ flex: 1 }} />
-                          <Ionicons name="chevron-forward" size={20} color={colors.textTertiary} />
-                        </Pressable>
+                          <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#f4f6f9', alignItems: 'center', justifyContent: 'center' }}>
+                            <Ionicons name="chevron-forward" size={16} color={isDark ? '#999' : '#7a8a9e'} />
+                          </View>
+                        </AnimatedPressable>
                       ))}
                     </View>
                   )}
                 </View>
               ) : selectedStation && (
                 <>
-
-                  <View style={styles.sheetHeader}>
-
-                    <View style={{ flex: 1, marginRight: 10 }}>
-
-                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>{/* Status Light */}
-                          <View style={{
-                            width: 10,
-                            height: 10,
-                            borderRadius: 5,
-                            backgroundColor: selectedStation.status === "available" ? "#2cdb9b" : "#ff3b30",
-                            shadowColor: selectedStation.status === "available" ? "#2cdb9b" : "#ff3b30",
-                            shadowOffset: { width: 0, height: 0 },
-                            shadowOpacity: 0.8,
-                            shadowRadius: 6,
-                          }} />
-                          <View style={{ flexDirection: 'row' }}>
-                            <Text
-                              style={[
-                                styles.stationName,
-                                isDark ? styles.stationNameDark : styles.stationNameLight]}
-                            >
-                              {stationDetails?.name || selectedStation.name}
-                            </Text>
-                            {/* Address Toggle Chevron */}
-                            <Pressable
-                              onPress={() => {
-                                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-                                setShowAddress(!showAddress);
-                              }}
-                              hitSlop={10}
-                              style={{ padding: 4 }}
-                            >
-                              <Ionicons name={showAddress ? "chevron-up" : "chevron-down"} size={20} color={colors.textSecondary} />
-                            </Pressable>
-                          </View>
-                        </View>
-                        <View style={{ flexDirection: "row", justifyContent: "flex-end" }}>
-                          <Pressable
-                            onPress={closeSheet}
-                            hitSlop={10}
-                            style={{
-                              padding: 4,
-                              backgroundColor: isDark ? "#252525ff" : "#f0f2f5",
-                              borderRadius: 20
-                            }}
-                          >
-                            <Ionicons name="close" size={20} color={colors.text} />
-                          </Pressable>
-                        </View>
+                  {/* ── Header: Name + Actions ── */}
+                  <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 0 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                      <View style={{ flex: 1, marginRight: 12 }}>
+                        <Text style={{ fontSize: 21, fontWeight: '800', color: isDark ? '#fff' : '#0f1a2e', letterSpacing: -0.3 }}>
+                          {stationDetails?.name || selectedStation.name}
+                        </Text>
+                        {(stationDetails?.address || stationDetails?.city) ? (
+                          <Text style={{ fontSize: 13, color: isDark ? '#888' : '#7a8a9e', fontWeight: '500', marginTop: 3, lineHeight: 18 }} numberOfLines={2}>
+                            {stationDetails?.address || stationDetails?.city}
+                          </Text>
+                        ) : null}
+                        {stationDetails?.directions ? (
+                          <Text style={{ fontSize: 13, color: isDark ? '#888' : '#7a8a9e', fontWeight: '500', marginTop: 3, lineHeight: 18 }}>
+                            {stationDetails.directions}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 }}>
+                        <Pressable
+                          onPress={() => setIsFavorited(!isFavorited)}
+                          hitSlop={12}
+                          style={({ pressed }) => ({
+                            padding: 8,
+                            backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#f2f4f7',
+                            borderRadius: 50,
+                            opacity: pressed ? 0.7 : 1,
+                          })}
+                        >
+                          <Heart variant={isFavorited ? "Bold" : "Outline"} size={20} color={isFavorited ? "#FF3B30" : (isDark ? "#999" : "#8a95a5")} />
+                        </Pressable>
+                        <Pressable
+                          onPress={closeSheet}
+                          hitSlop={12}
+                          style={({ pressed }) => ({
+                            padding: 8,
+                            backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#f2f4f7',
+                            borderRadius: 50,
+                            opacity: pressed ? 0.7 : 1,
+                          })}
+                        >
+                          <Ionicons name="close" size={20} color={isDark ? "#999" : "#8a95a5"} />
+                        </Pressable>
                       </View>
                     </View>
                   </View>
 
-                  {/* Chips Row */}
-                  <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-                    {/* Type Chip */}
+                  {/* ── Inline Chips ── */}
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 8, marginBottom: 0 }}>
+                    {/* Status */}
                     <View style={{
+                      flexDirection: 'row', alignItems: 'center', gap: 5,
+                      backgroundColor: selectedStation.status === 'available' ? 'rgba(44,219,155,0.12)' : 'rgba(255,59,48,0.12)',
+                      paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20,
+                    }}>
+                      <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: selectedStation.status === 'available' ? '#2cdb9b' : '#ff3b30' }} />
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: selectedStation.status === 'available' ? '#2cdb9b' : '#ff3b30', textTransform: 'capitalize' }}>
+                        {selectedStation.status}
+                      </Text>
+                    </View>
+                    {/* Type + Power */}
+                    <View style={{
+                      flexDirection: 'row', alignItems: 'center', gap: 5,
                       backgroundColor: getStationColor(selectedStation.type),
-                      paddingHorizontal: 10,
-                      paddingVertical: 5,
-                      borderRadius: 88,
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: 4
+                      paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20,
                     }}>
-                      <Ionicons name="flash" size={16} color="#fff" />
-                      <Text style={{ color: "#fff", fontSize: 12, fontWeight: "700" }}>{selectedStation.type} {selectedStation.powerKw} kW</Text>
+                      <Flash variant="Bold" size={14} color="#fff" />
+                      <Text style={{ fontSize: 12, fontWeight: '700', color: '#fff' }}>{selectedStation.type} · {selectedStation.powerKw} kW</Text>
                     </View>
-
-                    {/* Public/Private Chip */}
+                    {/* Public / Private */}
                     <View style={{
-                      backgroundColor: colors.card,
-                      paddingHorizontal: 10,
-                      paddingVertical: 5,
-                      borderRadius: 88,
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: 4,
-                      borderWidth: 1,
-                      borderColor: colors.border
+                      flexDirection: 'row', alignItems: 'center', gap: 5,
+                      backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#f0f3f7',
+                      paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20,
                     }}>
-                      <Ionicons name={selectedStation.is_public ? "lock-open" : "lock-closed"} size={16} color={colors.text} />
-                      <Text style={{ color: colors.text, fontSize: 12, fontWeight: "600" }}>
-                        {selectedStation.is_public !== undefined ? (selectedStation.is_public ? "Public" : "Private") : "Public"}
+                      <Lock1 variant="Outline" size={14} color={isDark ? '#999' : '#7a8a9e'} />
+                      <Text style={{ fontSize: 12, fontWeight: '600', color: isDark ? '#999' : '#7a8a9e' }}>
+                        {selectedStation.is_public !== undefined ? (selectedStation.is_public ? 'Public' : 'Private') : 'Public'}
                       </Text>
                     </View>
-
-                    {/* 24h Chip */}
+                    {/* Hours */}
                     <View style={{
-                      backgroundColor: colors.card,
-                      paddingHorizontal: 10,
-                      paddingVertical: 5,
-                      borderRadius: 88,
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: 4,
-                      borderWidth: 1,
-                      borderColor: colors.border
+                      flexDirection: 'row', alignItems: 'center', gap: 5,
+                      backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#f0f3f7',
+                      paddingHorizontal: 10, paddingVertical: 6, borderRadius: 20,
                     }}>
-                      <Ionicons name="time" size={16} color={colors.text} />
-                      <Text style={{ color: colors.text, fontSize: 12, fontWeight: "600" }}>
-                        {selectedStation.is_24h ? "7/24 Available" : "Only work hours"}
+                      <Timer1 variant="Outline" size={14} color={isDark ? '#999' : '#7a8a9e'} />
+                      <Text style={{ fontSize: 12, fontWeight: '600', color: isDark ? '#999' : '#7a8a9e' }}>
+                        {selectedStation.is_24h ? '7/24' : 'Hours'}
                       </Text>
                     </View>
-
-
                   </View>
-                  {/* Address Detail */}
-                  {showAddress && (
-                    <View style={{ marginTop: 2 }}>
-                      <Text style={{ fontSize: 14, fontWeight: "600", color: colors.primary, marginBottom: 4 }}>Address</Text>
-                      <Text style={{ fontSize: 14, color: colors.text, lineHeight: 18 }}>
-                        {stationDetails?.address || "Address loading..."}
-                      </Text>
-                      {stationDetails.directions && (
-                        <View style={{
-                          marginTop: 2
-                        }}>
-                          <Text style={{ fontSize: 14, fontWeight: "600", color: colors.primary, marginBottom: 4, marginTop: 4 }}>Notes</Text>
-                          <Text style={{ color: colors.text, lineHeight: 20 }}>{stationDetails.directions}</Text>
-                        </View>
-                      )}
-                    </View>
-                  )}
-                  {/* Functionality Buttons */}
-                  <View style={{ flexDirection: 'row', gap: 12, marginBottom: 24 }}>
+
+
+
+                  {/* ── Directions Button ── */}
+                  <View style={{ paddingHorizontal: 8, marginBottom: 0 }}>
                     <Pressable
                       onPress={openDirections}
-                      style={{
-                        flex: 1,
-                        backgroundColor: colors.primary,
-                        height: 48,
-                        borderRadius: 12,
+                      style={({ pressed }) => ({
+                        backgroundColor: '#4BACE4',
+                        height: 46,
+                        borderRadius: 14,
                         alignItems: 'center',
                         justifyContent: 'center',
                         flexDirection: 'row',
                         gap: 8,
-                      }}>
-                      <Ionicons name="navigate" size={20} color="#fff" />
-                      <Text style={{ color: "#fff", fontWeight: "700", fontSize: 16 }}>Directions</Text>
+                        opacity: pressed ? 0.9 : 1,
+                        transform: [{ scale: pressed ? 0.98 : 1 }],
+                      })}>
+                      <Location variant="Bold" size={20} color="#fff" />
+                      <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>Directions</Text>
                     </Pressable>
                   </View>
 
-                  {isFetchingDetails && !stationDetails ? (
-                    <View style={{ padding: 20, alignItems: 'center', minHeight: 100 }}>
-                      <ActivityIndicator size="small" color={colors.primary} />
-                      <Text style={{ marginTop: 10, color: colors.textTertiary }}>Loading details...</Text>
+                  {/* ── Divider ── */}
+                  <View style={{ height: 1, backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#eef1f5', marginHorizontal: 16, marginBottom: 12 }} />
+
+                  {/* ── Connectors ── */}
+                  <View style={{ paddingHorizontal: 8, paddingBottom: 24 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                      <Text style={{ color: isDark ? '#fff' : '#0f1a2e', fontSize: 16, fontWeight: '800', letterSpacing: -0.2 }}>Connectors</Text>
+                      <Pressable
+                        onPress={toggleShowOnlyAvailable}
+                        style={({ pressed }) => ({
+                          flexDirection: 'row', alignItems: 'center', gap: 6,
+                          backgroundColor: showOnlyAvailable
+                            ? 'rgba(44,219,155,0.12)'
+                            : (isDark ? 'rgba(255,255,255,0.06)' : '#f0f3f7'),
+                          paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10,
+                          opacity: pressed ? 0.7 : 1,
+                        })}
+                      >
+                        <View style={{
+                          width: 16, height: 16, borderRadius: 4,
+                          borderWidth: 1.5,
+                          borderColor: showOnlyAvailable ? '#2cdb9b' : (isDark ? '#555' : '#c0c8d4'),
+                          backgroundColor: showOnlyAvailable ? '#2cdb9b' : 'transparent',
+                          alignItems: 'center', justifyContent: 'center',
+                        }}>
+                          {showOnlyAvailable && (
+                            <Ionicons name="checkmark" size={11} color="#fff" />
+                          )}
+                        </View>
+                        <Text style={{ fontSize: 12, fontWeight: '600', color: showOnlyAvailable ? '#2cdb9b' : (isDark ? '#999' : '#7a8a9e') }}>
+                          Available only
+                        </Text>
+                      </Pressable>
                     </View>
-                  ) : (
-                    stationDetails ? (
-                      <View>
-                        <Text style={[styles.filterLabel, { color: colors.text, marginBottom: 8, fontSize: 18, fontWeight: "700" }]}>Charge Points</Text>
 
-                        {stationDetails.charge_points?.map((cp: any) => (
-                          <View key={cp.id} style={{ marginBottom: 12 }}>
-                            <Text style={{ fontSize: 14, fontWeight: "500", color: colors.textSecondary, marginBottom: 8 }}>{cp.name} ({cp.status})</Text>
-                            {cp.sockets?.map((socket: any) => {
-                              const status = (socket.status_display || "").toLowerCase();
+                    {isFetchingDetails && !stationDetails ? (
+                      <View style={{ padding: 30, alignItems: 'center' }}>
+                        <ActivityIndicator size="large" color="#4BACE4" />
+                      </View>
+                    ) : (() => {
+                      // Filter sockets if showOnlyAvailable is enabled
+                      const chargePoints = stationDetails?.charge_points?.map((cp: any) => ({
+                        ...cp,
+                        sockets: showOnlyAvailable
+                          ? cp.sockets?.filter((s: any) => {
+                            const st = (s.status_display || '').toLowerCase();
+                            const isMyActiveSession = st === 'charging' && charging.isActive && s.uuid === targetSocketUuid;
+                            return st === 'available' || st === 'preparing' || isMyActiveSession;
+                          })
+                          : cp.sockets,
+                      })).filter((cp: any) => cp.sockets && cp.sockets.length > 0) || [];
 
-                              // Colors based on status
-                              let statusColor = colors.border;
-                              if (status === "available") statusColor = "#4BACE4"; // Blue
-                              else if (status === "preparing") statusColor = "#2cdb9b"; // Green
-                              else if (status === "charging") statusColor = "#FFCC00"; // Yellow
-                              else if (status === "unavailable") statusColor = "#B366FF"; // Purple
-                              else if (status === "faulted") statusColor = "#FF3B30"; // Red
-                              else if (status === "reserved") statusColor = colors.border; // Grayish
+                      if (chargePoints.length === 0) {
+                        return (
+                          <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+                            <Flash variant="Bold" size={32} color={isDark ? '#333' : '#d0d5dd'} />
+                            <Text style={{ fontSize: 14, fontWeight: '700', color: isDark ? '#555' : '#9aa5b4', marginTop: 10 }}>
+                              {showOnlyAvailable ? 'No available connectors' : 'No connectors found'}
+                            </Text>
+                            <Text style={{ fontSize: 12, color: isDark ? '#444' : '#b0b8c5', marginTop: 4, textAlign: 'center', paddingHorizontal: 20 }}>
+                              {showOnlyAvailable ? 'All connectors at this station are currently in use.' : 'Unable to load connector information.'}
+                            </Text>
+                          </View>
+                        );
+                      }
 
-                              // Helper for Pulse Effect (simplified inline for now or use Lottie if needed)
-                              // We will use a simple opacity animation for Charging
+                      return chargePoints.map((cp: any) => (
+                        <View key={cp.id} style={{ marginBottom: 10 }}>
+                          {(chargePoints.length > 1 && cp.code && cp.code.trim().length > 0) && (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6, marginTop: 4 }}>
+                              <Text style={{ fontSize: 13, fontWeight: '800', color: isDark ? '#ccc' : '#4a5568', marginLeft: 4 }}>{cp.code}</Text>
+                            </View>
+                          )}
 
-                              return (
-                                <View key={socket.id} style={{
-                                  backgroundColor: colors.card,
-                                  borderRadius: 12,
-                                  padding: 16,
-                                  marginBottom: 8,
-                                  borderWidth: 1,
-                                  borderColor: statusColor, // Border matches status color
-                                  flexDirection: 'row',
-                                  alignItems: 'center',
-                                  justifyContent: 'space-between'
-                                }}>
-                                  <View>
-                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                      <Ionicons name="flash" size={16} color={colors.text} />
-                                      <Text style={{ fontSize: 16, fontWeight: "700", color: colors.text }}>{socket.power} kW {socket.type}</Text>
-                                    </View>
-                                    <Text style={{ color: colors.textSecondary, marginTop: 4, fontSize: 13 }}>{socket.name}</Text>
+                          {cp.sockets?.map((socket: any) => {
+                            const status = (socket.status_display || '').toLowerCase();
+                            let statusColor = '#94a3b8';
+                            let statusIconName: React.ComponentProps<typeof Ionicons>['name'] = 'help-circle';
+                            let isPulsing = false;
+
+                            if (status === 'available') {
+                              statusColor = '#4BACE4'; // Mavi
+                              statusIconName = 'checkmark-circle';
+                            } else if (status === 'preparing') {
+                              statusColor = '#2cdb9b'; // Yeşil
+                              statusIconName = 'flash';
+                            } else if (status === 'charging') {
+                              statusColor = '#FFCC00'; // Sarı
+                              statusIconName = 'battery-charging';
+                              isPulsing = true;
+                            } else if (status === 'unavailable') {
+                              statusColor = '#A259FF'; // Mor
+                              statusIconName = 'lock-closed';
+                            } else if (status === 'faulted') {
+                              statusColor = '#FF3B30'; // Kırmızı
+                              statusIconName = 'warning';
+                            }
+
+                            // Use socket.name as main title, fallback to "Connector X"
+                            const socketTitle = socket.name ? socket.name : `Connector ${socket.id}`;
+                            const isMyActiveSession = status === 'charging' && charging.isActive && socket.uuid === targetSocketUuid;
+
+                            return (
+                              <AnimatedPressable
+                                activeScale={0.97}
+                                key={socket.id}
+                                onPress={() => {
+                                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                                  if (isMyActiveSession) {
+                                    charging.setMinimized(false);
+                                    chargingBottomSheetRef.current?.present();
+                                  } else if (status === 'preparing') {
+                                    handleStartPress(socket.uuid);
+                                  } else if (status === 'available') {
+                                    setShowSocketError(true);
+                                  }
+                                }}
+                                disabled={status !== 'available' && status !== 'preparing' && !isMyActiveSession}
+                                style={({ pressed }: { pressed: boolean }) => ({
+                                  backgroundColor: isMyActiveSession
+                                    ? (isDark ? 'rgba(216, 219, 44, 0.08)' : 'rgba(216, 219, 44, 0.08)')
+                                    : (isDark ? 'rgba(255,255,255,0.04)' : '#fff'),
+                                  borderRadius: 16, padding: 16, marginBottom: 8,
+                                  borderWidth: 1.5,
+                                  borderColor: isMyActiveSession
+                                    ? 'rgba(228, 253, 104, 0.35)'
+                                    : pressed
+                                      ? (status === 'preparing' ? 'rgba(44,219,155,0.4)' : (status === 'available' ? 'rgba(75,172,228,0.4)' : (isDark ? 'rgba(255,255,255,0.07)' : '#edf2f7')))
+                                      : (isDark ? 'rgba(255,255,255,0.07)' : '#edf2f7'),
+                                  ...(Platform.OS === 'ios' ? {
+                                    shadowColor: isDark ? '#000' : '#8a95a5',
+                                    shadowOffset: { width: 0, height: 4 },
+                                    shadowOpacity: 0.12,
+                                    shadowRadius: 10,
+                                  } : {
+                                    elevation: 0,
+                                  }),
+                                  opacity: (status !== 'available' && status !== 'preparing' && !isMyActiveSession) ? 0.6 : 1,
+                                })}
+                              >
+                                {/* My Session Badge */}
+                                {isMyActiveSession && (
+                                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10, backgroundColor: 'rgba(44,219,155,0.12)', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, alignSelf: 'flex-start' }}>
+                                    <Ionicons name="person" size={12} color="#2cdb9b" />
+                                    <Text style={{ fontSize: 11, fontWeight: '800', color: '#2cdb9b' }}>Your Session</Text>
                                   </View>
-                                  <View style={{ alignItems: 'flex-end', gap: 6 }}>
+                                )}
 
-                                    {/* Status Actions & Display */}
-                                    {status === "available" ? (
-                                      <Pressable
-                                        onPress={() => setShowSocketError(true)} // Show "Not Plugged" modal
-                                        style={({ pressed }) => ({
-                                          backgroundColor: "#4BACE4", // Blue
-                                          paddingHorizontal: 14,
-                                          paddingVertical: 8,
-                                          borderRadius: 88,
-                                          opacity: pressed ? 0.8 : 1
-                                        })}
-                                      >
-                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                                          <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>Available</Text>
-                                        </View>
-                                      </Pressable>
-                                    ) : status === "preparing" ? (
-                                      <Pressable
-                                        onPress={() => handleStartPress(socket.uuid)} // Standard Start Flow
-                                        style={({ pressed }) => ({
-                                          backgroundColor: "#2cdb9b", // Green
-                                          paddingHorizontal: 14,
-                                          paddingVertical: 8,
-                                          borderRadius: 88,
-                                          opacity: pressed ? 0.8 : 1
-                                        })}
-                                      >
-                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                                          <Ionicons name="flash" size={16} color="#fff" />
-                                          <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>Start</Text>
-                                        </View>
-                                      </Pressable>
-                                    ) : status === "charging" ? (
-                                      <View
-                                        style={{
-                                          backgroundColor: "rgba(255, 204, 0, 0.15)", // Light Yellow bg
-                                          paddingHorizontal: 12,
-                                          paddingVertical: 6,
-                                          borderRadius: 88,
-                                          borderWidth: 1,
-                                          borderColor: "#FFCC00"
-                                        }}
-                                      >
-                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                                          <Ionicons name="flash" size={14} color="#FFCC00" />
-                                          <Text style={{ color: "#FFCC00", fontWeight: "800", fontSize: 12 }}>Charging</Text>
-                                        </View>
-                                      </View>
-                                    ) : status === "reserved" ? (
-                                      <View
-                                        style={{
-                                          backgroundColor: isDark ? "rgba(255, 255, 255, 0.05)" : "rgba(0, 0, 0, 0.05)",
-                                          paddingHorizontal: 14,
-                                          paddingVertical: 8,
-                                          borderRadius: 88,
-                                        }}
-                                      >
-                                        <Text style={{ color: colors.textTertiary, fontWeight: "700", fontSize: 12 }}>Reserved</Text>
-                                      </View>
-                                    ) : status === "unavailable" ? (
-                                      <View
-                                        style={{
-                                          backgroundColor: "rgba(179, 102, 255, 0.15)", // Light Purple bg
-                                          paddingHorizontal: 12,
-                                          paddingVertical: 6,
-                                          borderRadius: 88,
-                                          borderWidth: 1,
-                                          borderColor: "#B366FF"
-                                        }}
-                                      >
-                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                                          <Ionicons name="close-circle" size={14} color="#B366FF" />
-                                          <Text style={{ color: "#B366FF", fontWeight: "800", fontSize: 12 }}>Unavailable</Text>
-                                        </View>
-                                      </View>
-                                    ) : status === "faulted" ? (
-                                      <View
-                                        style={{
-                                          backgroundColor: "rgba(255, 59, 48, 0.15)", // Light Red bg
-                                          paddingHorizontal: 12,
-                                          paddingVertical: 6,
-                                          borderRadius: 88,
-                                          borderWidth: 1,
-                                          borderColor: "#FF3B30"
-                                        }}
-                                      >
-                                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                                          <Ionicons name="warning" size={14} color="#FF3B30" />
-                                          <Text style={{ color: "#FF3B30", fontWeight: "800", fontSize: 12 }}>Faulted</Text>
-                                        </View>
-                                      </View>
-                                    ) : (
-                                      /* Fallback / Other statuses */
-                                      <Text style={{
-                                        fontSize: 14,
-                                        fontWeight: "700",
-                                        color: "#ffb74d"
-                                      }}>
-                                        {socket.status_display}
-                                      </Text>
-                                    )}
+                                {/* Top Row: Name and Status */}
+                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                                  <Text style={{ fontSize: 16, fontWeight: '800', color: isDark ? '#fff' : '#0f1a2e', flex: 1 }} numberOfLines={1}>
+                                    {socketTitle}
+                                  </Text>
 
-                                    <Text style={{ color: colors.text, fontWeight: "600", fontSize: 13 }}>
-                                      {socket.price_info?.price} ₺ / kWh
+                                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : statusColor + '15', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10 }}>
+                                    <Ionicons name={statusIconName} size={13} color={statusColor} />
+                                    <View style={{ width: 1, height: 10, backgroundColor: statusColor + '40', marginHorizontal: 2 }} />
+                                    <Text style={{ fontSize: 11, fontWeight: '700', color: statusColor, textTransform: 'capitalize' }}>
+                                      {status === 'preparing' ? 'Ready' : status}
                                     </Text>
+                                    <PulsingDot color={statusColor} isPulsing={isPulsing} />
                                   </View>
                                 </View>
-                              )
-                            })}
-                          </View>
-                        ))}
-                      </View>
-                    ) : null
-                  )}
+
+                                {/* Bottom Row: Chips and Action (if needed) */}
+                                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', flex: 1 }}>
+                                    {/* Type Chip */}
+                                    {socket.type && (
+                                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: getStationColor(socket.type), paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
+                                        <Text style={{ fontSize: 12, fontWeight: '800', color: '#fff' }}>{socket.type}</Text>
+                                      </View>
+                                    )}
+                                    {/* Power Chip */}
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#f4f6f9', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
+                                      <Flash variant="Bold" size={13} color={isDark ? '#999' : '#7a8a9e'} />
+                                      <Text style={{ fontSize: 12, fontWeight: '700', color: isDark ? '#ccc' : '#4a5568' }}>{socket.power} kW</Text>
+                                    </View>
+                                    {/* Price Chip */}
+                                    {socket.price_info?.price ? (
+                                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#f4f6f9', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 }}>
+                                        <Ionicons name="cash" size={12} color={isDark ? '#999' : '#7a8a9e'} />
+                                        <Text style={{ fontSize: 12, fontWeight: '700', color: isDark ? '#ccc' : '#4a5568' }}>{socket.price_info.price} ₺/kWh</Text>
+                                      </View>
+                                    ) : null}
+                                  </View>
+
+                                  {/* Action Arrow/Button for preparing */}
+                                  {status === 'preparing' ? (
+                                    <View style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 120, backgroundColor: '#2cdb9b', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginLeft: 10 }}>
+                                      <Text style={{ color: '#fff', fontWeight: '500', fontSize: 13 }}>Start</Text>
+                                      <Ionicons name="arrow-forward" size={15} color="#fff" />
+                                    </View>
+                                  ) : null}
+                                </View>
+                              </AnimatedPressable>
+                            );
+                          })}
+                        </View>
+                      ));
+                    })()}
+                  </View>
                 </>
               )}
 
@@ -2161,7 +2374,7 @@ export default function MapScreen() {
               }
             }}
             backgroundStyle={{ backgroundColor: isDark ? '#121212' : '#F2F2F7' }}
-            handleIndicatorStyle={{ backgroundColor: isDark ? '#333' : '#E5E5EA' }}
+            handleIndicatorStyle={{ backgroundColor: isDark ? '#333' : '#E5E5EA', width: 0 }}
           >
             <BottomSheetScrollView contentContainerStyle={{ flexGrow: 1 }}>
               <ChargingScreen
@@ -2659,7 +2872,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingTop: 20
+    paddingTop: 12
   },
   stationName: {
     fontSize: 20,

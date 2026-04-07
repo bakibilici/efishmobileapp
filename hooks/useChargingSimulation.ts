@@ -124,6 +124,7 @@ export const useChargingSimulation = () => {
         const chargedAmount = data.charged_kwh ?? data.chargedAmount ?? data.energy_kwh ?? 0;
         const cost = data.cost;
         const duration = data.duration ?? data.duration_sec;
+        const resolvedDuration = (duration != null && duration > 0) ? duration : undefined;
         // Prefer socket_type from backend, then explicit mode, then power-based heuristic
         const socketType = data.socket_type?.toUpperCase() as ChargingMode | undefined;
         const mode: ChargingMode = socketType && ['HPC', 'DC', 'AC'].includes(socketType)
@@ -227,7 +228,7 @@ export const useChargingSimulation = () => {
                         power: power || prev.power,
                         chargedAmount: chargedAmount || prev.chargedAmount,
                         cost: cost ?? prev.cost,
-                        duration: duration ?? prev.duration,
+                        duration: resolvedDuration ?? prev.duration,
                         startedAt: startedAt ?? prev.startedAt,
                         startSoc: startSoc ?? prev.startSoc,
                         startTime: prev.startTime ?? Date.now(),
@@ -304,7 +305,7 @@ export const useChargingSimulation = () => {
                     power: power || prev.power,
                     chargedAmount: chargedAmount || prev.chargedAmount,
                     cost: cost ?? prev.cost,
-                    duration: duration ?? prev.duration,
+                    duration: resolvedDuration ?? prev.duration,
                     startTime: prev.startTime ?? Date.now(),
                     startedAt: startedAt ?? prev.startedAt,
                     startSoc: startSoc ?? prev.startSoc,
@@ -324,7 +325,7 @@ export const useChargingSimulation = () => {
                     power: power || prev.power,
                     chargedAmount: chargedAmount || prev.chargedAmount,
                     cost: cost ?? prev.cost,
-                    duration: duration ?? prev.duration,
+                    duration: resolvedDuration ?? prev.duration,
                     startedAt: startedAt ?? prev.startedAt,
                     startSoc: startSoc ?? prev.startSoc,
                 };
