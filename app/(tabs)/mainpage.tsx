@@ -198,8 +198,8 @@ const MapPinContent = React.memo(({ station, isSelected, availableCount: propAva
     return {
       transform: [
         { perspective: 1000 },
-        { rotate: '-45deg' },
-        { rotateY: `${rotateY}deg` }
+        { rotateY: `${rotateY}deg` },
+        { rotate: '-45deg' }
       ],
       opacity,
       backfaceVisibility: 'hidden',
@@ -213,8 +213,8 @@ const MapPinContent = React.memo(({ station, isSelected, availableCount: propAva
     return {
       transform: [
         { perspective: 1000 },
-        { rotate: '-45deg' },
-        { rotateY: `${rotateY}deg` }
+        { rotateY: `${rotateY}deg` },
+        { rotate: '-45deg' }
       ],
       opacity,
       backfaceVisibility: 'hidden',
@@ -1236,47 +1236,51 @@ export default function MapScreen() {
     // useEffect will handle refetch
   };
 
-  const handleMarkerPress = (station: Station) => {
+  const handleMarkerPress = useCallback((station: Station) => {
     Keyboard.dismiss();
-    setSelectedStation(station);
-    setStationDetails(null); // Reset details
-    setBottomSheetMode('details'); // Ensure we start in details mode
-    bottomSheetRef.current?.present();
-    // Force snap to index 0 (50%) specifically with a small timeout to let it mount
-    setTimeout(() => {
-      bottomSheetRef.current?.snapToIndex(0);
-    }, 50);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-    // Auto-focus logic: Center the map on the pin
-    // We subtract a small amount from latitude to shift the map down, 
-    // effectively moving the pin UP into the visible area above the bottom sheet.
-    // 0.005 is a rough approximation, adjust based on zoom level if needed.
-    if (mapRef.current) {
-      const region = {
-        latitude: station.latitude - 0.002, // slight offset to show pin above sheet
-        longitude: station.longitude,
-        latitudeDelta: 0.01, // Zoom in
-        longitudeDelta: 0.01,
-      };
-      mapRef.current.animateToRegion(region, 500);
-    }
+    // Force a minor reset if we're clicking a different station or re-opening
+    // This solves the 'sheet doesn't open again' bug by ensuring a fresh state transition
+    setStationDetails(null);
+    setBottomSheetMode('details');
 
-    // Auto-fetch details immediately
-    if (station.uuid) {
-      handleFetchDetails(station.uuid);
-    }
-  };
+    // Use requestAnimationFrame for smoother sequencing with the modal presentation
+    requestAnimationFrame(() => {
+      setSelectedStation(station);
+      bottomSheetRef.current?.present();
 
-  const closeSheet = () => {
+      // Auto-focus logic: Center the map on the pin
+      if (mapRef.current) {
+        const region = {
+          latitude: station.latitude - 0.002, // slight offset to show pin above sheet
+          longitude: station.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        };
+        mapRef.current.animateToRegion(region, 500);
+      }
+
+      // Auto-fetch details immediately
+      if (station.uuid) {
+        handleFetchDetails(station.uuid);
+      }
+    });
+  }, [handleFetchDetails]);
+
+  const closeSheet = useCallback(() => {
+    // If we're already closed, do nothing
     if (isSwitchingMode.current) {
       isSwitchingMode.current = false;
       return;
     }
-    bottomSheetRef.current?.dismiss();
+    
+    // Explicitly clear station to ensure subsequent taps trigger state changes
     setSelectedStation(null);
     setStationDetails(null);
     setBottomSheetMode('details');
-  };
+    bottomSheetRef.current?.dismiss();
+  }, []);
 
   const openDirections = () => {
     if (!selectedStation) return;
@@ -1406,8 +1410,8 @@ export default function MapScreen() {
                   const leaves = (mapRef.current as any).getClusterLeaves(cluster_id, 200, 0);
                   if (Array.isArray(leaves)) {
                     totalAvailable = leaves.reduce((acc: number, leaf: any) => {
-                      // EXHAUSTIVE ID LOOKUP: title is often the most reliable for mapping
-                      const sId = leaf.properties?.title || leaf.properties?.identifier || leaf.properties?.id || leaf.id || leaf.properties?.key;
+                      // EXHAUSTIVE ID LOOKUP: identifier and id are standard sources
+                      const sId = leaf.properties?.identifier || leaf.properties?.id || leaf.id || leaf.properties?.key;
                       
                       // 1. Try ID-based lookup map
                       if (sId !== undefined && stationCountsMap[String(sId)] !== undefined) {
@@ -1576,7 +1580,6 @@ export default function MapScreen() {
                     key={station.id}
                     id={String(station.id)}
                     identifier={String(station.id)}
-                    title={String(station.id)}
                     coordinate={{ latitude: station.latitude, longitude: station.longitude }}
                     onPress={() => handleMarkerPress(station)}
                     anchor={{ x: 0.5, y: 1 }}
