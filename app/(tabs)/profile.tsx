@@ -207,12 +207,28 @@ export default function ProfileScreen() {
                 colors={colors}
               />
               <SettingsItem
+                icon="location-outline"
+                title="My Addresses"
+                subtitle="Add and manage addresses"
+                color="#FF6B6B"
+                onPress={() => router.push("/addresses")}
+                colors={colors}
+              />
+              <SettingsItem
                 icon="card-outline"
                 title="Payment Methods"
                 subtitle="Cards and billing"
                 color="#5856D6"
-                isLast
                 onPress={() => router.push("/payment-methods")}
+                colors={colors}
+              />
+              <SettingsItem
+                icon="wifi-outline"
+                title="RFID Cards"
+                subtitle="Manage your RFID cards"
+                color="#FF9500"
+                isLast
+                onPress={() => router.push("/rfid-cards")}
                 colors={colors}
               />
             </View>

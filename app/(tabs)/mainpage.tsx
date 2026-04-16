@@ -25,7 +25,7 @@ import {
   useNavigation,
   useRouter,
 } from "expo-router";
-import { Flash, Heart, Location, Lock1, Microphone2, Notification, Setting4, Timer1 } from "iconsax-react-native";
+import { Car, Flash, Heart, Location, Lock1, Microphone2, Moon, Notification, Setting4, Timer1 } from "iconsax-react-native";
 import React, {
   useCallback,
   useEffect,
@@ -51,14 +51,14 @@ import {
   UIManager,
   View
 } from "react-native";
-import MapView, { Marker, PROVIDER_GOOGLE, Region } from "react-native-maps";
 import ClusteredMapView from "react-native-map-clustering";
-import Reanimated, { 
-  useSharedValue, 
-  useAnimatedStyle, 
-  withTiming, 
-  interpolate, 
-  Extrapolation 
+import MapView, { Marker, PROVIDER_GOOGLE, Region } from "react-native-maps";
+import Reanimated, {
+  Extrapolation,
+  interpolate,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming
 } from 'react-native-reanimated';
 
 
@@ -993,6 +993,51 @@ export default function MapScreen() {
   const [bottomSheetSelectedType, setBottomSheetSelectedType] = useState<StationType | null>(null);
   const [isTypeListOpen, setIsTypeListOpen] = useState(false);
 
+  // --- Status Header State ---
+  type ActivityType = "Idle" | "Walking" | "Running" | "Cycling" | "Driving";
+  const ACTIVITIES: { type: ActivityType; label: string; icon: any; color: string; isIonicons?: boolean }[] = [
+    { type: "Idle", label: "Idle", icon: Moon, color: "#8E8E93" },
+    { type: "Walking", label: "Walking", icon: "walk", color: "#34C759", isIonicons: true },
+    { type: "Running", label: "Running", icon: Flash, color: "#FF9500" },
+    { type: "Cycling", label: "Biking", icon: "bicycle", color: "#5856D6", isIonicons: true },
+    { type: "Driving", label: "Driving", icon: Car, color: "#007AFF" },
+  ];
+
+  const [currentActivityIdx, setCurrentActivityIdx] = useState(0);
+  const currentActivity = ACTIVITIES[currentActivityIdx];
+  const statusHeaderAnim = useSharedValue(1);
+
+  const toggleNextActivity = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCurrentActivityIdx((prev) => (prev + 1) % ACTIVITIES.length);
+  };
+
+  const statusHeaderStyle = useAnimatedStyle(() => {
+    const anim = statusHeaderAnim.value;
+    return {
+      opacity: anim,
+      transform: [
+        {
+          translateY: interpolate(anim, [0, 1], [-48, 0]),
+        },
+      ],
+      height: interpolate(anim, [0, 1], [0, 42]),
+      marginBottom: interpolate(anim, [0, 1], [0, 12]),
+    };
+  });
+
+  const isMapMoving = useRef(false);
+  const isAnyFilterActive = search.trim() !== "" || isTypeListOpen || bottomSheetSelectedType !== null;
+
+  // Auto-hide status header when searching or filtering
+  useEffect(() => {
+    if (isAnyFilterActive) {
+      statusHeaderAnim.value = withTiming(0, { duration: 300 });
+    } else if (!isMapMoving.current) {
+      statusHeaderAnim.value = withTiming(1, { duration: 300 });
+    }
+  }, [search, isTypeListOpen, bottomSheetSelectedType]);
+
   const chargingBottomSheetRef = useRef<BottomSheetModal>(null);
   const chargingSnapPoints = useMemo(() => ["90%"], []);
 
@@ -1179,8 +1224,8 @@ export default function MapScreen() {
   const stationCountsMap = useMemo(() => {
     const counts: Record<string, number> = {};
     filteredStations.forEach(s => {
-      const count = s.socket_stats 
-        ? Object.values(s.socket_stats).reduce((acc: number, stat: any) => acc + (stat.available || 0), 0) 
+      const count = s.socket_stats
+        ? Object.values(s.socket_stats).reduce((acc: number, stat: any) => acc + (stat.available || 0), 0)
         : 0;
       counts[String(s.id)] = count;
     });
@@ -1274,7 +1319,7 @@ export default function MapScreen() {
       isSwitchingMode.current = false;
       return;
     }
-    
+
     // Explicitly clear station to ensure subsequent taps trigger state changes
     setSelectedStation(null);
     setStationDetails(null);
@@ -1372,7 +1417,25 @@ export default function MapScreen() {
             userLocationPriority="high"
             userLocationUpdateInterval={5000}
             tintColor={colors.tint}
-            onRegionChangeComplete={onRegionChangeComplete}
+            onRegionChange={() => {
+              isMapMoving.current = true;
+              if (statusHeaderAnim.value !== 0) {
+                statusHeaderAnim.value = withTiming(0, { duration: 300 });
+              }
+            }}
+            onRegionChangeComplete={(region) => {
+              isMapMoving.current = false;
+              currentRegion.current = region;
+              if (selectedStation) {
+                // ...
+              }
+
+              // Only show if search and filters are empty
+              if (!isAnyFilterActive && statusHeaderAnim.value !== 1) {
+                statusHeaderAnim.value = withTiming(1, { duration: 300 });
+              }
+              sendBoundingBoxUpdateDebounced(region);
+            }}
             userInterfaceStyle={themeScheme === 'dark' ? 'dark' : 'light'}
             clusterColor={colors.primary}
             clusterTextColor="#fff"
@@ -1402,7 +1465,7 @@ export default function MapScreen() {
             }}
             renderCluster={(cluster: any) => {
               const { cluster_id } = cluster.properties;
-              
+
               // FAIL-SAFE: Manual calculation of available sockets using external lookup map
               let totalAvailable = 0;
               try {
@@ -1412,19 +1475,19 @@ export default function MapScreen() {
                     totalAvailable = leaves.reduce((acc: number, leaf: any) => {
                       // EXHAUSTIVE ID LOOKUP: identifier and id are standard sources
                       const sId = leaf.properties?.identifier || leaf.properties?.id || leaf.id || leaf.properties?.key;
-                      
+
                       // 1. Try ID-based lookup map
                       if (sId !== undefined && stationCountsMap[String(sId)] !== undefined) {
                         return acc + (stationCountsMap[String(sId)] || 0);
                       }
-                      
+
                       // 2. COORDINATE FALLBACK: If ID fails, match by exact location
                       const coords = leaf.geometry?.coordinates;
                       if (coords) {
                         const lon = coords[0];
                         const lat = coords[1];
-                        const stationByCoord = filteredStations.find(s => 
-                          Math.abs(Number(s.latitude) - lat) < 0.0001 && 
+                        const stationByCoord = filteredStations.find(s =>
+                          Math.abs(Number(s.latitude) - lat) < 0.0001 &&
                           Math.abs(Number(s.longitude) - lon) < 0.0001
                         );
                         if (stationByCoord) {
@@ -1572,29 +1635,29 @@ export default function MapScreen() {
             ] : []}>
 
             {filteredStations.map((station) => {
-                const availableCount = station.socket_stats
-                 ? Object.values(station.socket_stats).reduce((a: number, c: any) => a + (c.available || 0), 0)
-                 : 0;
-                return (
-                  <Marker
-                    key={station.id}
-                    id={String(station.id)}
-                    identifier={String(station.id)}
-                    coordinate={{ latitude: station.latitude, longitude: station.longitude }}
-                    onPress={() => handleMarkerPress(station)}
-                    anchor={{ x: 0.5, y: 1 }}
-                    zIndex={selectedStation?.id === station.id ? 999 : 0}
-                    // @ts-ignore - custom prop for clustering reduction
+              const availableCount = station.socket_stats
+                ? Object.values(station.socket_stats).reduce((a: number, c: any) => a + (c.available || 0), 0)
+                : 0;
+              return (
+                <Marker
+                  key={station.id}
+                  id={String(station.id)}
+                  identifier={String(station.id)}
+                  coordinate={{ latitude: station.latitude, longitude: station.longitude }}
+                  onPress={() => handleMarkerPress(station)}
+                  anchor={{ x: 0.5, y: 1 }}
+                  zIndex={selectedStation?.id === station.id ? 999 : 0}
+                  // @ts-ignore - custom prop for clustering reduction
+                  availableCount={availableCount}
+                >
+                  <MapPinContent
+                    station={station}
                     availableCount={availableCount}
-                  >
-                    <MapPinContent
-                      station={station}
-                      availableCount={availableCount}
-                      isSelected={selectedStation?.id === station.id}
-                    />
-                  </Marker>
-                );
-              })}
+                    isSelected={selectedStation?.id === station.id}
+                  />
+                </Marker>
+              );
+            })}
           </ClusteredMapView>
 
           <View style={[styles.overlay, { paddingTop: topInset }]}>
@@ -1617,6 +1680,54 @@ export default function MapScreen() {
               transform: [{ translateY: headerAnim }],
               overflow: 'hidden' // FIX: Ensure child content (chips) doesn't overflow rounded corners
             }}>
+              {/* Row 0: Status Chips (Animated) */}
+              <Reanimated.View style={[statusHeaderStyle, { flexDirection: 'row', paddingHorizontal: 16, gap: 10, overflow: 'hidden' }]}>
+                {/* Activity Chip */}
+                <Pressable onPress={toggleNextActivity} style={{ flex: 1 }}>
+                  <View style={{
+                    flexDirection: 'row', alignItems: 'center', gap: 8, height: 42,
+                    backgroundColor: isDark ? `${currentActivity.color}35` : `${currentActivity.color}20`,
+                    paddingHorizontal: 12, borderRadius: 999, borderWidth: 1.5, borderColor: `${currentActivity.color}40`,
+                    justifyContent: 'center'
+                  }}>
+                    {currentActivity.isIonicons ? (
+                      <Ionicons name={currentActivity.icon} size={18} color={currentActivity.color} />
+                    ) : (
+                      <currentActivity.icon variant="Bold" size={18} color={currentActivity.color} />
+                    )}
+                    <Text style={{ fontSize: 14, fontWeight: '800', color: currentActivity.color }}>{currentActivity.label}</Text>
+                  </View>
+                </Pressable>
+
+                {/* Steps Chip */}
+                <View style={{ flex: 1 }}>
+                  <View style={{
+                    flexDirection: 'row', alignItems: 'center', gap: 8, height: 42, justifyContent: 'center',
+                    backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "#f0f2f5",
+                    paddingHorizontal: 12, borderRadius: 999, borderWidth: 1.5, borderColor: isDark ? "rgba(255,255,255,0.15)" : "#e2e6ea"
+                  }}>
+                    <Ionicons name="footsteps" size={18} color={isDark ? "#aaa" : "#555"} />
+                    <Text style={{ fontSize: 14, fontWeight: '800', color: colors.text }}>8,421</Text>
+                  </View>
+                </View>
+
+                {/* Points Chip */}
+                <View style={{ flex: 1 }}>
+                  <View style={{
+                    flexDirection: 'row', alignItems: 'center', gap: 8, height: 42, justifyContent: 'center',
+                    backgroundColor: isDark ? "#2CD999" : "#2CD99940",
+                    paddingHorizontal: 12, borderRadius: 999, borderWidth: 1.5, borderColor: isDark ? "#2CD999" : "#2CD999"
+                  }}>
+                    <Image
+                      source={require("@/assets/images/efishcoin.png")}
+                      style={{ width: 24, height: 24 }}
+                      resizeMode="contain"
+                    />
+                    <Text style={{ fontSize: 14, fontWeight: '900', color: isDark ? "#018d5a" : "#018d5a" }}>1,250</Text>
+                  </View>
+                </View>
+              </Reanimated.View>
+
               {/* Row 1: Search & Bell/Login */}
               <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, marginBottom: 12, alignItems: 'center' }}>
                 <View style={{

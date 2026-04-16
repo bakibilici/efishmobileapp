@@ -395,4 +395,177 @@ export const stopChargingSession = async (charge_session_uuid: string) => {
   return response.data;
 };
 
+// ────────────── Addresses ──────────────
+
+export type AddressType = "CORPORATE" | "INDIVIDUAL";
+
+export type Address = {
+  id: number;
+  uuid: string;
+  address: string;
+  district: number | null;
+  city?: number;
+  country?: number;
+  district_name?: string;
+  city_name?: string;
+  country_name?: string;
+  postal_code: string;
+  title: string;
+  company_name: string;
+  type: AddressType;
+  tax_number: string;
+  tax_office: string;
+  is_default: boolean;
+};
+
+export type CreateAddressPayload = {
+  address: string;
+  district: number | null;
+  postal_code: string;
+  title: string;
+  company_name: string;
+  type: AddressType;
+  tax_number: string;
+  tax_office: string;
+  is_default: boolean;
+};
+
+export const getAddresses = async () => {
+  const response = await api.get("/api/v1/web/addresses/");
+  return response.data;
+};
+
+export const getAddressDetail = async (uuid: string) => {
+  const response = await api.get(`/api/v1/web/addresses/${uuid}/`);
+  return response.data;
+};
+
+export const createAddress = async (data: CreateAddressPayload) => {
+  const response = await api.post("/api/v1/web/addresses/", data);
+  return response.data;
+};
+
+export const updateAddress = async (
+  uuid: string,
+  data: CreateAddressPayload,
+) => {
+  const response = await api.put(`/api/v1/web/addresses/${uuid}/`, data);
+  return response.data;
+};
+
+export const patchAddress = async (
+  uuid: string,
+  data: Partial<CreateAddressPayload>,
+) => {
+  const response = await api.patch(`/api/v1/web/addresses/${uuid}/`, data);
+  return response.data;
+};
+
+export const deleteAddress = async (uuid: string) => {
+  const response = await api.delete(`/api/v1/web/addresses/${uuid}/`);
+  return response.data;
+};
+
+// ────────────── Locations ──────────────
+
+export type Country = {
+  id: number;
+  name: string;
+};
+
+export type City = {
+  id: number;
+  name: string;
+  country: number;
+};
+
+export type DistrictLocation = {
+  id: number;
+  name: string;
+  city: number;
+};
+
+export const getCityDetail = async (id: number) => {
+  const response = await api.get(`/api/v1/web/locations/cities/${id}/`);
+  return response.data;
+};
+
+export const getDistrictDetail = async (id: number) => {
+  const response = await api.get(`/api/v1/web/locations/districts/${id}/`);
+  return response.data;
+};
+
+export const getCountries = async () => {
+  const response = await api.get("/api/v1/web/locations/countries/");
+  return response.data;
+};
+
+export const getCities = async (countryId: number) => {
+  const response = await api.get(
+    `/api/v1/web/locations/cities/?country=${countryId}`,
+  );
+  return response.data;
+};
+
+export const getDistricts = async (cityId: number) => {
+  const response = await api.get(
+    `/api/v1/web/locations/districts/?city=${cityId}`,
+  );
+  return response.data;
+};
+
+// ────────────── RFID Cards ──────────────
+
+export type RfidCard = {
+  id: number;
+  uuid: string;
+  card_id: string;
+  type: string;
+  type_display: string;
+  is_active: boolean;
+  created_at: string;
+  registered_vehicle?: {
+    id: number;
+    uuid: string;
+    plate_number: string;
+    vehicle?: {
+      name: string;
+      model?: {
+        name: string;
+        brand?: {
+          name: string;
+        };
+      };
+    };
+  };
+  user?: any;
+};
+
+export type CreateRfidRequestPayload = {
+  delivery_address: number;
+  registered_vehicles: number[];
+  user: number;
+  quantity: number;
+};
+
+export const getRfidCards = async () => {
+  const response = await api.get("/api/v1/web/rfid-cards/");
+  return response.data;
+};
+
+export const createRfidRequest = async (data: CreateRfidRequestPayload) => {
+  const response = await api.post("/api/v1/web/rfid-requests/", data);
+  return response.data;
+};
+
+export const getRfidRequests = async () => {
+  const response = await api.get("/api/v1/web/rfid-requests/");
+  return response.data;
+};
+
+export const deleteRfidRequest = async (uuid: string) => {
+  const response = await api.delete(`/api/v1/web/rfid-requests/${uuid}/`);
+  return response.data;
+};
+
 export default api;
