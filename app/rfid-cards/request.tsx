@@ -248,108 +248,94 @@ export default function RfidRequestScreen() {
               </View>
             </View>
           </AnimatedView>
-
-          {/* Delivery Address */}
-          <AnimatedView entering={FadeInDown.delay(80).springify()}>
+          {/* Quantity */}
+          <AnimatedView entering={FadeInDown.delay(240).springify()}>
             <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
-              DELIVERY ADDRESS
+              QUANTITY
             </Text>
-            <Pressable
+            <View
               style={[
-                styles.selectorCard,
+                styles.quantityCard,
                 {
                   backgroundColor: colors.card,
-                  borderColor: selectedAddress
-                    ? colors.primary
-                    : colors.border,
-                  borderWidth: selectedAddress ? 1.5 : 1,
+                  borderColor: colors.border,
                 },
               ]}
-              onPress={() => setAddressModalVisible(true)}
             >
-              <View style={styles.selectorContent}>
+              <View style={styles.quantityContent}>
                 <View
                   style={[
                     styles.selectorIcon,
-                    {
-                      backgroundColor: selectedAddress
-                        ? `${colors.primary}15`
-                        : colors.backgroundSecondary,
-                    },
+                    { backgroundColor: `${colors.primary}` },
                   ]}
                 >
                   <Ionicons
-                    name="location"
+                    name="layers-outline"
                     size={22}
-                    color={
-                      selectedAddress ? colors.primary : colors.textTertiary
-                    }
+                    color="#ffffff"
                   />
                 </View>
-                <View style={styles.selectorTextBlock}>
-                  {selectedAddress ? (
-                    <>
-                      <Text
-                        style={[styles.selectorTitle, { color: colors.text }]}
-                      >
-                        {selectedAddress.title || "My Address"}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.selectorSubtext,
-                          { color: colors.textSecondary },
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {selectedAddress.address}
-                      </Text>
-                    </>
-                  ) : (
-                    <>
-                      <Text
-                        style={[
-                          styles.selectorTitle,
-                          { color: colors.textTertiary },
-                        ]}
-                      >
-                        Select delivery address
-                      </Text>
-                      <Text
-                        style={[
-                          styles.selectorSubtext,
-                          { color: colors.textTertiary },
-                        ]}
-                      >
-                        Where should we deliver your card?
-                      </Text>
-                    </>
-                  )}
+                <View style={styles.quantityTextBlock}>
+                  <Text style={[styles.quantityLabel, { color: colors.text }]}>
+                    Number of Cards
+                  </Text>
+                  <Text
+                    style={[
+                      styles.quantityHint,
+                      { color: colors.textTertiary },
+                    ]}
+                  >
+                    How many RFID cards do you need?
+                  </Text>
                 </View>
-                <Ionicons
-                  name="chevron-forward"
-                  size={20}
-                  color={colors.textTertiary}
-                />
               </View>
-            </Pressable>
-
-            {addresses.length === 0 && (
-              <Pressable
-                style={styles.addNewLink}
-                onPress={() => router.push("/addresses/add")}
-              >
-                <Ionicons
-                  name="add-circle-outline"
-                  size={16}
-                  color={colors.primary}
-                  style={{ marginRight: 6 }}
+              <View style={styles.quantityControls}>
+                <Pressable
+                  style={[
+                    styles.qtyBtn,
+                    { backgroundColor: colors.backgroundSecondary },
+                  ]}
+                  onPress={() => {
+                    const n = Math.max(1, parseInt(quantity, 10) - 1 || 0);
+                    setQuantity(String(n));
+                  }}
+                >
+                  <Ionicons name="remove" size={20} color={colors.text} />
+                </Pressable>
+                <TextInput
+                  style={[
+                    styles.qtyInput,
+                    {
+                      color: colors.text,
+                      backgroundColor: colors.backgroundSecondary,
+                      borderColor: colors.border,
+                    },
+                  ]}
+                  value={quantity}
+                  onChangeText={(t) => {
+                    const cleaned = t.replace(/[^0-9]/g, "");
+                    setQuantity(cleaned);
+                  }}
+                  keyboardType="number-pad"
+                  textAlign="center"
+                  maxLength={3}
                 />
-                <Text style={[styles.addNewText, { color: colors.primary }]}>
-                  Add a new address first
-                </Text>
-              </Pressable>
-            )}
+                <Pressable
+                  style={[
+                    styles.qtyBtn,
+                    { backgroundColor: colors.backgroundSecondary },
+                  ]}
+                  onPress={() => {
+                    const n = parseInt(quantity, 10) + 1 || 1;
+                    setQuantity(String(n));
+                  }}
+                >
+                  <Ionicons name="add" size={20} color={colors.text} />
+                </Pressable>
+              </View>
+            </View>
           </AnimatedView>
+
 
           {/* Vehicle Selection */}
           <AnimatedView entering={FadeInDown.delay(160).springify()}>
@@ -458,92 +444,107 @@ export default function RfidRequestScreen() {
             </Pressable>
           </AnimatedView>
 
-          {/* Quantity */}
-          <AnimatedView entering={FadeInDown.delay(240).springify()}>
+
+          {/* Delivery Address */}
+          <AnimatedView entering={FadeInDown.delay(80).springify()}>
             <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
-              QUANTITY
+              DELIVERY ADDRESS
             </Text>
-            <View
+            <Pressable
               style={[
-                styles.quantityCard,
+                styles.selectorCard,
                 {
                   backgroundColor: colors.card,
-                  borderColor: colors.border,
+                  borderColor: selectedAddress
+                    ? colors.primary
+                    : colors.border,
+                  borderWidth: selectedAddress ? 1.5 : 1,
                 },
               ]}
+              onPress={() => setAddressModalVisible(true)}
             >
-              <View style={styles.quantityContent}>
+              <View style={styles.selectorContent}>
                 <View
                   style={[
                     styles.selectorIcon,
-                    { backgroundColor: `${colors.primary}15` },
+                    {
+                      backgroundColor: selectedAddress
+                        ? `${colors.primary}`
+                        : colors.backgroundSecondary,
+                    },
                   ]}
                 >
                   <Ionicons
-                    name="layers-outline"
+                    name="location"
                     size={22}
-                    color={colors.primary}
+                    color={
+                      selectedAddress ? "#ffffff" : colors.textTertiary
+                    }
                   />
                 </View>
-                <View style={styles.quantityTextBlock}>
-                  <Text style={[styles.quantityLabel, { color: colors.text }]}>
-                    Number of Cards
-                  </Text>
-                  <Text
-                    style={[
-                      styles.quantityHint,
-                      { color: colors.textTertiary },
-                    ]}
-                  >
-                    How many RFID cards do you need?
-                  </Text>
+                <View style={styles.selectorTextBlock}>
+                  {selectedAddress ? (
+                    <>
+                      <Text
+                        style={[styles.selectorTitle, { color: colors.text }]}
+                      >
+                        {selectedAddress.title || "My Address"}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.selectorSubtext,
+                          { color: colors.textSecondary },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {selectedAddress.address}
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <Text
+                        style={[
+                          styles.selectorTitle,
+                          { color: colors.textTertiary },
+                        ]}
+                      >
+                        Select delivery address
+                      </Text>
+                      <Text
+                        style={[
+                          styles.selectorSubtext,
+                          { color: colors.textTertiary },
+                        ]}
+                      >
+                        Where should we deliver your card?
+                      </Text>
+                    </>
+                  )}
                 </View>
-              </View>
-              <View style={styles.quantityControls}>
-                <Pressable
-                  style={[
-                    styles.qtyBtn,
-                    { backgroundColor: colors.backgroundSecondary },
-                  ]}
-                  onPress={() => {
-                    const n = Math.max(1, parseInt(quantity, 10) - 1 || 0);
-                    setQuantity(String(n));
-                  }}
-                >
-                  <Ionicons name="remove" size={20} color={colors.text} />
-                </Pressable>
-                <TextInput
-                  style={[
-                    styles.qtyInput,
-                    {
-                      color: colors.text,
-                      backgroundColor: colors.backgroundSecondary,
-                      borderColor: colors.border,
-                    },
-                  ]}
-                  value={quantity}
-                  onChangeText={(t) => {
-                    const cleaned = t.replace(/[^0-9]/g, "");
-                    setQuantity(cleaned);
-                  }}
-                  keyboardType="number-pad"
-                  textAlign="center"
-                  maxLength={3}
+                <Ionicons
+                  name="chevron-forward"
+                  size={20}
+                  color={colors.textTertiary}
                 />
-                <Pressable
-                  style={[
-                    styles.qtyBtn,
-                    { backgroundColor: colors.backgroundSecondary },
-                  ]}
-                  onPress={() => {
-                    const n = parseInt(quantity, 10) + 1 || 1;
-                    setQuantity(String(n));
-                  }}
-                >
-                  <Ionicons name="add" size={20} color={colors.text} />
-                </Pressable>
               </View>
-            </View>
+            </Pressable>
+
+            {addresses.length === 0 && (
+              <Pressable
+                style={styles.addNewLink}
+                onPress={() => router.push("/addresses/add")}
+              >
+                <Ionicons
+                  name="add-circle-outline"
+                  size={16}
+                  color={colors.primary}
+                  style={{ marginRight: 6 }}
+                />
+                <Text style={[styles.addNewText, { color: colors.primary }]}>
+                  Add a new address first
+                </Text>
+              </Pressable>
+            )}
           </AnimatedView>
 
           {/* Submit Button */}

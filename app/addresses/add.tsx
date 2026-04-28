@@ -1,26 +1,25 @@
 import { useTheme } from "@/context/ThemeContext";
 import {
-  createAddress,
-  updateAddress,
   AddressType,
-  getCountries,
-  getCities,
-  getDistricts,
-  getAddressDetail,
-  getCityDetail,
-  getDistrictDetail,
-  Country,
   City,
+  Country,
+  createAddress,
   DistrictLocation,
+  getAddressDetail,
+  getCities,
+  getCountries,
+  getDistricts,
+  updateAddress
 } from "@/services/api";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { Stack, useRouter, useLocalSearchParams } from "expo-router";
-import React, { useState, useRef, useEffect, useMemo } from "react";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -30,7 +29,6 @@ import {
   TextInput,
   TouchableWithoutFeedback,
   View,
-  Modal,
 } from "react-native";
 import Animated, {
   FadeInDown,
@@ -52,18 +50,18 @@ export default function AddAddressScreen() {
 
   const [title, setTitle] = useState("");
   const [address, setAddress] = useState("");
-  
+
   // Location States
   const [countries, setCountries] = useState<Country[]>([]);
   const [cities, setCities] = useState<City[]>([]);
   const [districts, setDistricts] = useState<DistrictLocation[]>([]);
-  
+
   const [selectedCountryId, setSelectedCountryId] = useState<number | null>(null);
   const [selectedCountryName, setSelectedCountryName] = useState("");
-  
+
   const [selectedCityId, setSelectedCityId] = useState<number | null>(null);
   const [selectedCityName, setSelectedCityName] = useState("");
-  
+
   const [district, setDistrict] = useState<number | null>(null);
   const [districtName, setDistrictName] = useState("");
 
@@ -85,7 +83,7 @@ export default function AddAddressScreen() {
       districtNameParam?: string;
     }>();
   const isEdit = !!uuid;
-  
+
   // Modal States
   const [modalVisible, setModalVisible] = useState(false);
   const [modalMode, setModalMode] = useState<ModalMode>("COUNTRY");
@@ -154,9 +152,9 @@ export default function AddAddressScreen() {
               let foundCountry = countryId
                 ? countriesList.find((c: any) => c.id === countryId)
                 : countriesList.find(
-                    (c: any) =>
-                      c.name.toLowerCase() === countryName?.toLowerCase(),
-                  );
+                  (c: any) =>
+                    c.name.toLowerCase() === countryName?.toLowerCase(),
+                );
 
               if (foundCountry) {
                 const actualCountryId = foundCountry.id;
@@ -173,9 +171,9 @@ export default function AddAddressScreen() {
                   let foundCity = cityId
                     ? citiesList.find((c: any) => c.id === cityId)
                     : citiesList.find(
-                        (c: any) =>
-                          c.name.toLowerCase() === cityName?.toLowerCase(),
-                      );
+                      (c: any) =>
+                        c.name.toLowerCase() === cityName?.toLowerCase(),
+                    );
 
                   if (foundCity) {
                     const actualCityId = foundCity.id;
@@ -195,9 +193,9 @@ export default function AddAddressScreen() {
                       let foundDist = actualDistrictId
                         ? districtsList.find((d: any) => d.id === actualDistrictId)
                         : districtsList.find(
-                            (d: any) =>
-                              d.name.toLowerCase() === distName?.toLowerCase(),
-                          );
+                          (d: any) =>
+                            d.name.toLowerCase() === distName?.toLowerCase(),
+                        );
 
                       if (foundDist) {
                         setDistrict(foundDist.id);
@@ -229,7 +227,7 @@ export default function AddAddressScreen() {
   const handleCountrySelect = async (id: number, name: string) => {
     setSelectedCountryId(id);
     setSelectedCountryName(name);
-    
+
     // Reset city and district
     setSelectedCityId(null);
     setSelectedCityName("");
@@ -237,7 +235,7 @@ export default function AddAddressScreen() {
     setDistrictName("");
     setCities([]);
     setDistricts([]);
-    
+
     try {
       const res = await getCities(id);
       setCities(res.results || res.data?.results || res || []);
@@ -250,12 +248,12 @@ export default function AddAddressScreen() {
   const handleCitySelect = async (id: number, name: string) => {
     setSelectedCityId(id);
     setSelectedCityName(name);
-    
+
     // Reset district
     setDistrict(null);
     setDistrictName("");
     setDistricts([]);
-    
+
     try {
       const res = await getDistricts(id);
       setDistricts(res.results || res.data?.results || res || []);
@@ -369,283 +367,70 @@ export default function AddAddressScreen() {
           style={{ flex: 1 }}
           keyboardVerticalOffset={100}
         >
-        <ScrollView
-          ref={scrollRef}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          {/* Address Type Selector */}
-          <AnimatedView entering={FadeInDown.delay(50).springify()}>
-            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
-              ADDRESS TYPE
-            </Text>
-            <View style={styles.typeRow}>
-              {ADDRESS_TYPES.map((t) => {
-                const isSelected = type === t.value;
-                return (
-                  <Pressable
-                    key={t.value}
-                    style={[
-                      styles.typeCard,
-                      {
-                        backgroundColor: isSelected
-                          ? colors.primary
-                          : colors.card,
-                        borderColor: isSelected
-                          ? colors.primary
-                          : colors.border,
-                      },
-                    ]}
-                    onPress={() => setType(t.value)}
-                  >
-                    <Ionicons
-                      name={t.icon as any}
-                      size={24}
-                      color={isSelected ? "#fff" : colors.textSecondary}
-                    />
-                    <Text
+          <ScrollView
+            ref={scrollRef}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {/* Address Type Selector */}
+            <AnimatedView entering={FadeInDown.delay(50).springify()}>
+              <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
+                ADDRESS TYPE
+              </Text>
+              <View style={styles.typeRow}>
+                {ADDRESS_TYPES.map((t) => {
+                  const isSelected = type === t.value;
+                  return (
+                    <Pressable
+                      key={t.value}
                       style={[
-                        styles.typeLabel,
+                        styles.typeCard,
                         {
-                          color: isSelected ? "#fff" : colors.text,
+                          backgroundColor: isSelected
+                            ? colors.primary
+                            : colors.card,
+                          borderColor: isSelected
+                            ? colors.primary
+                            : colors.border,
                         },
                       ]}
+                      onPress={() => setType(t.value)}
                     >
-                      {t.label}
-                    </Text>
-                    {isSelected && (
-                      <View style={styles.typeCheckmark}>
-                        <Ionicons
-                          name="checkmark-circle"
-                          size={20}
-                          color="#fff"
-                        />
-                      </View>
-                    )}
-                  </Pressable>
-                );
-              })}
-            </View>
-          </AnimatedView>
-
-          {/* Basic Info Section */}
-          <AnimatedView entering={FadeInDown.delay(120).springify()}>
-            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
-              ADDRESS DETAILS
-            </Text>
-            <View
-              style={[
-                styles.formCard,
-                {
-                  backgroundColor: colors.card,
-                  borderColor: colors.border,
-                },
-              ]}
-            >
-              {/* Title */}
-              <FormField
-                label="Address Title"
-                placeholder="e.g. Home, Work, Summer House"
-                value={title}
-                onChangeText={setTitle}
-                colors={colors}
-                icon="bookmark-outline"
-              />
-
-              <View style={[styles.divider, { backgroundColor: colors.border }]} />
-
-              {/* Address */}
-              <FormField
-                label="Address"
-                placeholder="Street, neighborhood, building no..."
-                value={address}
-                onChangeText={setAddress}
-                colors={colors}
-                icon="location-outline"
-                multiline
-              />
-
-              <View style={[styles.divider, { backgroundColor: colors.border }]} />
-
-              {/* Country Selector */}
-              <Pressable
-                style={styles.fieldContainer}
-                onPress={() => openModal("COUNTRY")}
-              >
-                <View style={styles.fieldIconRow}>
-                  <View
-                    style={[
-                      styles.fieldIcon,
-                      { backgroundColor: `${colors.primary}15` },
-                    ]}
-                  >
-                    <Ionicons
-                      name="globe-outline"
-                      size={18}
-                      color={colors.primary}
-                    />
-                  </View>
-                  <View style={styles.fieldContent}>
-                    <Text
-                      style={[styles.fieldLabel, { color: colors.textTertiary }]}
-                    >
-                      Country
-                    </Text>
-                    <View style={styles.selectRow}>
+                      <Ionicons
+                        name={t.icon as any}
+                        size={24}
+                        color={isSelected ? "#fff" : colors.textSecondary}
+                      />
                       <Text
                         style={[
-                          styles.selectText,
+                          styles.typeLabel,
                           {
-                            color: selectedCountryId
-                              ? colors.text
-                              : colors.textTertiary,
+                            color: isSelected ? "#fff" : colors.text,
                           },
                         ]}
                       >
-                        {selectedCountryName || "Select Country"}
+                        {t.label}
                       </Text>
-                      <Ionicons
-                        name="chevron-down"
-                        size={18}
-                        color={colors.textTertiary}
-                      />
-                    </View>
-                  </View>
-                </View>
-              </Pressable>
+                      {isSelected && (
+                        <View style={styles.typeCheckmark}>
+                          <Ionicons
+                            name="checkmark-circle"
+                            size={20}
+                            color="#fff"
+                          />
+                        </View>
+                      )}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </AnimatedView>
 
-              <View style={[styles.divider, { backgroundColor: colors.border }]} />
-
-              {/* City Selector */}
-              <Pressable
-                style={styles.fieldContainer}
-                onPress={() => openModal("CITY")}
-              >
-                <View style={styles.fieldIconRow}>
-                  <View
-                    style={[
-                      styles.fieldIcon,
-                      { backgroundColor: `${colors.primary}15` },
-                    ]}
-                  >
-                    <Ionicons
-                      name="business-outline"
-                      size={18}
-                      color={colors.primary}
-                    />
-                  </View>
-                  <View style={styles.fieldContent}>
-                    <Text
-                      style={[styles.fieldLabel, { color: colors.textTertiary }]}
-                    >
-                      City
-                    </Text>
-                    <View style={styles.selectRow}>
-                      <Text
-                        style={[
-                          styles.selectText,
-                          {
-                            color: selectedCityId
-                              ? colors.text
-                              : colors.textTertiary,
-                          },
-                        ]}
-                      >
-                        {resolvingLocation
-                          ? "Loading city..."
-                          : selectedCityName ||
-                            (selectedCountryId
-                              ? "Select City"
-                              : "Please select country first")}
-                      </Text>
-                      <Ionicons
-                        name="chevron-down"
-                        size={18}
-                        color={colors.textTertiary}
-                      />
-                    </View>
-                  </View>
-                </View>
-              </Pressable>
-
-              <View style={[styles.divider, { backgroundColor: colors.border }]} />
-
-              {/* District Selector */}
-              <Pressable
-                style={styles.fieldContainer}
-                onPress={() => openModal("DISTRICT")}
-              >
-                <View style={styles.fieldIconRow}>
-                  <View
-                    style={[
-                      styles.fieldIcon,
-                      { backgroundColor: `${colors.primary}15` },
-                    ]}
-                  >
-                    <Ionicons
-                      name="map-outline"
-                      size={18}
-                      color={colors.primary}
-                    />
-                  </View>
-                  <View style={styles.fieldContent}>
-                    <Text
-                      style={[styles.fieldLabel, { color: colors.textTertiary }]}
-                    >
-                      District
-                    </Text>
-                    <View style={styles.selectRow}>
-                      <Text
-                        style={[
-                          styles.selectText,
-                          {
-                            color: district
-                              ? colors.text
-                              : colors.textTertiary,
-                          },
-                        ]}
-                      >
-                        {resolvingLocation
-                          ? "Loading district..."
-                          : districtName ||
-                            (selectedCityId
-                              ? "Select District"
-                              : "Please select city first")}
-                      </Text>
-                      <Ionicons
-                        name="chevron-down"
-                        size={18}
-                        color={colors.textTertiary}
-                      />
-                    </View>
-                  </View>
-                </View>
-              </Pressable>
-
-              <View style={[styles.divider, { backgroundColor: colors.border }]} />
-
-              {/* Postal Code */}
-              <FormField
-                label="Postal Code"
-                placeholder="e.g. 34710"
-                value={postalCode}
-                onChangeText={setPostalCode}
-                colors={colors}
-                icon="mail-outline"
-                keyboardType="number-pad"
-                isLast
-              />
-            </View>
-          </AnimatedView>
-
-          {/* Corporate Fields */}
-          {isCorpo && (
-            <AnimatedView entering={FadeInDown.delay(50).springify()}>
-              <Text
-                style={[styles.sectionTitle, { color: colors.textTertiary }]}
-              >
-                COMPANY DETAILS
+            {/* Basic Info Section */}
+            <AnimatedView entering={FadeInDown.delay(120).springify()}>
+              <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>
+                ADDRESS DETAILS
               </Text>
               <View
                 style={[
@@ -656,134 +441,347 @@ export default function AddAddressScreen() {
                   },
                 ]}
               >
+                {/* Title */}
                 <FormField
-                  label="Company Name"
-                  placeholder="Enter company name"
-                  value={companyName}
-                  onChangeText={setCompanyName}
+                  label="Address Title"
+                  placeholder="e.g. Home, Work, Summer House"
+                  value={title}
+                  onChangeText={setTitle}
                   colors={colors}
-                  icon="business-outline"
+                  icon="bookmark-outline"
                 />
 
-                <View
-                  style={[styles.divider, { backgroundColor: colors.border }]}
+                <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+                {/* Address */}
+                <FormField
+                  label="Address"
+                  placeholder="Street, neighborhood, building no..."
+                  value={address}
+                  onChangeText={setAddress}
+                  colors={colors}
+                  icon="location-outline"
+                  multiline
                 />
 
+                <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+                {/* Country Selector */}
+                <Pressable
+                  style={styles.fieldContainer}
+                  onPress={() => openModal("COUNTRY")}
+                >
+                  <View style={styles.fieldIconRow}>
+                    <View
+                      style={[
+                        styles.fieldIcon,
+                        { backgroundColor: `${colors.primary}` },
+                      ]}
+                    >
+                      <Ionicons
+                        name="globe-outline"
+                        size={18}
+                        color="#ffffff"
+                      />
+                    </View>
+                    <View style={styles.fieldContent}>
+                      <Text
+                        style={[styles.fieldLabel, { color: colors.textTertiary }]}
+                      >
+                        Country
+                      </Text>
+                      <View style={styles.selectRow}>
+                        <Text
+                          style={[
+                            styles.selectText,
+                            {
+                              color: selectedCountryId
+                                ? colors.text
+                                : colors.textTertiary,
+                            },
+                          ]}
+                        >
+                          {selectedCountryName || "Select Country"}
+                        </Text>
+                        <Ionicons
+                          name="chevron-down"
+                          size={18}
+                          color={colors.textTertiary}
+                        />
+                      </View>
+                    </View>
+                  </View>
+                </Pressable>
+
+                <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+                {/* City Selector */}
+                <Pressable
+                  style={styles.fieldContainer}
+                  onPress={() => openModal("CITY")}
+                >
+                  <View style={styles.fieldIconRow}>
+                    <View
+                      style={[
+                        styles.fieldIcon,
+                        { backgroundColor: `${colors.primary}` },
+                      ]}
+                    >
+                      <Ionicons
+                        name="business-outline"
+                        size={18}
+                        color="#ffffff"
+                      />
+                    </View>
+                    <View style={styles.fieldContent}>
+                      <Text
+                        style={[styles.fieldLabel, { color: colors.textTertiary }]}
+                      >
+                        City
+                      </Text>
+                      <View style={styles.selectRow}>
+                        <Text
+                          style={[
+                            styles.selectText,
+                            {
+                              color: selectedCityId
+                                ? colors.text
+                                : colors.textTertiary,
+                            },
+                          ]}
+                        >
+                          {resolvingLocation
+                            ? "Loading city..."
+                            : selectedCityName ||
+                            (selectedCountryId
+                              ? "Select City"
+                              : "Please select country first")}
+                        </Text>
+                        <Ionicons
+                          name="chevron-down"
+                          size={18}
+                          color={colors.textTertiary}
+                        />
+                      </View>
+                    </View>
+                  </View>
+                </Pressable>
+
+                <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+                {/* District Selector */}
+                <Pressable
+                  style={styles.fieldContainer}
+                  onPress={() => openModal("DISTRICT")}
+                >
+                  <View style={styles.fieldIconRow}>
+                    <View
+                      style={[
+                        styles.fieldIcon,
+                        { backgroundColor: `${colors.primary}` },
+                      ]}
+                    >
+                      <Ionicons
+                        name="map-outline"
+                        size={18}
+                        color="#ffffff"
+                      />
+                    </View>
+                    <View style={styles.fieldContent}>
+                      <Text
+                        style={[styles.fieldLabel, { color: colors.textTertiary }]}
+                      >
+                        District
+                      </Text>
+                      <View style={styles.selectRow}>
+                        <Text
+                          style={[
+                            styles.selectText,
+                            {
+                              color: district
+                                ? colors.text
+                                : colors.textTertiary,
+                            },
+                          ]}
+                        >
+                          {resolvingLocation
+                            ? "Loading district..."
+                            : districtName ||
+                            (selectedCityId
+                              ? "Select District"
+                              : "Please select city first")}
+                        </Text>
+                        <Ionicons
+                          name="chevron-down"
+                          size={18}
+                          color={colors.textTertiary}
+                        />
+                      </View>
+                    </View>
+                  </View>
+                </Pressable>
+
+                <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+                {/* Postal Code */}
                 <FormField
-                  label="Tax Number"
-                  placeholder="Enter tax number"
-                  value={taxNumber}
-                  onChangeText={setTaxNumber}
+                  label="Postal Code"
+                  placeholder="e.g. 34710"
+                  value={postalCode}
+                  onChangeText={setPostalCode}
                   colors={colors}
-                  icon="document-text-outline"
+                  icon="mail-outline"
                   keyboardType="number-pad"
-                />
-
-                <View
-                  style={[styles.divider, { backgroundColor: colors.border }]}
-                />
-
-                <FormField
-                  label="Tax Office"
-                  placeholder="Enter tax office"
-                  value={taxOffice}
-                  onChangeText={setTaxOffice}
-                  colors={colors}
-                  icon="reader-outline"
                   isLast
                 />
               </View>
             </AnimatedView>
-          )}
 
-          {/* Default Switch */}
-          <AnimatedView entering={FadeInDown.delay(180).springify()}>
-            <View
-              style={[
-                styles.defaultRow,
-                {
-                  backgroundColor: colors.card,
-                  borderColor: colors.border,
-                },
-              ]}
-            >
-              <View style={styles.defaultInfo}>
+            {/* Corporate Fields */}
+            {isCorpo && (
+              <AnimatedView entering={FadeInDown.delay(50).springify()}>
+                <Text
+                  style={[styles.sectionTitle, { color: colors.textTertiary }]}
+                >
+                  COMPANY DETAILS
+                </Text>
                 <View
                   style={[
-                    styles.fieldIcon,
-                    { backgroundColor: `${colors.primary}15` },
+                    styles.formCard,
+                    {
+                      backgroundColor: colors.card,
+                      borderColor: colors.border,
+                    },
                   ]}
                 >
-                  <Ionicons
-                    name="star-outline"
-                    size={18}
-                    color={colors.primary}
+                  <FormField
+                    label="Company Name"
+                    placeholder="Enter company name"
+                    value={companyName}
+                    onChangeText={setCompanyName}
+                    colors={colors}
+                    icon="business-outline"
+                  />
+
+                  <View
+                    style={[styles.divider, { backgroundColor: colors.border }]}
+                  />
+
+                  <FormField
+                    label="Tax Number"
+                    placeholder="Enter tax number"
+                    value={taxNumber}
+                    onChangeText={setTaxNumber}
+                    colors={colors}
+                    icon="document-text-outline"
+                    keyboardType="number-pad"
+                  />
+
+                  <View
+                    style={[styles.divider, { backgroundColor: colors.border }]}
+                  />
+
+                  <FormField
+                    label="Tax Office"
+                    placeholder="Enter tax office"
+                    value={taxOffice}
+                    onChangeText={setTaxOffice}
+                    colors={colors}
+                    icon="reader-outline"
+                    isLast
                   />
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.defaultLabel, { color: colors.text }]}>
-                    Default Address
-                  </Text>
-                  <Text
+              </AnimatedView>
+            )}
+
+            {/* Default Switch */}
+            <AnimatedView entering={FadeInDown.delay(180).springify()}>
+              <View
+                style={[
+                  styles.defaultRow,
+                  {
+                    backgroundColor: colors.card,
+                    borderColor: colors.border,
+                  },
+                ]}
+              >
+                <View style={styles.defaultInfo}>
+                  <View
                     style={[
-                      styles.defaultHint,
-                      { color: colors.textTertiary },
+                      styles.fieldIcon,
+                      { backgroundColor: `${colors.primary}` },
                     ]}
                   >
-                    This address will be used for billing and delivery
-                  </Text>
-                </View>
-              </View>
-              <Switch
-                value={isDefault}
-                onValueChange={setIsDefault}
-                trackColor={{
-                  false: colors.border,
-                  true: `${colors.primary}80`,
-                }}
-                thumbColor={isDefault ? colors.primary : "#f4f4f4"}
-              />
-            </View>
-          </AnimatedView>
-
-          {/* Save Button */}
-          <AnimatedView entering={FadeInDown.delay(240).springify()}>
-            <Pressable
-              style={[
-                styles.saveButton,
-                { shadowColor: colors.primary },
-                saving && { opacity: 0.7 },
-              ]}
-              onPress={handleSave}
-              disabled={saving}
-            >
-              <LinearGradient
-                colors={[colors.primary, "#1a9f70"]}
-                style={styles.saveGradient}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-              >
-                {saving ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <>
                     <Ionicons
-                      name="checkmark-circle"
-                      size={22}
-                      color="#fff"
-                      style={{ marginRight: 8 }}
+                      name="star-outline"
+                      size={18}
+                      color="#ffffff"
                     />
-                    <Text style={styles.saveText}>Save Address</Text>
-                  </>
-                )}
-              </LinearGradient>
-            </Pressable>
-          </AnimatedView>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.defaultLabel, { color: colors.text }]}>
+                      Default Address
+                    </Text>
+                    <Text
+                      style={[
+                        styles.defaultHint,
+                        { color: colors.textTertiary },
+                      ]}
+                    >
+                      This address will be used for billing and delivery
+                    </Text>
+                  </View>
+                </View>
+                <Switch
+                  value={isDefault}
+                  onValueChange={setIsDefault}
+                  trackColor={{
+                    false: colors.border,
+                    true: `${colors.primary}80`,
+                  }}
+                  thumbColor={isDefault ? colors.primary : "#f4f4f4"}
+                />
+              </View>
+            </AnimatedView>
 
-          <View style={{ height: 40 }} />
-        </ScrollView>
-      </KeyboardAvoidingView>
-    )}
+            {/* Save Button */}
+            <AnimatedView entering={FadeInDown.delay(240).springify()}>
+              <Pressable
+                style={[
+                  styles.saveButton,
+                  { shadowColor: colors.primary },
+                  saving && { opacity: 0.7 },
+                ]}
+                onPress={handleSave}
+                disabled={saving}
+              >
+                <LinearGradient
+                  colors={[colors.primary, "#1a9f70"]}
+                  style={styles.saveGradient}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                >
+                  {saving ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <>
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={22}
+                        color="#fff"
+                        style={{ marginRight: 8 }}
+                      />
+                      <Text style={styles.saveText}>Save Address</Text>
+                    </>
+                  )}
+                </LinearGradient>
+              </Pressable>
+            </AnimatedView>
+
+            <View style={{ height: 40 }} />
+          </ScrollView>
+        </KeyboardAvoidingView>
+      )}
 
       {/* Generic Selection Modal */}
       <Modal
@@ -963,10 +961,10 @@ function FormField({
         <View
           style={[
             styles.fieldIcon,
-            { backgroundColor: `${colors.primary}15` },
+            { backgroundColor: `${colors.primary}` },
           ]}
         >
-          <Ionicons name={icon as any} size={18} color={colors.primary} />
+          <Ionicons name={icon as any} size={18} color="#ffffff" />
         </View>
         <View style={styles.fieldContent}>
           <Text style={[styles.fieldLabel, { color: colors.textTertiary }]}>
@@ -1199,6 +1197,6 @@ const styles = StyleSheet.create({
     paddingVertical: 32,
   },
   noResultText: {
-    fontSize: 15,
+    fontSize: 16,
   },
 });

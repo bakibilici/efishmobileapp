@@ -7,9 +7,9 @@
 6 silly config load:file:/Users/abdulbakibilici/.npm-global/etc/npmrc
 7 verbose title npm start
 8 verbose argv "start"
-9 verbose logfile logs-max:10 dir:/Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-04-15T08_33_54_762Z-
-10 verbose logfile /Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-04-15T08_33_54_762Z-debug-0.log
-11 silly logfile start cleaning logs, removing 3 files
+9 verbose logfile logs-max:10 dir:/Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-04-17T08_55_19_860Z-
+10 verbose logfile /Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-04-17T08_55_19_860Z-debug-0.log
+11 silly logfile start cleaning logs, removing 1 files
 12 silly logfile done cleaning log files
 13 verbose cwd /Users/abdulbakibilici/Projects/efish
 14 verbose os Darwin 25.3.0

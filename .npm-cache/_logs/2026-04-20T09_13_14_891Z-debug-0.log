@@ -7,8 +7,8 @@
 6 silly config load:file:/Users/abdulbakibilici/.npm-global/etc/npmrc
 7 verbose title npm start
 8 verbose argv "start"
-9 verbose logfile logs-max:10 dir:/Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-04-15T10_41_35_873Z-
-10 verbose logfile /Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-04-15T10_41_35_873Z-debug-0.log
+9 verbose logfile logs-max:10 dir:/Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-04-20T09_13_14_891Z-
+10 verbose logfile /Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-04-20T09_13_14_891Z-debug-0.log
 11 silly logfile start cleaning logs, removing 1 files
 12 silly logfile done cleaning log files
 13 verbose cwd /Users/abdulbakibilici/Projects/efish

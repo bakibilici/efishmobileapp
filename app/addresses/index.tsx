@@ -462,7 +462,7 @@ function AddressCard({
               style={{ marginRight: 6 }}
             />
             <Text style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, fontWeight: "600" }}>
-              Active Address
+              Default Address
             </Text>
           </View>
         )}

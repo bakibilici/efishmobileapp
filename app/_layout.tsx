@@ -202,6 +202,14 @@ function RootLayoutNav() {
             }}
           />
           <Stack.Screen
+            name="notifications/index"
+            options={{
+              presentation: "card",
+              headerShown: false,
+              animation: "slide_from_right",
+            }}
+          />
+          <Stack.Screen
             name="auth/register"
             options={{ presentation: "card", headerShown: false }}
           />

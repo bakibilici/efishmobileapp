@@ -25,7 +25,7 @@ import {
   useNavigation,
   useRouter,
 } from "expo-router";
-import { Car, Flash, Heart, Location, Lock1, Microphone2, Moon, Notification, Setting4, Timer1 } from "iconsax-react-native";
+import { Car, Flash, Heart, Location, Lock1, Microphone2, Notification, Setting4, Timer1 } from "iconsax-react-native";
 import React, {
   useCallback,
   useEffect,
@@ -994,10 +994,9 @@ export default function MapScreen() {
   const [isTypeListOpen, setIsTypeListOpen] = useState(false);
 
   // --- Status Header State ---
-  type ActivityType = "Idle" | "Walking" | "Running" | "Cycling" | "Driving";
+  type ActivityType = "Walking" | "Running" | "Cycling" | "Driving";
   const ACTIVITIES: { type: ActivityType; label: string; icon: any; color: string; isIonicons?: boolean }[] = [
-    { type: "Idle", label: "Idle", icon: Moon, color: "#8E8E93" },
-    { type: "Walking", label: "Walking", icon: "walk", color: "#34C759", isIonicons: true },
+    { type: "Walking", label: "Walking", icon: "footsteps", color: "#34C759", isIonicons: true },
     { type: "Running", label: "Running", icon: Flash, color: "#FF9500" },
     { type: "Cycling", label: "Biking", icon: "bicycle", color: "#5856D6", isIonicons: true },
     { type: "Driving", label: "Driving", icon: Car, color: "#007AFF" },
@@ -1005,6 +1004,7 @@ export default function MapScreen() {
 
   const [currentActivityIdx, setCurrentActivityIdx] = useState(0);
   const currentActivity = ACTIVITIES[currentActivityIdx];
+  const [hasNewNotifications, setHasNewNotifications] = useState(true); // Redesigned header logic
   const statusHeaderAnim = useSharedValue(1);
 
   const toggleNextActivity = () => {
@@ -1681,51 +1681,63 @@ export default function MapScreen() {
               overflow: 'hidden' // FIX: Ensure child content (chips) doesn't overflow rounded corners
             }}>
               {/* Row 0: Status Chips (Animated) */}
-              <Reanimated.View style={[statusHeaderStyle, { flexDirection: 'row', paddingHorizontal: 16, gap: 10, overflow: 'hidden' }]}>
-                {/* Activity Chip */}
+              <Reanimated.View style={[statusHeaderStyle, { flexDirection: 'row', paddingHorizontal: 16, gap: 10, alignItems: 'center' }]}>
+
+                {/* 1. Rewards/Points Chip */}
+                <View style={{
+                  flex: 1,
+                  flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 42,
+                  backgroundColor: isDark ? "#2A2A2A" : "#FFFFFF",
+                  borderRadius: 999, borderWidth: 1.5, borderColor: isDark ? "#444" : "#e8e8e8"
+                }}>
+                  <Image
+                    source={require("@/assets/images/efishcoin.png")}
+                    style={{ width: 22, height: 22 }}
+                    resizeMode="contain"
+                  />
+                  <Text style={{ fontSize: 13, fontWeight: '900', color: isDark ? "#2CD999" : "#2CD999" }}>1,250</Text>
+                </View>
+
+                {/* 2. Activity & Steps Chip */}
                 <Pressable onPress={toggleNextActivity} style={{ flex: 1 }}>
                   <View style={{
-                    flexDirection: 'row', alignItems: 'center', gap: 8, height: 42,
-                    backgroundColor: isDark ? `${currentActivity.color}35` : `${currentActivity.color}20`,
-                    paddingHorizontal: 12, borderRadius: 999, borderWidth: 1.5, borderColor: `${currentActivity.color}40`,
-                    justifyContent: 'center'
+                    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 42,
+                    backgroundColor: isDark ? "#2A2A2A" : "#FFFFFF",
+                    borderRadius: 999, borderWidth: 1.5, borderColor: isDark ? "#444" : "#e8e8e8"
                   }}>
                     {currentActivity.isIonicons ? (
                       <Ionicons name={currentActivity.icon} size={18} color={currentActivity.color} />
                     ) : (
                       <currentActivity.icon variant="Bold" size={18} color={currentActivity.color} />
                     )}
-                    <Text style={{ fontSize: 14, fontWeight: '800', color: currentActivity.color }}>{currentActivity.label}</Text>
+
+                    <Text style={{ fontSize: 13, fontWeight: '800', color: currentActivity.color }}>
+                      {currentActivity.type === "Walking" ? "8.421" : currentActivity.label}
+                    </Text>
                   </View>
                 </Pressable>
 
-                {/* Steps Chip */}
-                <View style={{ flex: 1 }}>
+                {/* 3. Notification Chip */}
+                <Pressable onPress={() => router.push('/notifications')}>
                   <View style={{
-                    flexDirection: 'row', alignItems: 'center', gap: 8, height: 42, justifyContent: 'center',
-                    backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "#f0f2f5",
-                    paddingHorizontal: 12, borderRadius: 999, borderWidth: 1.5, borderColor: isDark ? "rgba(255,255,255,0.15)" : "#e2e6ea"
+                    width: 42, height: 42, alignItems: 'center', justifyContent: 'center',
                   }}>
-                    <Ionicons name="footsteps" size={18} color={isDark ? "#aaa" : "#555"} />
-                    <Text style={{ fontSize: 14, fontWeight: '800', color: colors.text }}>8,421</Text>
-                  </View>
-                </View>
-
-                {/* Points Chip */}
-                <View style={{ flex: 1 }}>
-                  <View style={{
-                    flexDirection: 'row', alignItems: 'center', gap: 8, height: 42, justifyContent: 'center',
-                    backgroundColor: isDark ? "#2CD999" : "#2CD99940",
-                    paddingHorizontal: 12, borderRadius: 999, borderWidth: 1.5, borderColor: isDark ? "#2CD999" : "#2CD999"
-                  }}>
-                    <Image
-                      source={require("@/assets/images/efishcoin.png")}
-                      style={{ width: 24, height: 24 }}
-                      resizeMode="contain"
+                    <Notification
+                      size={26}
+                      color={colors.textSecondary}
+                      variant={hasNewNotifications ? "Bold" : "Outline"}
                     />
-                    <Text style={{ fontSize: 14, fontWeight: '900', color: isDark ? "#018d5a" : "#018d5a" }}>1,250</Text>
+                    {hasNewNotifications && (
+                      <View style={{
+                        position: 'absolute', top: 10, right: 10,
+                        width: 8, height: 8, borderRadius: 4,
+                        backgroundColor: "#FF3B30",
+                        borderWidth: 1.5,
+                        borderColor: isDark ? "#2A2A2A" : "#FFFFFF"
+                      }} />
+                    )}
                   </View>
-                </View>
+                </Pressable>
               </Reanimated.View>
 
               {/* Row 1: Search & Bell/Login */}
@@ -1793,20 +1805,7 @@ export default function MapScreen() {
                     variant={isFiltersVisible ? "Bold" : "Outline"}
                   />
                 </Pressable>
-                {user ? (
-                  <Pressable style={{
-                    width: 48, // Match height
-                    height: 48,
-                    borderRadius: 99,
-                    alignItems: "center",
-                    justifyContent: "center"
-                  }}>
-                    <Notification
-                      size={24}
-                      color={colors.text}
-                    />
-                  </Pressable>
-                ) : (
+                {user ? null : (
                   <Pressable
                     onPress={() => {
                       if (router.canDismiss()) {

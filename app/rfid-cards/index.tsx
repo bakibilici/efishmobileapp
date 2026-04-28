@@ -359,13 +359,6 @@ export default function RfidCardsScreen() {
                           <Text style={styles.cardBrand}>efish</Text>
                         </View>
 
-                        {/* Card chip visual */}
-                        <View style={styles.chipContainer}>
-                          <View style={styles.chip}>
-                            <View style={styles.chipInner} />
-                          </View>
-                        </View>
-
                         {/* Card ID */}
                         <Text style={styles.cardNumber}>
                           {card.card_id
@@ -466,8 +459,8 @@ export default function RfidCardsScreen() {
                   >
                     <View style={[styles.reqHeader, { borderBottomColor: colors.border }]}>
                       <View style={styles.reqHeaderLeft}>
-                        <View style={[styles.reqIconBox, { backgroundColor: `${colors.primary}15` }]}>
-                          <Ionicons name="card-outline" size={18} color={colors.primary} />
+                        <View style={[styles.reqIconBox, { backgroundColor: `${colors.primary}` }]}>
+                          <Ionicons name="card-outline" size={18} color="#ffffff" />
                         </View>
                         <Text style={[styles.reqTitle, { color: colors.text }]}>
                           Request #{req.id}
