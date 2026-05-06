@@ -1208,7 +1208,7 @@ export default function MapScreen() {
     () =>
       stationsList.filter((station) => {
         const matchesQuery = station.name
-          .toLowerCase()
+          ?.toLowerCase()
           .includes(search.toLowerCase().trim());
         // Filter by availability if toggle is on
         if (showOnlyAvailable) {
@@ -1669,13 +1669,6 @@ export default function MapScreen() {
               right: 0,
               paddingTop: Platform.OS === 'ios' ? topInset : topInset - 15,
               backgroundColor: isDark ? "rgba(30, 30, 30, 0.85)" : "rgba(255, 255, 255, 0.95)", // Semi-transparent for glass effect
-              borderBottomLeftRadius: 24,
-              borderBottomRightRadius: 24,
-              shadowColor: "#000",
-              shadowOffset: { width: 0, height: 4 }, // Reduced shadow
-              shadowOpacity: 0.1,
-              shadowRadius: 12,
-              elevation: 8,
               zIndex: 10,
               transform: [{ translateY: headerAnim }],
               overflow: 'hidden' // FIX: Ensure child content (chips) doesn't overflow rounded corners
@@ -1686,32 +1679,28 @@ export default function MapScreen() {
                 {/* 1. Rewards/Points Chip */}
                 <View style={{
                   flex: 1,
-                  flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, height: 42,
-                  backgroundColor: isDark ? "#2A2A2A" : "#FFFFFF",
-                  borderRadius: 999, borderWidth: 1.5, borderColor: isDark ? "#444" : "#e8e8e8"
+                  flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 6, height: 42,
                 }}>
                   <Image
                     source={require("@/assets/images/efishcoin.png")}
-                    style={{ width: 22, height: 22 }}
+                    style={{ width: 38, height: 38 }}
                     resizeMode="contain"
                   />
-                  <Text style={{ fontSize: 13, fontWeight: '900', color: isDark ? "#2CD999" : "#2CD999" }}>1,250</Text>
+                  <Text style={{ fontSize: 16, fontWeight: '900', color: isDark ? "#FDCE39" : "#FDCE39" }}>1,250</Text>
                 </View>
 
                 {/* 2. Activity & Steps Chip */}
                 <Pressable onPress={toggleNextActivity} style={{ flex: 1 }}>
                   <View style={{
-                    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, height: 42,
-                    backgroundColor: isDark ? "#2A2A2A" : "#FFFFFF",
-                    borderRadius: 999, borderWidth: 1.5, borderColor: isDark ? "#444" : "#e8e8e8"
+                    flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', gap: 8, height: 42,
                   }}>
                     {currentActivity.isIonicons ? (
-                      <Ionicons name={currentActivity.icon} size={18} color={currentActivity.color} />
+                      <Ionicons name={currentActivity.icon} size={24} color={currentActivity.color} />
                     ) : (
-                      <currentActivity.icon variant="Bold" size={18} color={currentActivity.color} />
+                      <currentActivity.icon variant="Bold" size={24} color={currentActivity.color} />
                     )}
 
-                    <Text style={{ fontSize: 13, fontWeight: '800', color: currentActivity.color }}>
+                    <Text style={{ fontSize: 16, fontWeight: '800', color: currentActivity.color }}>
                       {currentActivity.type === "Walking" ? "8.421" : currentActivity.label}
                     </Text>
                   </View>
