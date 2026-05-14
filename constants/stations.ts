@@ -1,6 +1,17 @@
 export type StationType = 'HPC' | 'DC' | 'AC';
 
-export type ConnectorStatus = 'available' | 'busy' | 'charging' | 'offline';
+export type ConnectorStatus =
+  | 'available'
+  | 'preparing'
+  | 'charging'
+  | 'suspendedev'
+  | 'suspendedevse'
+  | 'finishing'
+  | 'unavailable'
+  | 'faulted'
+  | 'reserved'
+  | 'busy'
+  | 'offline';
 
 export type Station = {
   id: string;

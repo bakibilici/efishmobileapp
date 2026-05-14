@@ -1,9 +1,9 @@
 import { useTheme } from '@/context/ThemeContext';
 import { ChargingMode, ChargingState } from '@/hooks/useChargingSimulation';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import React, { useEffect, useRef } from 'react';
-import { Dimensions, Easing, Image, Pressable, Animated as RNAnimated, StyleSheet, Text, View } from 'react-native';
-import Animated, { interpolateColor, useAnimatedProps, useAnimatedStyle, useDerivedValue, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
+import React, { useEffect, useRef, useState } from 'react';
+import { Dimensions, Easing, Image, Platform, Pressable, Animated as RNAnimated, StyleSheet, Text, View } from 'react-native';
+import Animated, { Easing as REasing, interpolateColor, useAnimatedProps, useAnimatedStyle, useDerivedValue, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import Svg, { Circle, Defs, Mask } from 'react-native-svg';
 import FinishingSpinner from './FinishingSpinner';
 
@@ -99,9 +99,108 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
 
     const isComplete = (state.batteryLevel ?? 0) >= 100;
     const isStarting = state.isStarting;
-    const isFinished = state.sessionStatus === 'FINISHED';
-    const isStopping = state.isFinishing && !state.isDismissing;
+    // Backend terminal states: COMPLETED, FAILED. Legacy 'FINISHED' is an alias of COMPLETED.
+    const isCompleted = state.sessionStatus === 'COMPLETED' || state.sessionStatus === 'FINISHED';
+    const isFailed = state.sessionStatus === 'FAILED' || state.isFailed;
+    const isFinished = isCompleted; // legacy local alias used below
+    // New active phases (WS still open):
+    const isFinishingPhase = state.sessionStatus === 'FINISHING';
+    const isParkingPhase = state.sessionStatus === 'PARKING';
+    // Pre-FINISHING transition spinner shown right after the user taps Stop.
+    const isStopping = state.isFinishing && !state.isDismissing && !isFinishingPhase && !isParkingPhase;
     const isDismissing = state.isDismissing;
+
+    // 1s tick to refresh countdown / count-up timers while in FINISHING/PARKING.
+    const [, forceTick] = useState(0);
+    useEffect(() => {
+        if (!isFinishingPhase && !isParkingPhase) return;
+        const id = setInterval(() => forceTick(t => (t + 1) & 0xffff), 1000);
+        return () => clearInterval(id);
+    }, [isFinishingPhase, isParkingPhase]);
+
+    // FINISHING: countdown until grace_ends_at = ended_at + free_park_duration_minutes*60
+    let graceRemainingSec: number | null = null;
+    if (isFinishingPhase && state.endedAt && state.freeParkDurationMinutes != null) {
+        const graceEndsMs = new Date(state.endedAt).getTime() + state.freeParkDurationMinutes * 60_000;
+        graceRemainingSec = Math.max(0, Math.floor((graceEndsMs - Date.now()) / 1000));
+    }
+    const graceFreeForever = isFinishingPhase && state.parkingTariff == null;
+
+    // PARKING: count-up + fee accrual, capped at max_price
+    let parkingElapsedSec = 0;
+    let parkingFee = 0;
+    if (isParkingPhase && state.parkingSession) {
+        const startedMs = new Date(state.parkingSession.started_at).getTime();
+        parkingElapsedSec = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+        const minutes = parkingElapsedSec / 60;
+        const raw = minutes * (state.parkingSession.price ?? 0);
+        parkingFee = state.parkingSession.max_price != null && raw > state.parkingSession.max_price
+            ? state.parkingSession.max_price
+            : raw;
+    }
+
+    const formatHMS = (totalSec: number) => {
+        const h = Math.floor(totalSec / 3600);
+        const m = Math.floor((totalSec % 3600) / 60);
+        const s = totalSec % 60;
+        const pad = (n: number) => n.toString().padStart(2, '0');
+        return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+    };
+
+    // ── Smooth progress bars for FINISHING / PARKING ──
+    // Mirrors the widget — runs at 60fps with a linear withTiming over the full
+    // remaining duration, so the bar glides instead of stepping every second.
+    const finishingProgress = useSharedValue(1);
+    const parkingProgress = useSharedValue(0);
+
+    useEffect(() => {
+        if (isFinishingPhase && state.endedAt && state.freeParkDurationMinutes != null && !graceFreeForever) {
+            const startedMs = new Date(state.endedAt).getTime();
+            const totalMs = state.freeParkDurationMinutes * 60_000;
+            const elapsedMs = Date.now() - startedMs;
+            const initialRatio = Math.max(0, Math.min(1, 1 - elapsedMs / totalMs));
+            const remainingMs = Math.max(0, totalMs - elapsedMs);
+
+            finishingProgress.value = initialRatio;
+            if (remainingMs > 0) {
+                finishingProgress.value = withTiming(0, {
+                    duration: remainingMs,
+                    easing: REasing.linear,
+                });
+            }
+        } else {
+            finishingProgress.value = withTiming(1, { duration: 200 });
+        }
+    }, [isFinishingPhase, graceFreeForever, state.endedAt, state.freeParkDurationMinutes]);
+
+    useEffect(() => {
+        const ps = state.parkingSession;
+        if (isParkingPhase && ps?.started_at && ps.price && ps.max_price && ps.max_price > 0) {
+            const startedMs = new Date(ps.started_at).getTime();
+            const totalMs = (ps.max_price / ps.price) * 60_000;
+            const elapsedMs = Math.max(0, Date.now() - startedMs);
+            const initialRatio = Math.max(0, Math.min(1, elapsedMs / totalMs));
+            const remainingMs = Math.max(0, totalMs - elapsedMs);
+
+            parkingProgress.value = initialRatio;
+            if (remainingMs > 0) {
+                parkingProgress.value = withTiming(1, {
+                    duration: remainingMs,
+                    easing: REasing.linear,
+                });
+            }
+        } else {
+            parkingProgress.value = withTiming(0, { duration: 200 });
+        }
+    }, [
+        isParkingPhase,
+        state.parkingSession?.started_at,
+        state.parkingSession?.price,
+        state.parkingSession?.max_price,
+    ]);
+
+    const finishingProgressStyle = useAnimatedStyle(() => ({ width: `${finishingProgress.value * 100}%` }));
+    const parkingProgressStyle = useAnimatedStyle(() => ({ width: `${parkingProgress.value * 100}%` }));
 
     // Dismissing Animation Values
     const dismissBgAnim = useSharedValue(0);
@@ -152,13 +251,19 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                                 ? 'Şarj Başarıyla Tamamlandı'
                                 : isStarting
                                     ? 'Şarj Başlatılıyor'
-                                    : isFinished
-                                        ? 'Şarj Tamamlandı'
-                                        : isStopping
-                                            ? 'Şarj Durduruluyor'
-                                            : isComplete
-                                                ? 'Charging Complete'
-                                                : 'Charging...'
+                                    : isFailed
+                                        ? 'Şarj Başarısız'
+                                        : isCompleted
+                                            ? 'Şarj Tamamlandı'
+                                            : isParkingPhase
+                                                ? 'Ücretli Park'
+                                                : isFinishingPhase
+                                                    ? 'Şarj Bitti'
+                                                    : isStopping
+                                                        ? 'Şarj Durduruluyor'
+                                                        : isComplete
+                                                            ? 'Charging Complete'
+                                                            : 'Charging...'
                             }
                         </Text>
                         <View style={[styles.modeBadge, { backgroundColor: isDismissing ? 'rgba(255,255,255,0.2)' : isFinished ? '#2CDD9D' : modeColors[state.mode] || '#656565' }]}>
@@ -190,6 +295,116 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                                     </Text>
                                 </View>
                             )}
+                        </View>
+                    </View>
+                ) : isFinishingPhase ? (
+                    /* ── FINISHING: Free-park grace countdown ── */
+                    <View style={styles.mainContent}>
+                        <View style={styles.finishedContainer}>
+                            <View style={[styles.finishedCheckCircle, { backgroundColor: '#FFB800', shadowColor: '#FFB800' }]}>
+                                <Ionicons name="hourglass-outline" size={60} color="#fff" />
+                            </View>
+                            <Text style={[styles.percentageText, { color: colors.text, fontSize: 40, marginTop: 24, textAlign: 'center', letterSpacing: -1, ...(Platform.OS === 'ios' ? { fontVariant: ['tabular-nums'] as any } : {}) }]}>
+                                {graceFreeForever
+                                    ? 'Ücretsiz Park'
+                                    : graceRemainingSec != null
+                                        ? formatHMS(graceRemainingSec)
+                                        : '--:--'}
+                            </Text>
+                            {!graceFreeForever && (
+                                <Text style={[styles.powerText, { color: '#FFB800', marginTop: 4, fontWeight: '700', letterSpacing: 0.4 }]}>
+                                    KALAN PARK SÜRESİ
+                                </Text>
+                            )}
+
+                            {/* Smooth countdown progress bar (60fps Reanimated) */}
+                            {!graceFreeForever && (
+                                <View style={[styles.phaseProgressTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' }]}>
+                                    <Animated.View style={[styles.phaseProgressFill, { backgroundColor: '#FFB800' }, finishingProgressStyle]} />
+                                </View>
+                            )}
+
+                            <Text style={[styles.powerText, { color: colors.textSecondary, marginTop: 14, textAlign: 'center', paddingHorizontal: 30 }]}>
+                                {graceFreeForever
+                                    ? 'Bu istasyonda park ücreti yok. Hazır olduğunuzda kabloyu çıkarın.'
+                                    : graceRemainingSec === 0
+                                        ? 'Ücretsiz park süresi dolmuştur. Ücretli park moduna geçilmiştir.'
+                                        : 'Ücretsiz park süresi içinde kabloyu çıkarırsanız ücretli park moduna geçilmez.'}
+                            </Text>
+                            {state.parkingTariff && (
+                                <View style={[styles.locationBadge, { backgroundColor: isDark ? '#1C1C1E' : '#F2F2F7' }]}>
+                                    <Ionicons name="information-circle" size={16} color="#E94B2C" />
+                                    <Text style={[styles.locationText, { color: colors.text }]} numberOfLines={2}>
+                                        Süre sonrası: {state.parkingTariff.price.toFixed(2)} ₺/dk
+                                        {state.parkingTariff.max_price != null
+                                            ? ` (maks. ${state.parkingTariff.max_price.toFixed(2)} ₺)`
+                                            : ''}
+                                    </Text>
+                                </View>
+                            )}
+                        </View>
+                    </View>
+                ) : isParkingPhase ? (
+                    /* ── PARKING: Paid parking count-up + fee ── */
+                    <View style={styles.mainContent}>
+                        <View style={styles.finishedContainer}>
+                            <View style={[styles.finishedCheckCircle, { backgroundColor: '#E94B2C', shadowColor: '#E94B2C' }]}>
+                                <Ionicons name="car-sport" size={60} color="#fff" />
+                            </View>
+
+                            <Text style={[styles.percentageText, { color: colors.text, fontSize: 40, marginTop: 24, textAlign: 'center', letterSpacing: -1, ...(Platform.OS === 'ios' ? { fontVariant: ['tabular-nums'] as any } : {}) }]}>
+                                {formatHMS(parkingElapsedSec)}
+                            </Text>
+                            <Text style={[styles.powerText, { color: '#E94B2C', marginTop: 4, fontWeight: '700', letterSpacing: 0.4 }]}>
+                                ÜCRETLİ PARK
+                            </Text>
+
+                            {/* Fee accrual progress (only with cap) */}
+                            {state.parkingSession?.max_price != null && state.parkingSession.max_price > 0 && (
+                                <View style={[styles.phaseProgressTrack, { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)' }]}>
+                                    <Animated.View style={[styles.phaseProgressFill, { backgroundColor: '#E94B2C' }, parkingProgressStyle]} />
+                                </View>
+                            )}
+
+                            {/* Big fee value */}
+                            <View style={styles.parkingFeeRow}>
+                                <Text style={[styles.parkingFeeValue, { color: '#E94B2C', ...(Platform.OS === 'ios' ? { fontVariant: ['tabular-nums'] as any } : {}) }]}>
+                                    {parkingFee.toFixed(2)} ₺
+                                </Text>
+                                {state.parkingSession?.max_price != null && (
+                                    <Text style={[styles.parkingFeeCap, { color: colors.textSecondary }]}>
+                                        / {state.parkingSession.max_price.toFixed(2)} ₺ maks.
+                                    </Text>
+                                )}
+                            </View>
+
+                            <Text style={[styles.powerText, { color: colors.textSecondary, marginTop: 10, textAlign: 'center', paddingHorizontal: 30 }]}>
+                                Ücretli park moduna geçildi. Aracınızı en kısa sürede çıkarınız.
+                            </Text>
+
+                            {state.parkingSession?.price != null && (
+                                <View style={[styles.locationBadge, { backgroundColor: isDark ? '#1C1C1E' : '#F2F2F7' }]}>
+                                    <Ionicons name="cash" size={16} color="#E94B2C" />
+                                    <Text style={[styles.locationText, { color: colors.text }]} numberOfLines={1}>
+                                        {state.parkingSession.price.toFixed(2)} ₺/dk
+                                    </Text>
+                                </View>
+                            )}
+                        </View>
+                    </View>
+                ) : isFailed ? (
+                    /* ── FAILED: terminal error ── */
+                    <View style={styles.mainContent}>
+                        <View style={styles.finishedContainer}>
+                            <View style={[styles.finishedCheckCircle, { backgroundColor: '#FF3B30', shadowColor: '#FF3B30' }]}>
+                                <Ionicons name="close" size={60} color="#fff" />
+                            </View>
+                            <Text style={[styles.percentageText, { color: '#FF3B30', fontSize: 28, marginTop: 24, textAlign: 'center' }]}>
+                                Şarj Başarısız
+                            </Text>
+                            <Text style={[styles.powerText, { color: colors.textSecondary, marginTop: 8, textAlign: 'center', paddingHorizontal: 30 }]}>
+                                {state.endReason || 'Şarj başlatılamadı veya bir hata oluştu.'}
+                            </Text>
                         </View>
                     </View>
                 ) : isFinished || isDismissing ? (
@@ -292,7 +507,7 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                                         {Math.floor(state.batteryLevel ?? 0)}%
                                     </Text>
                                     <Text style={[styles.powerText, { color: colors.textSecondary }]}>
-                                        {state.power} kW
+                                        {(state.power ?? 0).toFixed(1)} kW
                                     </Text>
                                 </View>
                             </View>
@@ -305,7 +520,7 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                                     resizeMode="contain"
                                 />
                                 <Text style={[styles.percentageText, { color: colors.text, fontSize: 32 }]}>
-                                    {state.power} kW
+                                    {(state.power ?? 0).toFixed(1)} kW
                                 </Text>
                                 <Text style={[styles.powerText, { color: colors.textSecondary, marginTop: 8 }]}>
                                     Charging Power
@@ -406,7 +621,8 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                             <Ionicons name="chevron-down" size={24} color={colors.text} />
                         </Pressable>
 
-                        {!isFinished && !isStarting && !isStopping && (
+                        {/* CHARGING: active "Şarjı Durdur" */}
+                        {!isCompleted && !isFailed && !isStarting && !isStopping && !isFinishingPhase && !isParkingPhase && (
                             <Pressable
                                 onPress={onStop}
                                 style={({ pressed }) => [
@@ -418,7 +634,17 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                             </Pressable>
                         )}
 
-                        {isFinished && (
+                        {/* FINISHING / PARKING: stop disabled, user must physically unplug */}
+                        {(isFinishingPhase || isParkingPhase) && (
+                            <View style={[styles.stopBtn, { backgroundColor: isDark ? '#2a2a2a' : '#E5E5EA' }]}>
+                                <Text style={[styles.stopBtnText, { color: isDark ? '#999' : '#666' }]}>
+                                    Kabloyu Çıkarın
+                                </Text>
+                            </View>
+                        )}
+
+                        {/* COMPLETED: friendly hint */}
+                        {isCompleted && (
                             <View style={styles.finishedFooterBadge}>
                                 <Ionicons name="information-circle" size={18} color="#2CDD9D" />
                                 <Text style={[styles.finishedFooterText, { color: colors.textSecondary }]}>
@@ -693,6 +919,36 @@ const styles = StyleSheet.create({
     },
     finishedFooterText: {
         fontSize: 13,
+        fontWeight: '600',
+    },
+
+    // ── FINISHING / PARKING phase widgets ──
+    // Fixed width derived from the central circle so the bar is always
+    // clearly visible regardless of the (content-hugging) parent container.
+    phaseProgressTrack: {
+        marginTop: 24,
+        width: CIRCLE_SIZE,
+        height: 14,
+        borderRadius: 8,
+        overflow: 'hidden',
+    },
+    phaseProgressFill: {
+        height: '100%',
+        borderRadius: 8,
+    },
+    parkingFeeRow: {
+        flexDirection: 'row',
+        alignItems: 'baseline',
+        gap: 8,
+        marginTop: 14,
+    },
+    parkingFeeValue: {
+        fontSize: 30,
+        fontWeight: '900',
+        letterSpacing: -0.5,
+    },
+    parkingFeeCap: {
+        fontSize: 14,
         fontWeight: '600',
     },
 });

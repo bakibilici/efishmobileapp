@@ -7,8 +7,7 @@
 6 silly config load:file:/Users/abdulbakibilici/.npm-global/etc/npmrc
 7 verbose title npm start
 8 verbose argv "start"
-9 verbose logfile logs-max:10 dir:/Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-05-06T08_16_10_249Z-
-10 verbose logfile /Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-05-06T08_16_10_249Z-debug-0.log
+9 verbose logfile logs-max:10 dir:/Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-05-14T15_25_31_924Z-
+10 verbose logfile /Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-05-14T15_25_31_924Z-debug-0.log
 11 silly logfile start cleaning logs, removing 1 files
 12 silly logfile done cleaning log files
-13 http fetch GET 200 https://registry.npmjs.org/npm 542ms

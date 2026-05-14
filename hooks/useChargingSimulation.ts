@@ -2,7 +2,37 @@ import { useEffect, useRef, useState } from 'react';
 
 export type ChargingMode = 'AC' | 'DC' | 'HPC';
 
-export type ChargeSessionStatus = 'INITIATING' | 'INITIATED' | 'PREPARING' | 'CHARGING' | 'STOPPING' | 'FINISHED' | 'DISMISSING';
+// Backend-aligned status enum. FINISHED is kept as a synonym of COMPLETED for
+// backward compatibility with older consumers; new code should use COMPLETED.
+export type ChargeSessionStatus =
+    | 'INITIATING'
+    | 'INITIATED'
+    | 'PREPARING'
+    | 'CHARGING'
+    | 'STOPPING'
+    | 'FINISHING'   // StopTransaction received, free-park grace period active
+    | 'PARKING'     // grace period expired, paid parking accruing
+    | 'COMPLETED'   // cable unplugged, invoices created
+    | 'FAILED'      // start/remote-stop error path
+    | 'FINISHED'    // legacy alias of COMPLETED
+    | 'DISMISSING';
+
+export type ParkingTariff = {
+    price: number;       // TL per minute
+    max_price?: number;  // TL cap
+};
+
+export type ParkingSessionInfo = {
+    uuid: string;
+    started_at: string;     // ISO timestamp when grace expired
+    price: number;          // TL per minute
+    max_price?: number;     // TL cap
+    ended_at?: string;
+    total_price?: number;   // final fee (in session_ended)
+    end_reason?: string;    // USER_STOPPED | MAX_REACHED
+};
+
+export type InvoiceRef = { type: 'CHARGING' | 'PARKING'; id: number };
 
 export type ChargeSessionPayload = {
     charge_session_uuid?: string;
@@ -14,6 +44,8 @@ export type ChargeSessionPayload = {
     status?: string;
     started_at?: string;
     ended_at?: string | null;
+    stop_reason?: string;
+    is_active?: boolean;
     start_type?: string;
     socket_type?: string;
     start_soc?: number | null;
@@ -64,6 +96,20 @@ export type ChargingState = {
     estTime80: number | null; // minutes remaining to 80%
     estTime100: number | null; // minutes remaining to 100%
     hasError?: boolean;
+
+    // ── FINISHING phase (free-park grace) ──
+    endedAt: string | null;                     // ISO; when StopTransaction landed
+    endMeter: number | null;                    // final meter (kWh)
+    freeParkDurationMinutes: number | null;     // grace window length
+    parkingTariff: ParkingTariff | null;        // null => free park indefinitely
+
+    // ── PARKING phase (paid parking) ──
+    parkingSession: ParkingSessionInfo | null;
+
+    // ── COMPLETED / FAILED ──
+    invoicesCreated: InvoiceRef[];
+    endReason: string | null;
+    isFailed: boolean;
 };
 
 export const useChargingSimulation = () => {
@@ -87,6 +133,14 @@ export const useChargingSimulation = () => {
         hasError: false,
         isFinishing: false,
         isDismissing: false,
+        endedAt: null,
+        endMeter: null,
+        freeParkDurationMinutes: null,
+        parkingTariff: null,
+        parkingSession: null,
+        invoicesCreated: [],
+        endReason: null,
+        isFailed: false,
     });
 
     const timerRef = useRef<any>(null);
@@ -343,6 +397,162 @@ export const useChargingSimulation = () => {
         });
     };
 
+    /**
+     * Compute the charging duration in seconds. Prefers an explicit backend
+     * `duration`, else derives from started_at → ended_at, else 0.
+     */
+    const computeChargingDurationSec = (
+        explicit?: number | null,
+        startedAt?: string | null,
+        endedAt?: string | null,
+        prev?: number,
+    ): number => {
+        if (explicit != null && Number.isFinite(explicit)) return Math.floor(Number(explicit));
+        if (startedAt && endedAt) {
+            const s = new Date(startedAt).getTime();
+            const e = new Date(endedAt).getTime();
+            if (Number.isFinite(s) && Number.isFinite(e) && e > s) return Math.floor((e - s) / 1000);
+        }
+        return prev ?? 0;
+    };
+
+    /**
+     * Apply a FINISHING-phase payload (StopTransaction received, free-park grace started).
+     * Source: session_status_update with status=FINISHING OR charge_session_detail snapshot
+     * with status=FINISHING.
+     *
+     * Hydrates the bottom card (Enerji / Ücret / Süre) from the snapshot so a
+     * reconnect during FINISHING/PARKING shows real values instead of zeros.
+     */
+    const applyFinishingPhase = (payload: {
+        status?: string;
+        ended_at?: string | null;
+        end_meter?: number | null;
+        total_energy?: number | null;
+        free_park_duration_minutes?: number | null;
+        parking_tariff?: ParkingTariff | null;
+        // charging-side hydration (so the bottom card is correct on reconnect)
+        started_at?: string | null;
+        duration?: number | null;
+        total_price?: number | null;
+        chargeSessionData?: ChargeSessionPayload;
+    }) => {
+        isLiveFromBackendRef.current = true;
+        if (timerRef.current) clearInterval(timerRef.current);
+        stoppingAtRef.current = null;
+        setState(prev => {
+            const newDuration = computeChargingDurationSec(
+                payload.duration,
+                payload.started_at ?? prev.startedAt,
+                payload.ended_at ?? prev.endedAt,
+                prev.duration,
+            );
+            return {
+                ...prev,
+                isActive: true,
+                isStarting: false,
+                isFinishing: false,
+                isDismissing: false,
+                sessionStatus: 'FINISHING',
+                endedAt: payload.ended_at ?? prev.endedAt,
+                endMeter: payload.end_meter != null ? Number(payload.end_meter) : prev.endMeter,
+                chargedAmount: payload.total_energy != null ? Number(payload.total_energy) : prev.chargedAmount,
+                cost: payload.total_price != null ? Number(payload.total_price) : prev.cost,
+                duration: newDuration,
+                startedAt: payload.started_at ?? prev.startedAt,
+                freeParkDurationMinutes: payload.free_park_duration_minutes ?? prev.freeParkDurationMinutes,
+                parkingTariff: payload.parking_tariff ?? prev.parkingTariff,
+                chargeSessionData: payload.chargeSessionData ?? prev.chargeSessionData,
+                power: 0,
+                hasError: false,
+            };
+        });
+    };
+
+    /**
+     * Apply a PARKING-phase payload (grace expired, paid parking accruing).
+     * Hydrates the bottom card from the snapshot in the same way as FINISHING.
+     */
+    const applyParkingPhase = (payload: {
+        status?: string;
+        ended_at?: string | null;
+        parking_session?: ParkingSessionInfo | null;
+        // charging-side hydration
+        total_energy?: number | null;
+        started_at?: string | null;
+        duration?: number | null;
+        total_price?: number | null;
+        chargeSessionData?: ChargeSessionPayload;
+    }) => {
+        isLiveFromBackendRef.current = true;
+        if (timerRef.current) clearInterval(timerRef.current);
+        setState(prev => {
+            const newDuration = computeChargingDurationSec(
+                payload.duration,
+                payload.started_at ?? prev.startedAt,
+                payload.ended_at ?? prev.endedAt,
+                prev.duration,
+            );
+            return {
+                ...prev,
+                isActive: true,
+                isStarting: false,
+                isFinishing: false,
+                isDismissing: false,
+                sessionStatus: 'PARKING',
+                endedAt: payload.ended_at ?? prev.endedAt,
+                parkingSession: payload.parking_session ?? prev.parkingSession,
+                chargedAmount: payload.total_energy != null ? Number(payload.total_energy) : prev.chargedAmount,
+                cost: payload.total_price != null ? Number(payload.total_price) : prev.cost,
+                duration: newDuration,
+                startedAt: payload.started_at ?? prev.startedAt,
+                chargeSessionData: payload.chargeSessionData ?? prev.chargeSessionData,
+                power: 0,
+                hasError: false,
+            };
+        });
+    };
+
+    /**
+     * Apply a terminal session_ended payload (COMPLETED or FAILED).
+     * After this fires the server closes the WS with 4410 — caller must not reconnect.
+     */
+    const applySessionEnded = (payload: {
+        status?: string;
+        ended_at?: string | null;
+        total_energy?: number | null;
+        parking_session?: ParkingSessionInfo | null;
+        invoices_created?: InvoiceRef[];
+        end_reason?: string;
+        chargeSessionData?: ChargeSessionPayload;
+    }) => {
+        const upper = payload.status?.toUpperCase();
+        const isFailed = upper === 'FAILED';
+        if (timerRef.current) clearInterval(timerRef.current);
+        stoppingAtRef.current = null;
+        isLiveFromBackendRef.current = true;
+        setState(prev => ({
+            ...prev,
+            isActive: true,
+            isStarting: false,
+            isFinishing: false,
+            isDismissing: false,
+            sessionStatus: isFailed ? 'FAILED' : 'COMPLETED',
+            chargeSessionData: payload.chargeSessionData ?? prev.chargeSessionData,
+            chargedAmount: payload.total_energy != null ? Number(payload.total_energy) : prev.chargedAmount,
+            parkingSession: payload.parking_session ?? prev.parkingSession,
+            invoicesCreated: payload.invoices_created ?? prev.invoicesCreated,
+            endReason: payload.end_reason ?? prev.endReason,
+            endedAt: payload.ended_at ?? prev.endedAt,
+            cost: payload.parking_session?.total_price != null
+                ? Number(payload.parking_session.total_price) + prev.cost
+                : prev.cost,
+            power: 0,
+            isFailed,
+            hasError: isFailed,
+        }));
+    };
+
     /** Called when socket_status_update → Available is received. Closes all charging UI. */
     const handleSessionComplete = (withAnimation = false) => {
         console.log("[CHARGING_HOOK] handleSessionComplete → Socket Available, closing UI");
@@ -351,6 +561,34 @@ export const useChargingSimulation = () => {
             clearInterval(timerRef.current);
         }
 
+        const reset = (prev: ChargingState): ChargingState => ({
+            ...prev,
+            isActive: false,
+            isMinimized: false,
+            sessionStatus: null,
+            chargeSessionData: null,
+            power: 0,
+            batteryLevel: null,
+            chargedAmount: 0,
+            duration: 0,
+            cost: 0,
+            isStarting: false,
+            isFinishing: false,
+            isDismissing: false,
+            startTime: null,
+            startedAt: null,
+            startSoc: null,
+            hasError: false,
+            endedAt: null,
+            endMeter: null,
+            freeParkDurationMinutes: null,
+            parkingTariff: null,
+            parkingSession: null,
+            invoicesCreated: [],
+            endReason: null,
+            isFailed: false,
+        });
+
         if (withAnimation) {
             setState(prev => ({
                 ...prev,
@@ -358,47 +596,11 @@ export const useChargingSimulation = () => {
                 sessionStatus: 'DISMISSING',
             }));
             setTimeout(() => {
-                setState(prev => ({
-                    ...prev,
-                    isActive: false,
-                    isMinimized: false,
-                    sessionStatus: null,
-                    chargeSessionData: null,
-                    power: 0,
-                    batteryLevel: null,
-                    chargedAmount: 0,
-                    duration: 0,
-                    cost: 0,
-                    isStarting: false,
-                    isFinishing: false,
-                    isDismissing: false,
-                    startTime: null,
-                    startedAt: null,
-                    startSoc: null,
-                    hasError: false,
-                }));
+                setState(reset);
                 stoppingAtRef.current = null;
             }, 3500); // Wait 3.5s for the green animation to finish
         } else {
-            setState(prev => ({
-                ...prev,
-                isActive: false,
-                isMinimized: false,
-                sessionStatus: null,
-                chargeSessionData: null,
-                power: 0,
-                batteryLevel: null,
-                chargedAmount: 0,
-                duration: 0,
-                cost: 0,
-                isStarting: false,
-                isFinishing: false,
-                isDismissing: false,
-                startTime: null,
-                startedAt: null,
-                startSoc: null,
-                hasError: false,
-            }));
+            setState(reset);
             stoppingAtRef.current = null;
         }
     };
@@ -429,6 +631,14 @@ export const useChargingSimulation = () => {
             isFinishing: false,
             isDismissing: false,
             hasError: false,
+            endedAt: null,
+            endMeter: null,
+            freeParkDurationMinutes: null,
+            parkingTariff: null,
+            parkingSession: null,
+            invoicesCreated: [],
+            endReason: null,
+            isFailed: false,
         });
     };
 
@@ -475,6 +685,21 @@ export const useChargingSimulation = () => {
                     let newEst80 = prev.estTime80;
                     let newEst100 = prev.estTime100;
                     let newDuration = prev.duration;
+
+                    // Charging duration is FROZEN once charging is done.
+                    // FINISHING / PARKING / COMPLETED / FAILED already carry the
+                    // final duration from the backend snapshot — keep it as-is.
+                    const isPostCharging =
+                        prev.sessionStatus === 'FINISHING' ||
+                        prev.sessionStatus === 'PARKING' ||
+                        prev.sessionStatus === 'COMPLETED' ||
+                        prev.sessionStatus === 'FAILED' ||
+                        prev.sessionStatus === 'FINISHED';
+
+                    if (isPostCharging) {
+                        // Keep duration frozen, return early — nothing else to tick here.
+                        return prev;
+                    }
 
                     // Calculate real duration
                     if (prev.startedAt) {
@@ -543,5 +768,8 @@ export const useChargingSimulation = () => {
         updateFromMeterValues,
         clearError,
         handleSessionComplete,
+        applyFinishingPhase,
+        applyParkingPhase,
+        applySessionEnded,
     };
 };

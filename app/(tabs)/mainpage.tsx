@@ -6,7 +6,7 @@ import SocketErrorModal from "@/components/SocketErrorModal";
 import SocketFaultedModal from '@/components/SocketFaultedModal';
 import { useUser } from "@/context/UserContext";
 import { useChargingSimulation } from "@/hooks/useChargingSimulation";
-import { getRegisteredVehicles, getStationDetails, startChargingSession, stopChargingSession } from "@/services/api";
+import { getMapStations, getRegisteredVehicles, getStationDetails, startChargingSession, stopChargingSession } from "@/services/api";
 import { getAccessToken } from "@/services/tokenStorage";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -290,11 +290,20 @@ export default function MapScreen() {
   const [isLoadingVehicles, setIsLoadingVehicles] = useState(false);
   const isSwitchingMode = useRef(false);
 
-  // Meter values WebSocket
-  const meterWsRef = useRef<WebSocket | null>(null);
-  const meterBaseWhRef = useRef<number | null>(null);
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reconnectAttempts = useRef(0);
+  // Charge Area Detail WebSocket (opened when user taps a pin)
+  const chargeAreaWsRef = useRef<WebSocket | null>(null);
+
+  // Charge Session WebSocket (opened when charging starts)
+  const chargeSessionWsRef = useRef<WebSocket | null>(null);
+  const chargeSessionReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chargeSessionReconnectAttempts = useRef(0);
+
+  // start_meter from session snapshot — needed for on-device energy calculation
+  const startMeterRef = useRef<number>(0);
+
+  // last raw meter sample (Wh) — needed to retroactively recompute total_energy
+  // when session_status_update arrives with a real start_meter (PREPARING -> CHARGING)
+  const lastMeterEnergyWhRef = useRef<number | null>(null);
 
   // Start'tan dönen session uuid; Stop'ta kullanılır
   const activeChargeSessionUuidRef = useRef<string | null>(null);
@@ -353,65 +362,96 @@ export default function MapScreen() {
   };
 
 
-  const sendBoundingBoxUpdate = useCallback((region: Region) => {
-    if (meterWsRef.current?.readyState === WebSocket.OPEN) {
-      const minLon = region.longitude - region.longitudeDelta / 2;
-      const maxLon = region.longitude + region.longitudeDelta / 2;
-      const minLat = region.latitude - region.latitudeDelta / 2;
-      const maxLat = region.latitude + region.latitudeDelta / 2;
+  // ─── Helper: build WS URL from env ───
+  const buildWsUrl = useCallback((path: string) => {
+    const apiUrl = __DEV__
+      ? process.env.EXPO_PUBLIC_API_URL_DEV
+      : process.env.EXPO_PUBLIC_API_URL_PROD;
+    const scheme = (apiUrl || "").startsWith("https") ? "wss" : "ws";
+    const host =
+      typeof apiUrl === "string" ? new URL(apiUrl).host : "efish-backend.uptecra.com";
+    return `${scheme}://${host}${path}`;
+  }, []);
 
-      const payload = {
-        type: "update_bounding_box",
-        min_lat: minLat,
-        max_lat: maxLat,
-        min_lng: minLon,
-        max_lng: maxLon
-      };
-      // console.log("🔌 WS SEND BBOX:", JSON.stringify(payload));
-      meterWsRef.current.send(JSON.stringify(payload));
+  // ─── 1. REST: Fetch Map Stations (pins + clusters) ───
+  const fetchMapStationsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const fetchMapStations = useCallback(async (region: Region, zoom: number = 12) => {
+    const min_lat = region.latitude - region.latitudeDelta / 2;
+    const max_lat = region.latitude + region.latitudeDelta / 2;
+    const min_lng = region.longitude - region.longitudeDelta / 2;
+    const max_lng = region.longitude + region.longitudeDelta / 2;
+
+    try {
+      const data = await getMapStations({ min_lat, max_lat, min_lng, max_lng, zoom });
+
+      if (data?.pins && Array.isArray(data.pins)) {
+        const stations = data.pins.map((s: any) => {
+          const lat = Number(s.lat);
+          const lng = Number(s.lng);
+
+          let availableCount = 0;
+          let totalCount = 0;
+          if (s.socket_stats) {
+            Object.values(s.socket_stats).forEach((stat: any) => {
+              availableCount += (stat.available || 0);
+              totalCount += (stat.total || 0);
+            });
+          }
+
+          // Determine primary type from socket_stats keys or types array
+          const primaryType = s.types?.[0] || (s.socket_stats ? Object.keys(s.socket_stats)[0] : null) || 'AC';
+
+          return {
+            id: s.uuid,
+            uuid: s.uuid,
+            name: s.name || '',
+            latitude: lat,
+            longitude: lng,
+            type: primaryType,
+            powerKw: 0,
+            status: (s.status || "").toLowerCase(),
+            isEfish: true,
+            is_public: s.is_public,
+            is_24h: s.is_24h,
+            address: '',
+            socket_stats: s.socket_stats,
+            connectors: []
+          };
+        });
+        setStationsList(stations);
+      }
+    } catch (e) {
+      console.error("Failed to fetch map stations:", e);
     }
   }, []);
 
-  // Debounced version of sendBoundingBoxUpdate
-  // Debounced version of sendBoundingBoxUpdate
-  const sendBoundingBoxUpdateDebounced = useMemo(() => {
-    let timeoutId: ReturnType<typeof setTimeout>;
-    return (region: Region) => {
-      clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => {
-        sendBoundingBoxUpdate(region);
-      }, 500); // 500ms debounce
-    };
-  }, [sendBoundingBoxUpdate]);
+  const fetchMapStationsDebounced = useCallback((region: Region, zoom?: number) => {
+    if (fetchMapStationsDebounceRef.current) {
+      clearTimeout(fetchMapStationsDebounceRef.current);
+    }
+    fetchMapStationsDebounceRef.current = setTimeout(() => {
+      fetchMapStations(region, zoom);
+    }, 300);
+  }, [fetchMapStations]);
 
+  // ─── 2. Charge Area Detail WebSocket ───
+  const connectChargeAreaWs = useCallback(async (chargeAreaUuid: string) => {
+    // Close previous charge area WS if open
+    if (chargeAreaWsRef.current) {
+      chargeAreaWsRef.current.close();
+      chargeAreaWsRef.current = null;
+    }
 
-  const connectMeterValuesSocket = useCallback(async (isReconnect = false) => {
     try {
       const token = await getAccessToken();
       if (!token) {
-        console.warn("No access token found for meter values websocket.");
+        console.warn("No access token for charge area WS.");
         return;
       }
 
-      // Close any existing socket before opening a new one
-      if (meterWsRef.current) {
-        meterWsRef.current.close();
-        meterWsRef.current = null;
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-
-      const apiUrl = __DEV__
-        ? process.env.EXPO_PUBLIC_API_URL_DEV
-        : process.env.EXPO_PUBLIC_API_URL_PROD;
-      const scheme = (apiUrl || "").startsWith("https") ? "wss" : "ws";
-      const host =
-        typeof apiUrl === "string" ? new URL(apiUrl).host : "efish-backend.uptecra.com";
-
-      // Method 1: No token in Query Param, use Header
-      const wsUrl = `${scheme}://${host}/ws/meter-values/`;
+      const wsUrl = buildWsUrl(`/ws/charge-areas/${chargeAreaUuid}/`);
+      const host = new URL(wsUrl).host;
 
       // @ts-ignore - React Native WebSocket accepts options as 3rd arg
       const ws = new WebSocket(wsUrl, [], {
@@ -422,81 +462,21 @@ export default function MapScreen() {
       });
 
       ws.onopen = () => {
-        console.log("Meter values WebSocket connected:", wsUrl);
-        meterBaseWhRef.current = null;
-        reconnectAttempts.current = 0; // Reset attempts on successful connection
+        console.log("Charge area WS connected:", chargeAreaUuid);
       };
 
       ws.onmessage = (event) => {
-        // console.log("🔌 WS RECV:", event.data);
         try {
-          const data = JSON.parse(event.data);
+          const msg = JSON.parse(event.data);
 
-          if (data.type === "connection_established") {
-            console.log("WS Connection Established:", data.message);
-            // Send initial bbox if available
-            if (currentRegion.current) {
-              sendBoundingBoxUpdate(currentRegion.current);
-            }
-            return;
-          }
-
-          if (data.type === "charge_areas_update") {
-            console.log("🔌 WS CHARGE AREAS UPDATE:", JSON.stringify(data.charge_areas, null, 2));
-            if (Array.isArray(data.charge_areas)) {
-              const stations = data.charge_areas.map((s: any) => {
-                const lat = Number(s.lat);
-                const lng = Number(s.lng);
-
-                // Calculate total available sockets from socket_stats
-                // Example stats: {"AC": {"available": 0, "total": 1}, "HPC": {"available": 1, "total": 1}}
-                let availableCount = 0;
-                let totalCount = 0;
-                if (s.socket_stats) {
-                  Object.values(s.socket_stats).forEach((stat: any) => {
-                    availableCount += (stat.available || 0);
-                    totalCount += (stat.total || 0);
-                  });
-                }
-
-                // If no specific connectors list is sent, we can mock it or leave it empty
-                // The map mostly needs location, status, type, and available count.
-                // Detail view fetches full details separately.
-
-                return {
-                  id: s.id,
-                  uuid: s.uuid,
-                  name: s.name,
-                  latitude: lat,
-                  longitude: lng,
-                  type: s.type, // "AC", "HPC", etc.
-                  powerKw: s.max_power,
-                  status: (s.status || "").toLowerCase(),
-                  isEfish: true, // Assuming these are all efish for now
-                  is_public: s.is_public,
-                  is_24h: s.is_24h,
-                  address: '',
-                  socket_stats: s.socket_stats,
-                  // We don't have full connector list in this update, but that's okay for the map pin
-                  connectors: []
-                };
-              });
-
-              setStationsList(stations);
-            }
-            return;
-          }
-
-          if (data.type === "charge_area_detail") {
-            console.log("🔌 WS CHARGE AREA DETAIL:", JSON.stringify(data.data, null, 2));
-            const detailData = data.data;
+          if (msg.type === "charge_area_detail") {
+            const detailData = msg.data;
             if (detailData) {
-              // Convert to our app's internal format if needed, mainly lat/lng are string in JSON
               const formattedDetail = {
                 ...detailData,
                 latitude: parseFloat(detailData.lat),
                 longitude: parseFloat(detailData.lng),
-                connectors: detailData.charge_points // Map your charge_points to connectors or keep as is? App seems to use 'connectors' in some places, but DetailView might use raw data.
+                connectors: detailData.charge_points,
               };
               setStationDetails(formattedDetail);
               setIsFetchingDetails(false);
@@ -504,211 +484,363 @@ export default function MapScreen() {
             return;
           }
 
-          if (data.type === "socket_status") {
-            const statusData = data.data;
-            console.log("🔌 WS SOCKET STATUS UPDATE:", JSON.stringify(statusData, null, 2));
+          if (msg.type === "socket_status_update") {
+            const statusData = msg.data;
             if (statusData) {
-              // 1. Update StationDetails (if open)
+              // Update station details bottom sheet
               setStationDetails((currentDetails: any) => {
                 if (!currentDetails || !currentDetails.charge_points) return currentDetails;
 
                 let hasChange = false;
                 const updatedPoints = currentDetails.charge_points.map((cp: any) => {
+                  if (cp.cpid !== statusData.cpid) return cp;
                   if (!cp.sockets) return cp;
                   const updatedSockets = cp.sockets.map((s: any) => {
-                    if (s.uuid === statusData.uuid) {
+                    if (s.no === statusData.connector_id || s.uuid === statusData.socket_uuid) {
                       hasChange = true;
                       return {
                         ...s,
-                        status: statusData.status,
+                        status: statusData.status?.toUpperCase(),
                         status_display: statusData.status,
+                        active_charge_session_uuid: statusData.active_charge_session_uuid,
                       };
                     }
                     return s;
                   });
-                  if (updatedSockets !== cp.sockets) {
-                    // Check if any socket changed actually? 
-                    // logic above creates new array if map runs, but elements only change if uuid matches.
-                    // Actually cp.sockets.map returns new array always.
-                    // We need to be careful about reference equality if we want to rely on 'hasChange' solely?
-                    // But I set hasChange = true inside.
-                    return { ...cp, sockets: updatedSockets };
-                  }
-                  return cp;
+                  return { ...cp, sockets: updatedSockets };
                 });
 
                 return hasChange ? { ...currentDetails, charge_points: updatedPoints } : currentDetails;
               });
 
-              // 2. Update Map Markers
-              if (currentRegion.current) {
-                sendBoundingBoxUpdateDebounced(currentRegion.current);
-              }
-
-              // Multi-device sync: If a socket goes into Preparing/Charging and we don't have an active session,
-              // maybe THIS user started it on another device! Reconnect WS to fetch the active session instantly.
-              const upperStatus = statusData.status?.toUpperCase();
-              if ((upperStatus === "CHARGING" || upperStatus === "PREPARING" || upperStatus === "INITIATED") && !chargingIsActiveRef.current) {
-                if (!reconnectTimeoutRef.current) {
-                  console.log("Possible external start detected! Reconnecting meter-values socket...");
-                  reconnectTimeoutRef.current = setTimeout(() => {
-                    reconnectTimeoutRef.current = null;
-                    connectMeterValuesSocket(true);
-                  }, 1500); // 1.5s debounce
+              // Capture session uuid from status update if available
+              if (statusData.active_charge_session_uuid && !activeChargeSessionUuidRef.current) {
+                const upperStatus = statusData.status?.toUpperCase();
+                if (upperStatus === 'CHARGING' || upperStatus === 'PREPARING') {
+                  activeChargeSessionUuidRef.current = statusData.active_charge_session_uuid;
                 }
               }
             }
-            // Fallthrough to generic logic below
+            return;
           }
-
-
-          // Handle generic meter values / socket status / charge_session for Active Charging Session
-          let payload: any = {};
-          let rawData = data;
-
-          // Normalize if wrapped in "data"
-          if (data.type === "socket_status" || data.type === "meter_values" || data.type === "charge_session") {
-            rawData = data.data || data; // if data.data is undefined, fallback to data itself
-          }
-
-          // If we receive a meter_values payload but NO active simulation, the user probably left the app open
-          // and the initial charge_session was missed. Reconnect to sync `started_at` and duration!
-          if (data.type === "meter_values" && !chargingIsActiveRef.current && (rawData.power > 0 || rawData.batteryLevel > 0)) {
-            console.log("Surprise meter_values received! Reconnecting meter-values socket to fetch true started_at.");
-            if (!reconnectTimeoutRef.current) {
-              reconnectTimeoutRef.current = setTimeout(() => {
-                reconnectTimeoutRef.current = null;
-                connectMeterValuesSocket(true);
-              }, 500);
-            }
-            return; // Skip processing this incomplete payload
-          }
-
-          if (data.type === "socket_status" || (rawData.status && rawData.power)) {
-            const upperStatus = (rawData.status || '').toUpperCase();
-
-            // If socket becomes Available, we can close the charging UI.
-            // This happens when the user unplugs the cable.
-            if (data.type === "socket_status" && upperStatus === 'AVAILABLE') {
-              console.log("Socket is AVAILABLE, closing session with animation");
-              activeChargeSessionUuidRef.current = null;
-              charging.handleSessionComplete(true);
-            }
-
-            // Check if this socket status matches our active session (we'd ideally need a socket_uuid check,
-            // but for FINISHING let's just use it safely if there is an active simulation)
-            if (activeChargeSessionUuidRef.current || charging.isActive) {
-              if (upperStatus === 'FINISHING' || upperStatus === 'SUSPENDEDEV' || upperStatus === 'SUSPENDEDEVSE' || upperStatus === 'FAULTED') {
-                charging.updateFromMeterValues({
-                  status: rawData.status
-                });
-
-                if (upperStatus === 'FAULTED') {
-                  setShowSocketFaultedModal(true);
-                }
-              }
-            }
-          }
-
-          if (data.type === "meter_values" || data.type === "charge_session") {
-            console.log("🔌 METER VALUES / CHARGE SESSION RECEIVED:", JSON.stringify(data, null, 2));
-            const d = rawData;
-            const isCharging = (d.status || "").toLowerCase() === "charging" || !d.isCompleted;
-
-            // Capture the charge session UUID if broadcasted, to allow stopping it after app restart
-            if (d.uuid || d.charge_session_uuid) {
-              activeChargeSessionUuidRef.current = d.uuid || d.charge_session_uuid;
-            }
-
-            // Spec: energy is Wh -> /1000 for kWh
-            // Spec: power is W -> /1000 for kW
-            // Spec: total_energy is kWh already.
-
-            // Prioritize "total_energy" from message if available
-            let chargedKwh = undefined;
-            if (d.total_energy != null) {
-              chargedKwh = parseFloat(String(d.total_energy));
-            } else if (d.energy != null) {
-              // If total not sent, maybe calculate from start meter?
-              // But usually total_energy is sent.
-              // Fallback: energy(Wh) / 1000
-              chargedKwh = d.energy / 1000;
-            }
-
-            const powerKw = d.power != null ? d.power / 1000 : 0;
-            const batteryLevel = d.soc ?? null;
-
-            const chargeSessionPayload = data.type === "charge_session" ? d : undefined;
-
-            payload = {
-              power_kw: powerKw,
-              charged_kwh: chargedKwh,
-              cost: d.price != null && d.total_energy != null ? (d.price * d.total_energy) : undefined,
-              batteryLevel: batteryLevel,
-              started_at: d.started_at
-            };
-
-            if (Object.keys(payload).length > 0 || d.status) {
-              charging.updateFromMeterValues({
-                batteryLevel: payload.batteryLevel,
-                power_kw: payload.power_kw,
-                charged_kwh: payload.charged_kwh,
-                cost: payload.cost,
-                started_at: payload.started_at,
-                socket_type: d.socket_type, // HPC, DC, AC
-                start_soc: d.start_soc,     // Initial battery level
-                status: d.status,           // INITIATING, CHARGING, STOPPING, FINISHED, etc.
-                chargeSessionData: chargeSessionPayload, // Provide full payload for charge sessions
-              } as any);
-            }
-          }
-
         } catch (e) {
-          console.log("Failed to parse meter values message", e);
+          console.log("Failed to parse charge area WS message", e);
         }
       };
 
       ws.onerror = (event) => {
-        console.log("Meter values WebSocket error:", event);
+        console.log("Charge area WS error:", event);
       };
 
       ws.onclose = (event) => {
-        console.log("Meter values WebSocket closed:", event.code, event.reason);
-        meterWsRef.current = null;
+        console.log("Charge area WS closed:", event.code, event.reason);
+        chargeAreaWsRef.current = null;
+        // Close codes: 4001 (auth), 4400 (bad uuid), 4404 (not found) — no reconnect
+      };
 
-        // Stop reconnecting if we get a 403 Forbidden
-        if (event.reason && event.reason.includes("403")) {
-          console.warn("WebSocket Auth Failed (403). Stopping reconnect loop.");
+      chargeAreaWsRef.current = ws;
+    } catch (error) {
+      console.error("Failed to connect charge area WS:", error);
+    }
+  }, [buildWsUrl]);
+
+  // ─── 3. Charge Session WebSocket (meter values) ───
+  const connectChargeSessionWs = useCallback(async (sessionUuid: string) => {
+    // Close previous session WS if open
+    if (chargeSessionWsRef.current) {
+      chargeSessionWsRef.current.close();
+      chargeSessionWsRef.current = null;
+    }
+    if (chargeSessionReconnectRef.current) {
+      clearTimeout(chargeSessionReconnectRef.current);
+      chargeSessionReconnectRef.current = null;
+    }
+    chargeSessionReconnectAttempts.current = 0;
+
+    // Reset per-session caches so we don't reuse a previous session's sample.
+    startMeterRef.current = 0;
+    lastMeterEnergyWhRef.current = null;
+
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        console.warn("No access token for charge session WS.");
+        return;
+      }
+
+      const wsUrl = buildWsUrl(`/ws/charge-sessions/${sessionUuid}/`);
+      const host = new URL(wsUrl).host;
+
+      // @ts-ignore - React Native WebSocket accepts options as 3rd arg
+      const ws = new WebSocket(wsUrl, [], {
+        headers: {
+          Origin: `https://${host}`,
+          Authorization: `Bearer ${token}`
+        },
+      });
+
+      ws.onopen = () => {
+        console.log("Charge session WS connected:", sessionUuid);
+        chargeSessionReconnectAttempts.current = 0;
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+
+          // 1) Session snapshot — single source of truth on (re)connect.
+          // Status can be PREPARING / CHARGING / FINISHING / PARKING.
+          if (msg.type === "charge_session_detail") {
+            const d = msg.data;
+            console.log("🔌 CHARGE SESSION DETAIL:", JSON.stringify(d, null, 2));
+
+            // Save start_meter for on-device energy calculation
+            if (d.start_meter != null) {
+              startMeterRef.current = parseFloat(String(d.start_meter));
+            }
+
+            // Capture session UUID
+            if (d.uuid) {
+              activeChargeSessionUuidRef.current = d.uuid;
+            }
+
+            const upperStatus = String(d.status || "").toUpperCase();
+
+            // Re-hydrate FINISHING phase from snapshot (e.g. app reopened during grace).
+            // Pass the full snapshot + charging-side fields so the bottom card
+            // (Enerji / Ücret / Süre) reflects the completed charge, not zeros.
+            if (upperStatus === "FINISHING") {
+              charging.applyFinishingPhase({
+                status: d.status,
+                ended_at: d.ended_at ?? null,
+                end_meter: d.end_meter ?? null,
+                total_energy: d.total_energy ?? null,
+                free_park_duration_minutes: d.free_park_duration_minutes ?? null,
+                parking_tariff: d.parking_tariff ?? null,
+                started_at: d.started_at ?? null,
+                duration: d.duration ?? null,
+                total_price: d.total_price ?? null,
+                chargeSessionData: d,
+              });
+              return;
+            }
+
+            // Re-hydrate PARKING phase from snapshot — same hydration as FINISHING.
+            if (upperStatus === "PARKING") {
+              charging.applyParkingPhase({
+                status: d.status,
+                ended_at: d.ended_at ?? null,
+                parking_session: d.parking_session ?? null,
+                total_energy: d.total_energy ?? null,
+                started_at: d.started_at ?? null,
+                duration: d.duration ?? null,
+                total_price: d.total_price ?? null,
+                chargeSessionData: d,
+              });
+              return;
+            }
+
+            const powerKw = d.power != null ? d.power / 1000 : 0;
+            const totalEnergy = d.total_energy != null ? parseFloat(String(d.total_energy)) : 0;
+
+            // Seed last meter cache so a follow-up session_status_update with
+            // start_meter can retroactively recompute total_energy.
+            if (d.last_meter_value?.energy != null) {
+              lastMeterEnergyWhRef.current = Number(d.last_meter_value.energy);
+            }
+
+            charging.updateFromMeterValues({
+              batteryLevel: d.soc ?? null,
+              power_kw: powerKw,
+              charged_kwh: totalEnergy,
+              started_at: d.started_at,
+              status: d.status,
+              chargeSessionData: d,
+            } as any);
+            return;
+          }
+
+          // 2) Live meter value updates
+          if (msg.type === "meter_value_update") {
+            const d = msg.data;
+
+            // Remember the raw sample so a later session_status_update with
+            // a real start_meter can retroactively recompute total_energy.
+            if (d.energy != null) {
+              lastMeterEnergyWhRef.current = d.energy;
+            }
+
+            // On-device derivation: total_energy = max(0, energy_Wh/1000 - start_meter)
+            const totalEnergyKwh = d.energy != null
+              ? Math.max(0, d.energy / 1000 - startMeterRef.current)
+              : undefined;
+            const powerKw = d.power != null ? d.power / 1000 : 0;
+
+            charging.updateFromMeterValues({
+              batteryLevel: d.soc ?? null,
+              power_kw: powerKw,
+              charged_kwh: totalEnergyKwh,
+            } as any);
+            return;
+          }
+
+          // 2b) Session lifecycle transitions.
+          // Backend now drives three transitions:
+          //   PREPARING -> CHARGING   (start_meter)
+          //   CHARGING  -> FINISHING  (ended_at, end_meter, total_energy, free_park_duration_minutes, parking_tariff)
+          //   FINISHING -> PARKING    (parking_session)
+          if (msg.type === "session_status_update") {
+            const d = msg.data;
+            const upper = String(d.status || "").toUpperCase();
+
+            // CHARGING — possibly with the real start_meter after StartTransaction.
+            // Retroactively recompute total_energy using the last raw meter sample
+            // so the user doesn't briefly see a bogus huge kWh value.
+            if (upper === "CHARGING" || d.start_meter != null) {
+              if (d.start_meter != null) {
+                const newStartMeter = parseFloat(String(d.start_meter));
+                startMeterRef.current = newStartMeter;
+                if (lastMeterEnergyWhRef.current != null) {
+                  const recomputed = Math.max(
+                    0,
+                    lastMeterEnergyWhRef.current / 1000 - newStartMeter,
+                  );
+                  charging.updateFromMeterValues({
+                    status: d.status,
+                    charged_kwh: recomputed,
+                  } as any);
+                  return;
+                }
+              }
+              if (d.status) {
+                charging.updateFromMeterValues({ status: d.status } as any);
+              }
+              return;
+            }
+
+            // FINISHING — StopTransaction received, free-park grace starts.
+            if (upper === "FINISHING") {
+              charging.applyFinishingPhase({
+                status: d.status,
+                ended_at: d.ended_at ?? null,
+                end_meter: d.end_meter ?? null,
+                total_energy: d.total_energy ?? null,
+                free_park_duration_minutes: d.free_park_duration_minutes ?? null,
+                parking_tariff: d.parking_tariff ?? null,
+                started_at: d.started_at ?? null,
+                duration: d.duration ?? null,
+                total_price: d.total_price ?? null,
+              });
+              return;
+            }
+
+            // PARKING — grace expired, paid parking accruing.
+            if (upper === "PARKING") {
+              charging.applyParkingPhase({
+                status: d.status,
+                ended_at: d.ended_at ?? null,
+                parking_session: d.parking_session ?? null,
+                total_energy: d.total_energy ?? null,
+                started_at: d.started_at ?? null,
+                duration: d.duration ?? null,
+                total_price: d.total_price ?? null,
+              });
+              return;
+            }
+
+            // Fallback: just propagate the raw status.
+            if (d.status) {
+              charging.updateFromMeterValues({ status: d.status } as any);
+            }
+            return;
+          }
+
+
+          // 3) Socket status update within the session
+          if (msg.type === "socket_status_update") {
+            const d = msg.data;
+            const upperStatus = d.status?.toUpperCase();
+
+            if (upperStatus === 'AVAILABLE') {
+              console.log("Socket is AVAILABLE, closing session with animation");
+              activeChargeSessionUuidRef.current = null;
+              charging.handleSessionComplete(true);
+            } else if (upperStatus === 'FINISHING' || upperStatus === 'SUSPENDEDEV' || upperStatus === 'SUSPENDEDEVSE' || upperStatus === 'FAULTED') {
+              charging.updateFromMeterValues({ status: d.status } as any);
+              if (upperStatus === 'FAULTED') {
+                setShowSocketFaultedModal(true);
+              }
+            }
+            return;
+          }
+
+          // 4) Session ended — terminal (COMPLETED or FAILED).
+          //    Backend only fires this when the cable is finally unplugged
+          //    (COMPLETED) or on a start/remote-stop error (FAILED). The
+          //    server closes the WS with 4410 immediately afterwards.
+          if (msg.type === "session_ended") {
+            const d = msg.data;
+            console.log("🔌 SESSION ENDED:", JSON.stringify(d, null, 2));
+
+            charging.applySessionEnded({
+              status: d.status,
+              ended_at: d.ended_at ?? null,
+              total_energy: d.total_energy ?? null,
+              parking_session: d.parking_session ?? null,
+              invoices_created: d.invoices_created ?? [],
+              end_reason: d.end_reason,
+              chargeSessionData: d,
+            });
+
+            activeChargeSessionUuidRef.current = null;
+            // Server will close with 4410 — expected, not an error
+            return;
+          }
+
+        } catch (e) {
+          console.log("Failed to parse charge session WS message", e);
+        }
+      };
+
+      ws.onerror = (event) => {
+        console.log("Charge session WS error:", event);
+      };
+
+      ws.onclose = (event) => {
+        console.log("Charge session WS closed:", event.code, event.reason);
+        chargeSessionWsRef.current = null;
+
+        // 4410 = session ended (expected, not an error)
+        if (event.code === 4410) {
+          console.log("Session ended (4410) — expected close.");
           return;
         }
 
-        // Uygulama açıkken sürekli dinleyebilmek için kapanınca yeniden bağlan (giriş yapmış kullanıcı için)
-        if (user && !reconnectTimeoutRef.current) {
-          reconnectAttempts.current += 1;
-          const attempt = reconnectAttempts.current;
-          // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s... max 30s
-          const delay = isReconnect ? Math.min(30000, 1000 * Math.pow(2, attempt - 1)) : 1000;
+        // 4001, 4403, 4404 — don't reconnect
+        if (event.code === 4001 || event.code === 4403 || event.code === 4404) {
+          console.warn(`Charge session WS closed with ${event.code}. Not reconnecting.`);
+          return;
+        }
 
-          console.log(`WebSocket Reconnecting in ${delay}ms (Attempt ${attempt})`);
+        // Reconnect if session is still active
+        if (charging.isActive && !chargeSessionReconnectRef.current) {
+          chargeSessionReconnectAttempts.current += 1;
+          const attempt = chargeSessionReconnectAttempts.current;
+          const delay = Math.min(30000, 1000 * Math.pow(2, attempt - 1));
 
-          reconnectTimeoutRef.current = setTimeout(() => {
-            reconnectTimeoutRef.current = null;
-            connectMeterValuesSocket(true);
+          console.log(`Charge session WS reconnecting in ${delay}ms (Attempt ${attempt})`);
+          chargeSessionReconnectRef.current = setTimeout(() => {
+            chargeSessionReconnectRef.current = null;
+            connectChargeSessionWs(sessionUuid);
           }, delay);
         }
       };
 
-      meterWsRef.current = ws;
+      chargeSessionWsRef.current = ws;
     } catch (error) {
-      console.error("Failed to connect meter values WebSocket:", error);
-      if (user && !reconnectTimeoutRef.current) {
-        reconnectTimeoutRef.current = setTimeout(() => {
-          reconnectTimeoutRef.current = null;
-          connectMeterValuesSocket(true);
-        }, 5000);
-      }
+      console.error("Failed to connect charge session WS:", error);
     }
-  }, [charging.updateFromMeterValues, user, sendBoundingBoxUpdate]);
+  }, [charging.updateFromMeterValues, charging.isActive, charging.handleSessionComplete, buildWsUrl]);
 
   const handleStopCharging = useCallback(async () => {
     const uuid = activeChargeSessionUuidRef.current;
@@ -718,11 +850,10 @@ export default function MapScreen() {
       // Show "Stopping" immediately during the request
       charging.updateFromMeterValues({ status: 'STOPPING' } as any);
 
-      await stopChargingSession(uuid);
+      await stopChargingSession(uuid, 'user_request');
 
-      // Success: show "Completed/Unplug Socket" UI
-      // The useChargingSimulation hook will handle enforcing the minimum 2s stopping delay automatically
-      charging.updateFromMeterValues({ status: 'FINISHED' } as any);
+      // Don't set FINISHED here — wait for session_ended WS push to finalize
+      // The STOPPING UI will remain until backend confirms via WS
 
     } catch (e: any) {
       console.error("Stop charging session error", e);
@@ -738,13 +869,9 @@ export default function MapScreen() {
     if (!targetSocketUuid) return;
     try {
       bottomSheetRef.current?.dismiss(); // Close sheet immediately
-      if (!user?.id) {
-        Alert.alert("Error", "User profile not found.");
-        return;
-      }
 
       const res = await startChargingSession(
-        { user: user.id, vehicle: vehicle.id },
+        { vehicle: vehicle.id },
         targetSocketUuid
       );
 
@@ -752,7 +879,7 @@ export default function MapScreen() {
       const session = res?.data ?? res;
       activeChargeSessionUuidRef.current = session?.uuid ?? null;
 
-      // Hemen şarj widget'ını göster (WebSocket verisi gelene kadar simülasyon/session verisi).
+      // Hemen şarj widget'ını göster (WS verisi gelene kadar simülasyon/session verisi).
       const initialSoc = session?.battery_level != null ? Number(session.battery_level) : undefined;
       const initialEnergy = session?.total_energy != null ? parseFloat(String(session.total_energy)) : undefined;
       charging.startSimulation('DC');
@@ -764,11 +891,13 @@ export default function MapScreen() {
         } as any);
       }
 
-      // Meter-values WebSocket'i bağla; canlı veri gelince widget güncellenir.
-      connectMeterValuesSocket();
+      // Charge session WebSocket'i bağla; canlı meter values gelince widget güncellenir.
+      if (session?.uuid) {
+        connectChargeSessionWs(session.uuid);
+      }
     } catch (e: any) {
       console.error("Start session error", e);
-      if (e.response?.data?.message_key === "socket.not_plugged") {
+      if (e.response?.data?.message_key === "socket.not_plugged" || e.response?.data?.message_key === "socket.in_use") {
         setPendingVehicle(vehicle);
         setShowSocketError(true);
       } else {
@@ -793,34 +922,28 @@ export default function MapScreen() {
 
   const handleFetchDetails = async (uuid: string) => {
     setIsFetchingDetails(true);
-    // If WS is open, send request
-    if (meterWsRef.current?.readyState === WebSocket.OPEN) {
-      console.log("Requesting details via WS for:", uuid);
-      meterWsRef.current.send(JSON.stringify({
-        type: "get_charge_area_detail",
-        uuid: uuid
-      }));
-      // We don't await here, we wait for 'charge_area_detail' message
-      // Timeout fallback? 
-      // For now assume it works. State 'isFetchingDetails' will stay true until message received.
-      // Add a safety timeout to clear loader?
-      setTimeout(() => {
-        setIsFetchingDetails((current) => {
-          if (current) return false; // turn off if still on
-          return current;
-        });
-      }, 5000);
-    } else {
-      // Fallback to HTTP if WS not connected
-      try {
-        const data = await getStationDetails(uuid);
-        setStationDetails(data);
-      } catch (e) {
-        console.error("Fetch details error", e);
-      } finally {
-        setIsFetchingDetails(false);
-      }
-    }
+    // Open a dedicated charge area WebSocket for live updates
+    connectChargeAreaWs(uuid);
+
+    // Safety timeout: if WS doesn't deliver data in 5s, fall back to REST
+    setTimeout(async () => {
+      setIsFetchingDetails((current) => {
+        if (current) {
+          // WS didn't deliver — try REST fallback
+          (async () => {
+            try {
+              const data = await getStationDetails(uuid);
+              setStationDetails(data);
+            } catch (e) {
+              console.error("Fetch details REST fallback error", e);
+            } finally {
+              setIsFetchingDetails(false);
+            }
+          })();
+        }
+        return current;
+      });
+    }, 5000);
   };
 
   const [search, setSearch] = useState("");
@@ -888,13 +1011,36 @@ export default function MapScreen() {
   }, [charging.isActive, charging.isMinimized]);
 
   // Header Slide Down Animation
-  const headerAnim = useRef(new Animated.Value(-200)).current;
+  const headerAnim = useRef(new Animated.Value(0)).current;
+
+  // Real measured height of the header (status chips + search + filters + types).
+  // Used both to fully hide the header when the charging screen is fullscreen,
+  // and to anchor the floating charging widget right below the header.
+  const [headerHeight, setHeaderHeight] = useState(0);
+  const headerHeightSv = useSharedValue(0);
+
+  const onHeaderLayout = useCallback((e: any) => {
+    const h = e?.nativeEvent?.layout?.height ?? 0;
+    if (h <= 0) return;
+    // Update shared value directly so the widget follows each layout frame
+    // smoothly (filter drawer / type buttons already animate the underlying
+    // height, so a direct assign avoids cascading withTiming jitter).
+    if (Math.abs(h - headerHeightSv.value) > 0.5) {
+      headerHeightSv.value = h;
+    }
+    // Only push to React state on coarser changes (used by headerAnim spring).
+    if (Math.abs(h - headerHeight) > 4) {
+      setHeaderHeight(h);
+    }
+  }, [headerHeightSv, headerHeight]);
 
   useEffect(() => {
-    // If charging screen is full-screen (not minimized), slide header up and away
+    // If charging screen is full-screen (not minimized), slide header up and away.
+    // Use the measured header height + a safety margin so it always fully hides.
     const isBottomSheetOpen = charging.isActive && !charging.isMinimized;
+    const hideOffset = -(headerHeight + 40);
     Animated.spring(headerAnim, {
-      toValue: isBottomSheetOpen ? -200 : 0,
+      toValue: isBottomSheetOpen ? hideOffset : 0,
       useNativeDriver: true,
       speed: 12,
       bounciness: 6,
@@ -902,7 +1048,7 @@ export default function MapScreen() {
 
     // Tell _layout.tsx to hide/show the tab bar
     DeviceEventEmitter.emit('toggleBottomSheet', isBottomSheetOpen);
-  }, [charging.isActive, charging.isMinimized]);
+  }, [charging.isActive, charging.isMinimized, headerHeight]);
 
   useEffect(() => {
     if (params.showLoginSuccess === "true") {
@@ -929,21 +1075,12 @@ export default function MapScreen() {
     }
   }, [params.showLoginSuccess, topInset]);
 
-  // Uygulama açılır açılmaz giriş yapmışsa meter-values WebSocket'e bağlan (halihazırda şarj varsa widget güncellenir)
+  // Uygulama açılır açılmaz harita pinlerini REST ile çek
   useEffect(() => {
-    if (!user) return;
-    connectMeterValuesSocket();
-    return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-      if (meterWsRef.current) {
-        meterWsRef.current.close();
-        meterWsRef.current = null;
-      }
-    };
-  }, [user, connectMeterValuesSocket]);
+    if (currentRegion.current) {
+      fetchMapStations(currentRegion.current);
+    }
+  }, [fetchMapStations]);
 
   // Handle QR Scan Result via Event Emitter
   useEffect(() => {
@@ -1025,6 +1162,15 @@ export default function MapScreen() {
       marginBottom: interpolate(anim, [0, 1], [0, 12]),
     };
   });
+
+  // Floating charging widget always sits just below the measured header
+  // (status chips + search + filters + type buttons). headerHeightSv is
+  // updated via onLayout and animates with withTiming on change, so the
+  // widget tracks every header transition smoothly.
+  const WIDGET_HEADER_GAP = 8;
+  const floatingWidgetStyle = useAnimatedStyle(() => ({
+    top: headerHeightSv.value + WIDGET_HEADER_GAP,
+  }));
 
   const isMapMoving = useRef(false);
   const isAnyFilterActive = search.trim() !== "" || isTypeListOpen || bottomSheetSelectedType !== null;
@@ -1111,15 +1257,39 @@ export default function MapScreen() {
     })();
   }, []);
 
-  // Cleanup WebSocket on unmount
+  // Cleanup WebSockets on unmount
   useEffect(() => {
     return () => {
-      if (meterWsRef.current) {
-        meterWsRef.current.close();
-        meterWsRef.current = null;
+      if (chargeAreaWsRef.current) {
+        chargeAreaWsRef.current.close();
+        chargeAreaWsRef.current = null;
+      }
+      if (chargeSessionWsRef.current) {
+        chargeSessionWsRef.current.close();
+        chargeSessionWsRef.current = null;
+      }
+      if (chargeSessionReconnectRef.current) {
+        clearTimeout(chargeSessionReconnectRef.current);
+        chargeSessionReconnectRef.current = null;
+      }
+      if (fetchMapStationsDebounceRef.current) {
+        clearTimeout(fetchMapStationsDebounceRef.current);
       }
     };
   }, []);
+
+  // If the profile (loaded at app launch / foreground) reports an active
+  // charge session, open the session WS immediately so the user sees the
+  // banner even if the session was started from another device.
+  useEffect(() => {
+    const sessionUuid = (user as any)?.active_charge_session_uuid;
+    if (!sessionUuid) return;
+    if (activeChargeSessionUuidRef.current === sessionUuid) return;
+    if (chargeSessionWsRef.current) return;
+
+    activeChargeSessionUuidRef.current = sessionUuid;
+    connectChargeSessionWs(sessionUuid);
+  }, [user, connectChargeSessionWs]);
 
 
   const [isListening, setIsListening] = useState(false);
@@ -1171,7 +1341,7 @@ export default function MapScreen() {
 
   const onRegionChangeComplete = (region: Region) => {
     currentRegion.current = region;
-    sendBoundingBoxUpdate(region);
+    fetchMapStationsDebounced(region);
 
     if (userLocation) {
       const dist = getDistanceFromLatLonInKm(
@@ -1184,10 +1354,10 @@ export default function MapScreen() {
     }
   };
 
-  // Re-fetch when filters change (send update over socket)
+  // Re-fetch when filters change
   useEffect(() => {
-    sendBoundingBoxUpdate(currentRegion.current);
-  }, [typeFilters, sendBoundingBoxUpdate]);
+    fetchMapStationsDebounced(currentRegion.current);
+  }, [typeFilters, fetchMapStationsDebounced]);
 
   const handleRecenter = () => {
     if (userLocation && mapRef.current) {
@@ -1320,6 +1490,12 @@ export default function MapScreen() {
       return;
     }
 
+    // Close the charge area WS since user left the detail view
+    if (chargeAreaWsRef.current) {
+      chargeAreaWsRef.current.close();
+      chargeAreaWsRef.current = null;
+    }
+
     // Explicitly clear station to ensure subsequent taps trigger state changes
     setSelectedStation(null);
     setStationDetails(null);
@@ -1434,7 +1610,7 @@ export default function MapScreen() {
               if (!isAnyFilterActive && statusHeaderAnim.value !== 1) {
                 statusHeaderAnim.value = withTiming(1, { duration: 300 });
               }
-              sendBoundingBoxUpdateDebounced(region);
+              fetchMapStationsDebounced(region);
             }}
             userInterfaceStyle={themeScheme === 'dark' ? 'dark' : 'light'}
             clusterColor={colors.primary}
@@ -1662,17 +1838,19 @@ export default function MapScreen() {
 
           <View style={[styles.overlay, { paddingTop: topInset }]}>
             {/* Main Header Card Container */}
-            <Animated.View style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              paddingTop: Platform.OS === 'ios' ? topInset : topInset - 15,
-              backgroundColor: isDark ? "rgba(30, 30, 30, 0.85)" : "rgba(255, 255, 255, 0.95)", // Semi-transparent for glass effect
-              zIndex: 10,
-              transform: [{ translateY: headerAnim }],
-              overflow: 'hidden' // FIX: Ensure child content (chips) doesn't overflow rounded corners
-            }}>
+            <Animated.View
+              onLayout={onHeaderLayout}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                paddingTop: Platform.OS === 'ios' ? topInset : topInset - 15,
+                backgroundColor: isDark ? "rgba(30, 30, 30, 0.85)" : "rgba(255, 255, 255, 0.95)", // Semi-transparent for glass effect
+                zIndex: 10,
+                transform: [{ translateY: headerAnim }],
+                overflow: 'hidden' // FIX: Ensure child content (chips) doesn't overflow rounded corners
+              }}>
               {/* Row 0: Status Chips (Animated) */}
               <Reanimated.View style={[statusHeaderStyle, { flexDirection: 'row', paddingHorizontal: 16, gap: 10, alignItems: 'center' }]}>
 
@@ -1686,7 +1864,7 @@ export default function MapScreen() {
                     style={{ width: 38, height: 38 }}
                     resizeMode="contain"
                   />
-                  <Text style={{ fontSize: 16, fontWeight: '900', color: isDark ? "#FDCE39" : "#FDCE39" }}>1,250</Text>
+                  <Text style={{ fontSize: 22, fontWeight: '900', color: isDark ? "#FDCE39" : "#FDCE39" }}>1,250</Text>
                 </View>
 
                 {/* 2. Activity & Steps Chip */}
@@ -1700,7 +1878,7 @@ export default function MapScreen() {
                       <currentActivity.icon variant="Bold" size={24} color={currentActivity.color} />
                     )}
 
-                    <Text style={{ fontSize: 16, fontWeight: '800', color: currentActivity.color }}>
+                    <Text style={{ fontSize: 20, fontWeight: '800', color: currentActivity.color }}>
                       {currentActivity.type === "Walking" ? "8.421" : currentActivity.label}
                     </Text>
                   </View>
@@ -1730,7 +1908,7 @@ export default function MapScreen() {
               </Reanimated.View>
 
               {/* Row 1: Search & Bell/Login */}
-              <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, marginBottom: 12, alignItems: 'center' }}>
+              <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 16, marginTop: -7, marginBottom: 2, alignItems: 'center' }}>
                 <View style={{
                   flex: 1,
                   height: 48, // Slightly taller
@@ -1921,12 +2099,12 @@ export default function MapScreen() {
                     >
                       <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 4 }}>
                         {Array.from({ length: typeLightningCount[t] }).map((_, i) => (
-                          <View key={i} style={{ marginLeft: i > 0 ? -10 : 0, zIndex: i }}>
-                            <Flash variant="Bold" size={16} color="#ffffff" />
+                          <View key={i} style={{ marginLeft: i > 0 ? -12 : 0, zIndex: i }}>
+                            <Flash variant="Bold" size={20} color="#ffffff" />
                           </View>
                         ))}
                       </View>
-                      <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 13 }}>{t}</Text>
+                      <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 16 }}>{t}</Text>
                     </Pressable>
                   ))}
                 </View>
@@ -1936,16 +2114,17 @@ export default function MapScreen() {
 
           </View>
 
-          {/* Floating Charging Widget at Bottom */}
+          {/* Floating Charging Widget — anchored just under the top section.
+              Slides up/down in sync with the coin/status chip row collapse. */}
           {charging.isActive && charging.isMinimized && (
-            <View style={styles.floatingWidgetContainer}>
+            <Reanimated.View style={[styles.floatingWidgetContainer, floatingWidgetStyle]}>
               <ChargingWidget
                 state={charging}
                 onExpand={() => {
                   charging.toggleMinimize();
                 }}
               />
-            </View>
+            </Reanimated.View>
           )}
 
           {/* Re-center Button - Hide when widget is active to avoid clutter? Or keep? Keeping for now. */}
@@ -2303,6 +2482,8 @@ export default function MapScreen() {
                             // Use socket.name as main title, fallback to "Connector X"
                             const socketTitle = socket.name ? socket.name : `Connector ${socket.id}`;
                             const isMyActiveSession = status === 'charging' && charging.isActive && socket.uuid === targetSocketUuid;
+                            const isMaintenance = !!socket.is_maintenance_mode;
+                            const canStart = status === 'preparing' && !isMaintenance;
 
                             return (
                               <AnimatedPressable
@@ -2313,13 +2494,13 @@ export default function MapScreen() {
                                   if (isMyActiveSession) {
                                     charging.setMinimized(false);
                                     chargingBottomSheetRef.current?.present();
-                                  } else if (status === 'preparing') {
+                                  } else if (canStart) {
                                     handleStartPress(socket.uuid);
-                                  } else if (status === 'available') {
+                                  } else if (status === 'available' || (status === 'preparing' && isMaintenance)) {
                                     setShowSocketError(true);
                                   }
                                 }}
-                                disabled={status !== 'available' && status !== 'preparing' && !isMyActiveSession}
+                                disabled={!canStart && status !== 'available' && !isMyActiveSession}
                                 style={({ pressed }: { pressed: boolean }) => ({
                                   backgroundColor: isMyActiveSession
                                     ? (isDark ? 'rgba(216, 219, 44, 0.08)' : 'rgba(216, 219, 44, 0.08)')
@@ -2390,10 +2571,15 @@ export default function MapScreen() {
                                   </View>
 
                                   {/* Action Arrow/Button for preparing */}
-                                  {status === 'preparing' ? (
+                                  {canStart ? (
                                     <View style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 120, backgroundColor: '#2cdb9b', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginLeft: 10 }}>
                                       <Text style={{ color: '#fff', fontWeight: '500', fontSize: 13 }}>Start</Text>
                                       <Ionicons name="arrow-forward" size={15} color="#fff" />
+                                    </View>
+                                  ) : (status === 'preparing' && isMaintenance) ? (
+                                    <View style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 120, backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#e6e9ef', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginLeft: 10 }}>
+                                      <Ionicons name="construct" size={13} color={isDark ? '#aaa' : '#7a8a9e'} />
+                                      <Text style={{ color: isDark ? '#aaa' : '#7a8a9e', fontWeight: '600', fontSize: 12 }}>Maintenance</Text>
                                     </View>
                                   ) : null}
                                 </View>
@@ -3131,7 +3317,8 @@ const styles = StyleSheet.create({
   },
   floatingWidgetContainer: {
     position: 'absolute',
-    top: Platform.OS === 'ios' ? 180 : 155, // Reduced gap on Android
+    // `top` is set dynamically via floatingWidgetStyle so the widget tracks the
+    // coin / status-header collapse instead of being pinned at a fixed offset.
     left: 16,
     right: 16,
     zIndex: 60,

@@ -214,6 +214,7 @@ export const register = async (data: RegisterPayload) => {
 
 export type UserProfile = {
   id: number;
+  uuid?: string;
   username: string;
   email: string; // May be empty
   first_name: string;
@@ -224,6 +225,9 @@ export type UserProfile = {
   tckn?: string;
   passport_number?: string;
   birthday?: string;
+  // Non-null when the user has a charge in progress (possibly started from
+  // another device). On bootstrap / foreground, open the session WS immediately.
+  active_charge_session_uuid?: string | null;
   // Add other profile fields if needed
 };
 
@@ -279,6 +283,23 @@ export const getStations = async (bbox: string, types?: string[]) => {
     connectors: [], // populated only on detail
     distanceKm: 0, // calculated on UI
   }));
+};
+
+/**
+ * Harita bounding box + zoom ile pin ve cluster verisi çeker.
+ * Haritanın moveend/zoomend event'lerinde ~300ms debounce ile çağrılmalı.
+ */
+export const getMapStations = async (params: {
+  min_lat: number;
+  max_lat: number;
+  min_lng: number;
+  max_lng: number;
+  zoom: number;
+}) => {
+  const qs = buildQueryString(params);
+  const response = await api.get(`/api/v1/web/stations/charge-areas/map/${qs}`);
+  const data = response.data?.data || response.data;
+  return data;
 };
 
 export const getStationDetails = async (id: string) => {
@@ -378,7 +399,7 @@ export const deleteRegisteredVehicle = async (uuid: string) => {
 };
 
 export const startChargingSession = async (
-  data: { user: number; vehicle: number },
+  data: { vehicle: number; address?: number },
   socket_uuid: string,
 ) => {
   const response = await api.post(
@@ -388,9 +409,13 @@ export const startChargingSession = async (
   return response.data;
 };
 
-export const stopChargingSession = async (charge_session_uuid: string) => {
+export const stopChargingSession = async (
+  charge_session_uuid: string,
+  end_reason?: string,
+) => {
   const response = await api.post(
     `/api/v1/web/chargesessions/${charge_session_uuid}/stop/`,
+    end_reason ? { end_reason } : undefined,
   );
   return response.data;
 };
