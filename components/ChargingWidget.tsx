@@ -355,7 +355,7 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
             return <Text style={baseStyle} numberOfLines={1}>{displayState.endReason || 'Bir hata oluştu'}</Text>;
         }
         if (displayState.sessionStatus === 'COMPLETED' || displayState.sessionStatus === 'FINISHED') {
-            return <Text style={baseStyle} numberOfLines={1}>Soketi aracınızdan çıkartın</Text>;
+            return <Text style={baseStyle} numberOfLines={1}>İyi yolculuklar dileriz!</Text>;
         }
         if (displayState.sessionStatus === 'PARKING') {
             return <Text style={baseStyle} numberOfLines={1}>Kabloyu çıkarın.</Text>;

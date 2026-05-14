@@ -421,7 +421,7 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                             </Text>
 
                             <Text style={[styles.powerText, { color: isDismissing ? 'rgba(255,255,255,0.8)' : colors.textSecondary, marginTop: 8, textAlign: 'center', paddingHorizontal: 30 }]}>
-                                {isDismissing ? 'Soket ayrıldı, iyi yolculuklar dileriz.' : 'Lütfen şarj soketini aracınızdan çıkartın.'}
+                                {isDismissing ? 'Soket ayrıldı, iyi yolculuklar dileriz.' : 'Şarj başarıyla tamamlandı! İyi yolculuklar dileriz.'}
                             </Text>
 
                             {/* Unplug Animation Hint */}
