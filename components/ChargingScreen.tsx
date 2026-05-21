@@ -336,9 +336,6 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                                     <Ionicons name="information-circle" size={16} color="#E94B2C" />
                                     <Text style={[styles.locationText, { color: colors.text }]} numberOfLines={2}>
                                         Süre sonrası: {state.parkingTariff.price.toFixed(2)} ₺/dk
-                                        {state.parkingTariff.max_price != null
-                                            ? ` (maks. ${state.parkingTariff.max_price.toFixed(2)} ₺)`
-                                            : ''}
                                     </Text>
                                 </View>
                             )}
@@ -371,11 +368,6 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                                 <Text style={[styles.parkingFeeValue, { color: '#E94B2C', ...(Platform.OS === 'ios' ? { fontVariant: ['tabular-nums'] as any } : {}) }]}>
                                     {parkingFee.toFixed(2)} ₺
                                 </Text>
-                                {state.parkingSession?.max_price != null && (
-                                    <Text style={[styles.parkingFeeCap, { color: colors.textSecondary }]}>
-                                        / {state.parkingSession.max_price.toFixed(2)} ₺ maks.
-                                    </Text>
-                                )}
                             </View>
 
                             <Text style={[styles.powerText, { color: colors.textSecondary, marginTop: 10, textAlign: 'center', paddingHorizontal: 30 }]}>
@@ -419,6 +411,20 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                             <Text style={[styles.percentageText, { color: isDismissing ? '#fff' : '#2CDD9D', fontSize: 28, marginTop: 24, textAlign: 'center' }]}>
                                 {isDismissing ? 'Şarj Oturumu Tamamlandı!' : 'Şarjınız Tamamlandı!'}
                             </Text>
+
+                            {/* Final summary — total cost & energy. Pulled from
+                                state.cost / state.chargedAmount which are
+                                already frozen at the end-of-charge values. */}
+                            {!isDismissing && (state.cost > 0 || state.chargedAmount > 0) && (
+                                <View style={styles.completedSummary}>
+                                    <Text style={[styles.completedSummaryAmount, { color: colors.text }]}>
+                                        {state.cost.toFixed(2)} ₺
+                                    </Text>
+                                    <Text style={[styles.completedSummaryMeta, { color: colors.textSecondary }]}>
+                                        {state.chargedAmount.toFixed(2)} kWh · {Math.floor(state.duration / 60)}m {state.duration % 60}s
+                                    </Text>
+                                </View>
+                            )}
 
                             <Text style={[styles.powerText, { color: isDismissing ? 'rgba(255,255,255,0.8)' : colors.textSecondary, marginTop: 8, textAlign: 'center', paddingHorizontal: 30 }]}>
                                 {isDismissing ? 'Soket ayrıldı, iyi yolculuklar dileriz.' : 'Şarj başarıyla tamamlandı! İyi yolculuklar dileriz.'}
@@ -571,8 +577,8 @@ export default function ChargingScreen({ state, onMinimize, onStop, onToggleDev 
                                     <Text style={[styles.statLabel, { color: colors.textSecondary }]}>Ücret</Text>
                                     <Text style={[styles.statValue, { color: colors.text }]}>
                                         {isFinished && state.chargeSessionData?.total_price != null
-                                            ? state.chargeSessionData.total_price.toFixed(2)
-                                            : state.cost.toFixed(2)
+                                            ? Number(state.chargeSessionData?.total_price)?.toFixed(2)
+                                            : state?.cost?.toFixed(2)
                                         } ₺
                                     </Text>
                                 </View>
@@ -950,5 +956,21 @@ const styles = StyleSheet.create({
     parkingFeeCap: {
         fontSize: 14,
         fontWeight: '600',
+    },
+    // COMPLETED state final summary (total cost + energy + duration).
+    completedSummary: {
+        marginTop: 18,
+        alignItems: 'center',
+    },
+    completedSummaryAmount: {
+        fontSize: 32,
+        fontWeight: '900',
+        letterSpacing: -0.5,
+    },
+    completedSummaryMeta: {
+        fontSize: 13,
+        fontWeight: '600',
+        marginTop: 4,
+        letterSpacing: 0.2,
     },
 });

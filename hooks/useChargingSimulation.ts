@@ -179,11 +179,16 @@ export const useChargingSimulation = () => {
         const cost = data.cost;
         const duration = data.duration ?? data.duration_sec;
         const resolvedDuration = (duration != null && duration > 0) ? duration : undefined;
-        // Prefer socket_type from backend, then explicit mode, then power-based heuristic
+        // Mode is authoritative from backend (socket.power_type → socket_type),
+        // or explicit `mode`. We deliberately DO NOT fall back to a power-based
+        // heuristic anymore — meter_value_update frames don't carry power_type,
+        // and the heuristic flipped AC/DC mid-session as power changed.
+        // When neither is provided we keep prev.mode (handled below).
         const socketType = data.socket_type?.toUpperCase() as ChargingMode | undefined;
-        const mode: ChargingMode = socketType && ['HPC', 'DC', 'AC'].includes(socketType)
-            ? socketType
-            : data.mode ?? (power >= 150 ? 'HPC' : power >= 50 ? 'DC' : 'AC');
+        const incomingMode: ChargingMode | undefined =
+            socketType && ['HPC', 'DC', 'AC'].includes(socketType)
+                ? socketType
+                : data.mode;
         const startedAt = data.started_at;
         const startSoc = data.start_soc ?? null;
 
@@ -256,7 +261,7 @@ export const useChargingSimulation = () => {
                         isDismissing: false,
                         sessionStatus: upperStatus as ChargeSessionStatus,
                         chargeSessionData: data.chargeSessionData ?? prev.chargeSessionData,
-                        mode,
+                        mode: incomingMode ?? prev.mode,
                         startedAt: startedAt ?? prev.startedAt,
                         startSoc: startSoc ?? prev.startSoc,
                         startTime: prev.startTime ?? Date.now(),
@@ -277,7 +282,7 @@ export const useChargingSimulation = () => {
                         isDismissing: false,
                         sessionStatus: 'CHARGING' as ChargeSessionStatus,
                         chargeSessionData: data.chargeSessionData ?? prev.chargeSessionData,
-                        mode,
+                        mode: incomingMode ?? prev.mode,
                         batteryLevel: batteryLevel ?? prev.batteryLevel,
                         power: power || prev.power,
                         chargedAmount: chargedAmount || prev.chargedAmount,
@@ -349,7 +354,7 @@ export const useChargingSimulation = () => {
                     ...prev,
                     isActive: true,
                     isMinimized: true,
-                    mode,
+                    mode: incomingMode ?? prev.mode,
                     sessionStatus: (upperStatus as ChargeSessionStatus) ?? prev.sessionStatus,
                     chargeSessionData: data.chargeSessionData ?? prev.chargeSessionData,
                     isStarting: false,
@@ -372,7 +377,7 @@ export const useChargingSimulation = () => {
             if (hasCharging) {
                 return {
                     ...prev,
-                    mode,
+                    mode: incomingMode ?? prev.mode,
                     sessionStatus: (upperStatus as ChargeSessionStatus) ?? prev.sessionStatus,
                     chargeSessionData: data.chargeSessionData ?? prev.chargeSessionData,
                     batteryLevel: batteryLevel ?? prev.batteryLevel,
@@ -395,6 +400,16 @@ export const useChargingSimulation = () => {
 
             return prev;
         });
+    };
+
+    /**
+     * Normalise an incoming socket.power_type string into our ChargingMode
+     * enum. Returns undefined if the input isn't a recognised variant so
+     * callers can fall back to `prev.mode`.
+     */
+    const parseChargingMode = (raw?: string | null): ChargingMode | undefined => {
+        const norm = raw?.toUpperCase();
+        return norm === 'AC' || norm === 'DC' || norm === 'HPC' ? norm : undefined;
     };
 
     /**
@@ -435,11 +450,16 @@ export const useChargingSimulation = () => {
         started_at?: string | null;
         duration?: number | null;
         total_price?: number | null;
+        // Backend-authoritative charging type (AC/DC/HPC). Without this the
+        // mode badge can be wrong on reconnect because the only other source
+        // (the power-based heuristic) was removed.
+        socket_type?: string | null;
         chargeSessionData?: ChargeSessionPayload;
     }) => {
         isLiveFromBackendRef.current = true;
         if (timerRef.current) clearInterval(timerRef.current);
         stoppingAtRef.current = null;
+        const newMode = parseChargingMode(payload.socket_type);
         setState(prev => {
             const newDuration = computeChargingDurationSec(
                 payload.duration,
@@ -454,6 +474,7 @@ export const useChargingSimulation = () => {
                 isFinishing: false,
                 isDismissing: false,
                 sessionStatus: 'FINISHING',
+                mode: newMode ?? prev.mode,
                 endedAt: payload.ended_at ?? prev.endedAt,
                 endMeter: payload.end_meter != null ? Number(payload.end_meter) : prev.endMeter,
                 chargedAmount: payload.total_energy != null ? Number(payload.total_energy) : prev.chargedAmount,
@@ -482,10 +503,12 @@ export const useChargingSimulation = () => {
         started_at?: string | null;
         duration?: number | null;
         total_price?: number | null;
+        socket_type?: string | null;
         chargeSessionData?: ChargeSessionPayload;
     }) => {
         isLiveFromBackendRef.current = true;
         if (timerRef.current) clearInterval(timerRef.current);
+        const newMode = parseChargingMode(payload.socket_type);
         setState(prev => {
             const newDuration = computeChargingDurationSec(
                 payload.duration,
@@ -500,6 +523,7 @@ export const useChargingSimulation = () => {
                 isFinishing: false,
                 isDismissing: false,
                 sessionStatus: 'PARKING',
+                mode: newMode ?? prev.mode,
                 endedAt: payload.ended_at ?? prev.endedAt,
                 parkingSession: payload.parking_session ?? prev.parkingSession,
                 chargedAmount: payload.total_energy != null ? Number(payload.total_energy) : prev.chargedAmount,

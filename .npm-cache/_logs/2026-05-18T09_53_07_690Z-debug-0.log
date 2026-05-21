@@ -5,15 +5,15 @@
 4 silly config load:file:/Users/abdulbakibilici/Projects/efish/.npmrc
 5 silly config load:file:/Users/abdulbakibilici/.npmrc
 6 silly config load:file:/Users/abdulbakibilici/.npm-global/etc/npmrc
-7 verbose title npm exec tsc --noEmit
-8 verbose argv "exec" "--" "tsc" "--noEmit"
-9 verbose logfile logs-max:10 dir:/Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-05-14T12_17_38_689Z-
-10 verbose logfile /Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-05-14T12_17_38_689Z-debug-0.log
+7 verbose title npm exec expo config --json
+8 verbose argv "exec" "--" "expo" "config" "--json"
+9 verbose logfile logs-max:10 dir:/Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-05-18T09_53_07_690Z-
+10 verbose logfile /Users/abdulbakibilici/Projects/efish/.npm-cache/_logs/2026-05-18T09_53_07_690Z-debug-0.log
 11 silly logfile start cleaning logs, removing 1 files
 12 silly logfile done cleaning log files
 13 verbose cwd /Users/abdulbakibilici/Projects/efish
 14 verbose os Darwin 25.3.0
 15 verbose node v25.2.1
 16 verbose npm  v11.6.2
-17 verbose exit 2
-18 verbose code 2
+17 verbose exit 0
+18 info ok

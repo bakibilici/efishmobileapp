@@ -338,7 +338,7 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
                 : displayState.sessionStatus === 'PARKING'
                     ? 'Ücretli Park'
                     : displayState.sessionStatus === 'FINISHING'
-                        ? 'Şarj Bitti'
+                        ? 'Ücretsiz Park'
                         : displayState.isStarting
                             ? 'Şarj Başlatılıyor'
                             : displayState.isFinishing
@@ -358,13 +358,10 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
             return <Text style={baseStyle} numberOfLines={1}>İyi yolculuklar dileriz!</Text>;
         }
         if (displayState.sessionStatus === 'PARKING') {
-            return <Text style={baseStyle} numberOfLines={1}>Kabloyu çıkarın.</Text>;
+            return <Text style={baseStyle} numberOfLines={1}>Şarj kablosunu çıkarın.</Text>;
         }
         if (displayState.sessionStatus === 'FINISHING') {
-            if (graceFreeForever) {
-                return <Text style={baseStyle} numberOfLines={1}>Ücretsiz park.</Text>;
-            }
-            return <Text style={baseStyle} numberOfLines={1}>Ücretsiz park modu.</Text>;
+            return <Text style={baseStyle} numberOfLines={2}>Şarj başarıyla tamamlandı. Kabloyu çıkarın.</Text>;
         }
         if (displayState.isStarting || displayState.isFinishing) {
             return <Text style={baseStyle} numberOfLines={1}>Lütfen bekleyin...</Text>;
@@ -416,16 +413,34 @@ export default function ChargingWidget({ state, onExpand }: ChargingWidgetProps)
     const renderRight = () => {
         // COMPLETED / DISMISSING
         if (showCompletedOverlay || displayState.isDismissing) {
+            // Prefer state.cost (already hydrated from total_price) but fall
+            // back to chargeSessionData.total_price for older payloads.
+            const finalCost = state.cost > 0
+                ? state.cost
+                : (state.chargeSessionData?.total_price != null
+                    ? Number(state.chargeSessionData.total_price)
+                    : null);
+            const finalKwh = state.chargedAmount > 0
+                ? state.chargedAmount
+                : (state.chargeSessionData?.total_energy != null
+                    ? Number(state.chargeSessionData.total_energy)
+                    : null);
             return (
                 <View style={styles.rightStack}>
-                    <Ionicons
-                        name="checkmark-circle"
-                        size={36}
-                        color={displayState.isDismissing ? '#fff' : PHASE_COLOR.completed}
-                    />
-                    {state.chargeSessionData?.total_energy != null && (
+                    {finalCost != null ? (
+                        <Text style={[styles.completedCost, getTextStyle()]} numberOfLines={1}>
+                            {finalCost.toFixed(2)} ₺
+                        </Text>
+                    ) : (
+                        <Ionicons
+                            name="checkmark-circle"
+                            size={36}
+                            color={displayState.isDismissing ? '#fff' : PHASE_COLOR.completed}
+                        />
+                    )}
+                    {finalKwh != null && (
                         <Text style={[styles.rightSmall, getTextStyle(true), { marginTop: 2 }]}>
-                            {Number(state.chargeSessionData.total_energy).toFixed(1)} kWh
+                            {finalKwh.toFixed(2)} kWh
                         </Text>
                     )}
                 </View>
@@ -677,6 +692,11 @@ const styles = StyleSheet.create({
         fontSize: 12,
         fontWeight: '700',
         letterSpacing: 0,
+    },
+    completedCost: {
+        fontWeight: '900',
+        fontSize: 20,
+        letterSpacing: -0.4,
     },
     progressContainer: {
         width: '100%',

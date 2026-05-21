@@ -37,6 +37,8 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
+  type AppStateStatus,
   DeviceEventEmitter,
   Image,
   Keyboard,
@@ -163,108 +165,18 @@ const PulsingDot = ({ color, isPulsing = true }: { color: string, isPulsing?: bo
 };
 
 // ==========================================
-// ─── Custom Pure-View Marker ───────────────────────────────────────────────
-const DIAMOND_BASE_SIZE = 40;
-const DIAMOND_DIAGONAL = DIAMOND_BASE_SIZE * 1.4142; // ~56.56
+// ─── Map Pin Assets (native marker images) ─────────────────────────────────
+// Pre-baked PNGs per station type, sized at @1x = 26.67×40pt. Asset goes
+// straight into react-native-maps' native marker renderer via the `image`
+// prop — no custom View, no tracksViewChanges, no Android quirks.
+const PIN_BY_TYPE: Record<string, any> = {
+  HPC: require('../../assets/images/pin-hpc.png'),
+  DC:  require('../../assets/images/pin-dc.png'),
+  AC:  require('../../assets/images/pin-ac.png'),
+};
 
-const MapPinContent = React.memo(({ station, isSelected, availableCount: propAvailableCount }: {
-  station: Station; isSelected: boolean;
-  availableCount?: number;
-}) => {
-  const stationColor = getStationColor(station.type);
-  const availableCount = propAvailableCount !== undefined ? propAvailableCount : (station.socket_stats
-    ? Object.values(station.socket_stats).reduce((a: number, c: any) => a + (c.available || 0), 0)
-    : 0);
-
-  // Reanimated value for flip (0 to 180)
-  const rotateValue = useSharedValue(isSelected ? 180 : 0);
-
-  useEffect(() => {
-    rotateValue.value = withTiming(isSelected ? 180 : 0, { duration: 500 });
-  }, [isSelected, availableCount]);
-
-  // Container style (fixed size for maximum crispness)
-  const markerContainerStyle = useAnimatedStyle(() => ({
-    width: DIAMOND_DIAGONAL,
-    height: DIAMOND_DIAGONAL,
-    justifyContent: 'center',
-    alignItems: 'center',
-  }));
-
-  // Front Face Animation (Count)
-  const frontStyle = useAnimatedStyle(() => {
-    const rotateY = rotateValue.value;
-    const opacity = interpolate(rotateValue.value, [89, 91], [1, 0], Extrapolation.CLAMP);
-    return {
-      transform: [
-        { perspective: 1000 },
-        { rotateY: `${rotateY}deg` },
-        { rotate: '-45deg' }
-      ],
-      opacity,
-      backfaceVisibility: 'hidden',
-    };
-  });
-
-  // Back Face Animation (Logo)
-  const backStyle = useAnimatedStyle(() => {
-    const rotateY = interpolate(rotateValue.value, [0, 180], [180, 360]);
-    const opacity = interpolate(rotateValue.value, [89, 91], [0, 1], Extrapolation.CLAMP);
-    return {
-      transform: [
-        { perspective: 1000 },
-        { rotateY: `${rotateY}deg` },
-        { rotate: '-45deg' }
-      ],
-      opacity,
-      backfaceVisibility: 'hidden',
-      position: 'absolute',
-    };
-  });
-
-  const commonPinStyle = {
-    width: DIAMOND_BASE_SIZE,
-    height: DIAMOND_BASE_SIZE,
-    backgroundColor: stationColor,
-    borderTopLeftRadius: DIAMOND_BASE_SIZE / 2,
-    borderTopRightRadius: DIAMOND_BASE_SIZE / 2,
-    borderBottomRightRadius: DIAMOND_BASE_SIZE / 2,
-    borderBottomLeftRadius: 2,
-    borderWidth: 2,
-    borderColor: 'white',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 4,
-    justifyContent: 'center',
-    alignItems: 'center',
-  } as const;
-
-  return (
-    <Reanimated.View style={markerContainerStyle}>
-      {/* Front Face: Count */}
-      <Reanimated.View style={[commonPinStyle, frontStyle]}>
-        <View style={{ transform: [{ rotate: '45deg' }] }}>
-          <Text allowFontScaling={false} style={{ color: 'white', fontWeight: '900', fontSize: 16 }}>
-            {availableCount}
-          </Text>
-        </View>
-      </Reanimated.View>
-
-      {/* Back Face: Logo */}
-      <Reanimated.View style={[commonPinStyle, backStyle]}>
-        <View style={{ transform: [{ rotate: '45deg' }] }}>
-          <Image
-            source={require('../../assets/images/efishremovedbge.png')}
-            style={{ width: 24, height: 24 }}
-            resizeMode="contain"
-          />
-        </View>
-      </Reanimated.View>
-    </Reanimated.View>
-  );
-});
+const pinAssetFor = (type: string | null | undefined) =>
+  PIN_BY_TYPE[(type || 'AC').toUpperCase()] ?? PIN_BY_TYPE.AC;
 
 
 
@@ -292,11 +204,23 @@ export default function MapScreen() {
 
   // Charge Area Detail WebSocket (opened when user taps a pin)
   const chargeAreaWsRef = useRef<WebSocket | null>(null);
+  const chargeAreaReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const chargeAreaReconnectAttempts = useRef(0);
+  // UUID of the area we last asked to subscribe to. Lets the AppState /
+  // NetInfo hooks re-open the same area socket on resume without state
+  // gymnastics, and is cleared when the user closes the area panel.
+  const currentChargeAreaUuidRef = useRef<string | null>(null);
+  // When the user explicitly closes the panel we set this so the auto
+  // reconnect logic doesn't keep reopening the socket in the background.
+  const chargeAreaUserClosedRef = useRef(false);
 
   // Charge Session WebSocket (opened when charging starts)
   const chargeSessionWsRef = useRef<WebSocket | null>(null);
   const chargeSessionReconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const chargeSessionReconnectAttempts = useRef(0);
+  // UUID of the active charge session — used by AppState / NetInfo resume
+  // handlers to reconnect to the same session without needing closures.
+  const currentChargeSessionUuidRef = useRef<string | null>(null);
 
   // start_meter from session snapshot — needed for on-device energy calculation
   const startMeterRef = useRef<number>(0);
@@ -439,9 +363,16 @@ export default function MapScreen() {
   const connectChargeAreaWs = useCallback(async (chargeAreaUuid: string) => {
     // Close previous charge area WS if open
     if (chargeAreaWsRef.current) {
-      chargeAreaWsRef.current.close();
+      try { chargeAreaWsRef.current.close(); } catch {}
       chargeAreaWsRef.current = null;
     }
+    if (chargeAreaReconnectRef.current) {
+      clearTimeout(chargeAreaReconnectRef.current);
+      chargeAreaReconnectRef.current = null;
+    }
+
+    currentChargeAreaUuidRef.current = chargeAreaUuid;
+    chargeAreaUserClosedRef.current = false;
 
     try {
       const token = await getAccessToken();
@@ -463,6 +394,8 @@ export default function MapScreen() {
 
       ws.onopen = () => {
         console.log("Charge area WS connected:", chargeAreaUuid);
+        // Successful connect → reset backoff so the next drop starts fresh.
+        chargeAreaReconnectAttempts.current = 0;
       };
 
       ws.onmessage = (event) => {
@@ -535,7 +468,34 @@ export default function MapScreen() {
       ws.onclose = (event) => {
         console.log("Charge area WS closed:", event.code, event.reason);
         chargeAreaWsRef.current = null;
-        // Close codes: 4001 (auth), 4400 (bad uuid), 4404 (not found) — no reconnect
+
+        // Fatal close codes — do NOT reconnect.
+        // 4001: auth failed (re-login). 4400: bad uuid. 4404: area not found.
+        // 1000: normal close (we initiated it).
+        const fatal = [1000, 4001, 4400, 4404];
+        if (fatal.includes(event.code)) {
+          return;
+        }
+        // User explicitly closed the panel — don't reconnect in the
+        // background even if the close was technically abnormal.
+        if (chargeAreaUserClosedRef.current) return;
+        // Sanity: still tracking the same area?
+        if (currentChargeAreaUuidRef.current !== chargeAreaUuid) return;
+        // Already scheduled? Skip.
+        if (chargeAreaReconnectRef.current) return;
+
+        chargeAreaReconnectAttempts.current += 1;
+        const attempt = chargeAreaReconnectAttempts.current;
+        // Exponential backoff with cap: 1s, 2s, 4s, 8s, 16s, 30s, 30s, ...
+        const delay = Math.min(30000, 1000 * Math.pow(2, attempt - 1));
+        console.log(`Charge area WS reconnect #${attempt} in ${delay}ms`);
+        chargeAreaReconnectRef.current = setTimeout(() => {
+          chargeAreaReconnectRef.current = null;
+          // Re-check the user didn't bail out during the wait.
+          if (chargeAreaUserClosedRef.current) return;
+          if (currentChargeAreaUuidRef.current !== chargeAreaUuid) return;
+          connectChargeAreaWs(chargeAreaUuid);
+        }, delay);
       };
 
       chargeAreaWsRef.current = ws;
@@ -548,7 +508,7 @@ export default function MapScreen() {
   const connectChargeSessionWs = useCallback(async (sessionUuid: string) => {
     // Close previous session WS if open
     if (chargeSessionWsRef.current) {
-      chargeSessionWsRef.current.close();
+      try { chargeSessionWsRef.current.close(); } catch {}
       chargeSessionWsRef.current = null;
     }
     if (chargeSessionReconnectRef.current) {
@@ -556,6 +516,7 @@ export default function MapScreen() {
       chargeSessionReconnectRef.current = null;
     }
     chargeSessionReconnectAttempts.current = 0;
+    currentChargeSessionUuidRef.current = sessionUuid;
 
     // Reset per-session caches so we don't reuse a previous session's sample.
     startMeterRef.current = 0;
@@ -620,6 +581,8 @@ export default function MapScreen() {
                 started_at: d.started_at ?? null,
                 duration: d.duration ?? null,
                 total_price: d.total_price ?? null,
+                // Authoritative charging type from backend (AC/DC/HPC).
+                socket_type: d.socket?.power_type,
                 chargeSessionData: d,
               });
               return;
@@ -635,6 +598,7 @@ export default function MapScreen() {
                 started_at: d.started_at ?? null,
                 duration: d.duration ?? null,
                 total_price: d.total_price ?? null,
+                socket_type: d.socket?.power_type,
                 chargeSessionData: d,
               });
               return;
@@ -655,6 +619,9 @@ export default function MapScreen() {
               charged_kwh: totalEnergy,
               started_at: d.started_at,
               status: d.status,
+              // Authoritative charging type from the backend socket payload.
+              // Hook uses this verbatim instead of guessing from power.
+              socket_type: d.socket?.power_type,
               chargeSessionData: d,
             } as any);
             return;
@@ -810,30 +777,35 @@ export default function MapScreen() {
         console.log("Charge session WS closed:", event.code, event.reason);
         chargeSessionWsRef.current = null;
 
-        // 4410 = session ended (expected, not an error)
-        if (event.code === 4410) {
-          console.log("Session ended (4410) — expected close.");
+        // Fatal: backend won't reopen this socket.
+        // 4410 → session terminated (COMPLETED/FAILED), 4001 → auth,
+        // 4400 → bad uuid, 4403 → not owner, 4404 → not found,
+        // 1000 → normal close (we initiated it).
+        const fatal = [1000, 4001, 4400, 4403, 4404, 4410];
+        if (fatal.includes(event.code)) {
+          if (event.code === 4410) console.log("Session ended (4410) — expected close.");
+          else console.warn(`Charge session WS fatal close ${event.code}. Not reconnecting.`);
           return;
         }
 
-        // 4001, 4403, 4404 — don't reconnect
-        if (event.code === 4001 || event.code === 4403 || event.code === 4404) {
-          console.warn(`Charge session WS closed with ${event.code}. Not reconnecting.`);
-          return;
-        }
+        // Only reconnect while a session is actually live AND we haven't
+        // already scheduled one. Read isActive from the latest ref to avoid
+        // a stale closure (the useCallback captures the value at definition).
+        if (!chargingIsActiveRef.current) return;
+        if (currentChargeSessionUuidRef.current !== sessionUuid) return;
+        if (chargeSessionReconnectRef.current) return;
 
-        // Reconnect if session is still active
-        if (charging.isActive && !chargeSessionReconnectRef.current) {
-          chargeSessionReconnectAttempts.current += 1;
-          const attempt = chargeSessionReconnectAttempts.current;
-          const delay = Math.min(30000, 1000 * Math.pow(2, attempt - 1));
+        chargeSessionReconnectAttempts.current += 1;
+        const attempt = chargeSessionReconnectAttempts.current;
+        const delay = Math.min(30000, 1000 * Math.pow(2, attempt - 1));
 
-          console.log(`Charge session WS reconnecting in ${delay}ms (Attempt ${attempt})`);
-          chargeSessionReconnectRef.current = setTimeout(() => {
-            chargeSessionReconnectRef.current = null;
-            connectChargeSessionWs(sessionUuid);
-          }, delay);
-        }
+        console.log(`Charge session WS reconnect #${attempt} in ${delay}ms`);
+        chargeSessionReconnectRef.current = setTimeout(() => {
+          chargeSessionReconnectRef.current = null;
+          if (!chargingIsActiveRef.current) return;
+          if (currentChargeSessionUuidRef.current !== sessionUuid) return;
+          connectChargeSessionWs(sessionUuid);
+        }, delay);
       };
 
       chargeSessionWsRef.current = ws;
@@ -1260,23 +1232,81 @@ export default function MapScreen() {
   // Cleanup WebSockets on unmount
   useEffect(() => {
     return () => {
-      if (chargeAreaWsRef.current) {
-        chargeAreaWsRef.current.close();
-        chargeAreaWsRef.current = null;
-      }
-      if (chargeSessionWsRef.current) {
-        chargeSessionWsRef.current.close();
-        chargeSessionWsRef.current = null;
+      // Cancel any pending reconnect attempts first so they don't fire after
+      // we've torn the sockets down.
+      if (chargeAreaReconnectRef.current) {
+        clearTimeout(chargeAreaReconnectRef.current);
+        chargeAreaReconnectRef.current = null;
       }
       if (chargeSessionReconnectRef.current) {
         clearTimeout(chargeSessionReconnectRef.current);
         chargeSessionReconnectRef.current = null;
+      }
+      // Mark intentional close so onclose handlers don't try to reopen.
+      chargeAreaUserClosedRef.current = true;
+      currentChargeAreaUuidRef.current = null;
+      currentChargeSessionUuidRef.current = null;
+
+      if (chargeAreaWsRef.current) {
+        try { chargeAreaWsRef.current.close(); } catch {}
+        chargeAreaWsRef.current = null;
+      }
+      if (chargeSessionWsRef.current) {
+        try { chargeSessionWsRef.current.close(); } catch {}
+        chargeSessionWsRef.current = null;
       }
       if (fetchMapStationsDebounceRef.current) {
         clearTimeout(fetchMapStationsDebounceRef.current);
       }
     };
   }, []);
+
+  // ─── WS Health: revive sockets when the app foregrounds ──────────────
+  // iOS/Android suspend network sockets while backgrounded. The `close`
+  // event sometimes fires asynchronously (or never) so the JS-side ref
+  // can look "open" while the underlying socket is actually dead.
+  // Whenever the app comes back to the foreground we check each socket's
+  // readyState and force a reconnect if it's not OPEN.
+  useEffect(() => {
+    const isAlive = (ws: WebSocket | null) =>
+      !!ws && ws.readyState === WebSocket.OPEN;
+
+    const reviveIfNeeded = () => {
+      // Charge area socket
+      const areaUuid = currentChargeAreaUuidRef.current;
+      if (areaUuid && !chargeAreaUserClosedRef.current && !isAlive(chargeAreaWsRef.current)) {
+        console.log("[WS health] Reviving charge area WS:", areaUuid);
+        if (chargeAreaReconnectRef.current) {
+          clearTimeout(chargeAreaReconnectRef.current);
+          chargeAreaReconnectRef.current = null;
+        }
+        // Reset backoff — this is a deliberate revive, not a flaky retry.
+        chargeAreaReconnectAttempts.current = 0;
+        connectChargeAreaWs(areaUuid);
+      }
+
+      // Charge session socket — only revive if a session is still active.
+      const sessionUuid = currentChargeSessionUuidRef.current;
+      if (sessionUuid && chargingIsActiveRef.current && !isAlive(chargeSessionWsRef.current)) {
+        console.log("[WS health] Reviving charge session WS:", sessionUuid);
+        if (chargeSessionReconnectRef.current) {
+          clearTimeout(chargeSessionReconnectRef.current);
+          chargeSessionReconnectRef.current = null;
+        }
+        chargeSessionReconnectAttempts.current = 0;
+        connectChargeSessionWs(sessionUuid);
+      }
+    };
+
+    const handleAppStateChange = (nextState: AppStateStatus) => {
+      if (nextState === 'active') reviveIfNeeded();
+    };
+
+    const sub = AppState.addEventListener('change', handleAppStateChange);
+    // Also do an initial health check on mount.
+    reviveIfNeeded();
+    return () => sub.remove();
+  }, [connectChargeAreaWs, connectChargeSessionWs]);
 
   // If the profile (loaded at app launch / foreground) reports an active
   // charge session, open the session WS immediately so the user sees the
@@ -1490,9 +1520,16 @@ export default function MapScreen() {
       return;
     }
 
-    // Close the charge area WS since user left the detail view
+    // User explicitly left the detail view → mark so the auto-reconnect
+    // logic doesn't keep reopening this area socket in the background.
+    chargeAreaUserClosedRef.current = true;
+    currentChargeAreaUuidRef.current = null;
+    if (chargeAreaReconnectRef.current) {
+      clearTimeout(chargeAreaReconnectRef.current);
+      chargeAreaReconnectRef.current = null;
+    }
     if (chargeAreaWsRef.current) {
-      chargeAreaWsRef.current.close();
+      try { chargeAreaWsRef.current.close(); } catch {}
       chargeAreaWsRef.current = null;
     }
 
@@ -1823,15 +1860,13 @@ export default function MapScreen() {
                   onPress={() => handleMarkerPress(station)}
                   anchor={{ x: 0.5, y: 1 }}
                   zIndex={selectedStation?.id === station.id ? 999 : 0}
+                  // Native marker — bitmap goes straight to the platform's
+                  // marker renderer; iOS == Android, no view-child quirks.
+                  image={pinAssetFor(station.type)}
+                  tracksViewChanges={false}
                   // @ts-ignore - custom prop for clustering reduction
                   availableCount={availableCount}
-                >
-                  <MapPinContent
-                    station={station}
-                    availableCount={availableCount}
-                    isSelected={selectedStation?.id === station.id}
-                  />
-                </Marker>
+                />
               );
             })}
           </ClusteredMapView>
