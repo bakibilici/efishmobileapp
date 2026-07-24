@@ -2,14 +2,15 @@ export const PREDEFINED_USER_INTERESTS = [
   "Kahve",
   "Yemek",
   "Spor",
-  "Muzik",
+  "Müzik",
   "Manzara",
-  "Alisveris",
-  "Tatli",
+  "Alışveriş",
+  "Tatlı",
   "Sessiz mola",
-  "Yuruyus",
+  "Yürüyüş",
   "Ailece rota",
+  "Çocuk dostu mola",
 ] as const;
 
 export const USER_INTERESTS_NOTE =
-  "İlgi alanlarınız siz uygulamayı kullandığınız surece AI ile işaretlenir ve üretilir.";
+  "İlgi alanlarınız siz uygulamayı kullandığınız sürece AI ile işaretlenir ve üretilir.";

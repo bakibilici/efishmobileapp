@@ -1,10 +1,10 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ActivityState } from "./ActivityStateMachine";
 import {
   DriveSessionHistoryStorage,
   StoredDriveSessionRecord,
 } from "./driveSessionHistory";
 import { decodePolyline } from "./GoogleMapsService";
+import { LocalUserStorage } from "./localUserStorage";
 
 export enum DriveSessionState {
   IDLE = "IDLE",
@@ -20,9 +20,12 @@ export enum DriveSessionState {
   NAVIGATION_ONLY = "NAVIGATION_ONLY", // Passive navigation state (UI only, voice off)
 }
 
+const DEFAULT_ROUTE_START_BATTERY = 75;
+const DEFAULT_ROUTE_ARRIVAL_BATTERY = 10;
+
 /** Location entry from the Electrip backend route plan. */
 export interface RoutePlanLocation {
-  type: 'origin' | 'station' | 'destination';
+  type: "origin" | "station" | "destination";
   name: string;
   coordinates: { lat: string; lon: string };
   travel_duration: number;
@@ -39,6 +42,23 @@ export interface RoutePlanLocation {
   hpc_count?: number;
   max_power?: number;
   charge_duration?: number;
+  interest_highlight?: RoutePlanInterestHighlight;
+}
+
+export interface RoutePlanInterestHighlight {
+  id: string;
+  interestKey: string;
+  interestLabel: string;
+  icon: string;
+  shortLabel: string;
+  title: string;
+  message: string;
+  stationName: string;
+  /** Server gateway (snake_case mapped): nearby POI label */
+  poiName?: string;
+  poiCategory?: string;
+  distanceM?: number;
+  stationIndex?: number;
 }
 
 /** Full Electrip backend route plan data (cleaned, no polyline/spans). */
@@ -58,12 +78,15 @@ export interface RoutePlanData {
     destination: string;
     stops: string[];
   };
+  interest_highlights?: RoutePlanInterestHighlight[];
+  route_optimization_summary?: string;
 }
 
 export interface DriveSessionContext {
   sessionId: string;
   startTime: number;
   history: any[]; // Placeholder for AI conversation history
+  isPreviewMode?: boolean;
   route?: {
     routeId?: string;
     origin: { latitude: number; longitude: number };
@@ -91,14 +114,16 @@ interface RestoreDriveSessionOptions {
   reconnectVoice?: boolean;
 }
 
-const STORAGE_KEY_BATTERY_PREFS = 'drive_session_battery_prefs';
-
 class DriveSessionStoreImpl {
   private currentState: DriveSessionState = DriveSessionState.IDLE;
   private context: DriveSessionContext | null = null;
+  private routePlanSheetIndex = -1;
+  /** Survives endSession(null context); kept in sync with AsyncStorage + context */
+  private persistedBatteryPrefs: { start: number; arrival: number } | null =
+    null;
   private listeners: Set<(state: DriveSessionState) => void> = new Set();
   private pendingVoiceReconnect = false;
-  
+
   // Timer for end-drive confirmation
   private endDriveTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly END_DRIVE_THRESHOLD_MS = 30000; // 30 seconds of inactivity before prompting
@@ -108,27 +133,23 @@ class DriveSessionStoreImpl {
       sessionId: "initial",
       startTime: Date.now(),
       history: [],
-      userStartBattery: 100,
-      userArrivalBattery: 80,
+      userStartBattery: DEFAULT_ROUTE_START_BATTERY,
+      userArrivalBattery: DEFAULT_ROUTE_ARRIVAL_BATTERY,
     };
     this.initBatteryPreferences();
   }
 
   private async initBatteryPreferences() {
-    try {
-      const saved = await AsyncStorage.getItem(STORAGE_KEY_BATTERY_PREFS);
-      if (saved) {
-        const { start, arrival } = JSON.parse(saved);
-        if (this.context) {
-          this.context = {
-            ...this.context,
-            userStartBattery: start,
-            userArrivalBattery: arrival,
-          };
-        }
-      }
-    } catch (e) {
-      console.warn('Failed to load battery preferences', e);
+    this.persistedBatteryPrefs = {
+      start: DEFAULT_ROUTE_START_BATTERY,
+      arrival: DEFAULT_ROUTE_ARRIVAL_BATTERY,
+    };
+    if (!this.persistedBatteryPrefs && this.context) {
+      this.persistedBatteryPrefs = {
+        start: this.context.userStartBattery ?? DEFAULT_ROUTE_START_BATTERY,
+        arrival:
+          this.context.userArrivalBattery ?? DEFAULT_ROUTE_ARRIVAL_BATTERY,
+      };
     }
     this.notifyListeners();
   }
@@ -141,18 +162,32 @@ class DriveSessionStoreImpl {
     return this.context;
   }
 
-  public onStateChange(listener: (state: DriveSessionState) => void): () => void {
+  public getRoutePlanSheetIndex(): number {
+    return this.routePlanSheetIndex;
+  }
+
+  public setRoutePlanSheetIndex(index: number) {
+    if (this.routePlanSheetIndex === index) return;
+    this.routePlanSheetIndex = index;
+    this.notifyListeners();
+  }
+
+  public onStateChange(
+    listener: (state: DriveSessionState) => void,
+  ): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
   public startPrompt() {
     // If we're already driving or ending, don't re-prompt
-    if (this.currentState === DriveSessionState.CAR_SESSION_ACTIVE ||
-        this.currentState === DriveSessionState.CAR_SESSION_COLLAPSED) {
+    if (
+      this.currentState === DriveSessionState.CAR_SESSION_ACTIVE ||
+      this.currentState === DriveSessionState.CAR_SESSION_COLLAPSED
+    ) {
       return;
     }
-    
+
     // Auto-transition to ACTIVE if prompt was called — user preferences are now handled in settings
     this.startSession();
   }
@@ -162,9 +197,16 @@ class DriveSessionStoreImpl {
       sessionId: Math.random().toString(36).substring(7),
       startTime: Date.now(),
       history: [],
+      isPreviewMode: false,
       route,
-      userStartBattery: this.context?.userStartBattery || 100,
-      userArrivalBattery: this.context?.userArrivalBattery || 80,
+      userStartBattery:
+        this.context?.userStartBattery ??
+        this.persistedBatteryPrefs?.start ??
+        DEFAULT_ROUTE_START_BATTERY,
+      userArrivalBattery:
+        this.context?.userArrivalBattery ??
+        this.persistedBatteryPrefs?.arrival ??
+        DEFAULT_ROUTE_ARRIVAL_BATTERY,
     };
     this.pendingVoiceReconnect = false;
     this.setState(DriveSessionState.CAR_SESSION_ACTIVE);
@@ -188,21 +230,21 @@ class DriveSessionStoreImpl {
         userArrivalBattery: arrival,
       };
     }
-    
-    try {
-      await AsyncStorage.setItem(STORAGE_KEY_BATTERY_PREFS, JSON.stringify({ start, arrival }));
-    } catch (e) {
-      console.warn('Failed to save battery preferences', e);
-    }
-    
+    this.persistedBatteryPrefs = { start, arrival };
     this.persistCurrentSession();
     this.notifyListeners();
   }
 
   public getBatteryPreferences() {
     return {
-      start: this.context?.userStartBattery ?? 100,
-      arrival: this.context?.userArrivalBattery ?? 80,
+      start:
+        this.context?.userStartBattery ??
+        this.persistedBatteryPrefs?.start ??
+        DEFAULT_ROUTE_START_BATTERY,
+      arrival:
+        this.context?.userArrivalBattery ??
+        this.persistedBatteryPrefs?.arrival ??
+        DEFAULT_ROUTE_ARRIVAL_BATTERY,
     };
   }
 
@@ -222,17 +264,18 @@ class DriveSessionStoreImpl {
     this.setState(state);
   }
 
-  public updateRouteFromSocket(data: { 
-    routeId: string; 
-    polyline: string | { latitude: number; longitude: number }[]; 
+  public updateRouteFromSocket(data: {
+    routeId: string;
+    polyline: string | { latitude: number; longitude: number }[];
     summary: { duration: number; distance: number };
     steps: any[];
   }) {
     if (this.context) {
       // If polyline comes as a string (encoded), decode it immediately for consistent storage
-      const decodedPolyline = typeof data.polyline === 'string' 
-        ? decodePolyline(data.polyline) 
-        : data.polyline;
+      const decodedPolyline =
+        typeof data.polyline === "string"
+          ? decodePolyline(data.polyline)
+          : data.polyline;
 
       this.context = {
         ...this.context,
@@ -241,7 +284,7 @@ class DriveSessionStoreImpl {
           routeId: data.routeId,
           polyline: decodedPolyline,
           summary: data.summary,
-        } as any
+        } as any,
       };
       this.persistCurrentSession();
       this.notifyListeners();
@@ -265,7 +308,7 @@ class DriveSessionStoreImpl {
           stops: data.stops,
           polyline: data.polyline,
           summary: data.summary,
-        }
+        },
       };
       this.persistCurrentSession();
       this.notifyListeners();
@@ -276,7 +319,7 @@ class DriveSessionStoreImpl {
     if (this.context) {
       this.context = {
         ...this.context,
-        routePlanData: data
+        routePlanData: data,
       };
       console.log("[DriveSessionStore] 📋 Route plan data set:", data.summary);
       this.persistCurrentSession();
@@ -292,17 +335,30 @@ class DriveSessionStoreImpl {
     if (this.context) {
       this.context = {
         ...this.context,
-        isNavigationActive: true
+        isNavigationActive: true,
       };
       this.persistCurrentSession();
       this.notifyListeners();
     }
   }
 
+  public exitPreviewMode() {
+    if (!this.context?.isPreviewMode) return;
+
+    this.context = {
+      ...this.context,
+      isPreviewMode: false,
+    };
+
+    this.persistCurrentSession();
+    this.notifyListeners();
+  }
+
   public endSession() {
     this.persistCurrentSession({ endedAt: Date.now() });
     this.currentState = DriveSessionState.IDLE;
     this.context = null;
+    this.routePlanSheetIndex = -1;
     this.pendingVoiceReconnect = false;
     this.clearEndDriveTimer();
     this.notifyListeners();
@@ -314,6 +370,7 @@ class DriveSessionStoreImpl {
   ) {
     const restoredContext = this.buildRestoredContext(record);
     this.context = restoredContext;
+    this.routePlanSheetIndex = -1;
     this.pendingVoiceReconnect = !!options.reconnectVoice;
     this.clearEndDriveTimer();
     this.setState(
@@ -345,7 +402,11 @@ class DriveSessionStoreImpl {
 
   public cancelEndConfirmation() {
     if (this.currentState === DriveSessionState.ENDING_DRIVE_CONFIRMATION) {
-      this.setState(DriveSessionState.CAR_SESSION_ACTIVE);
+      this.setState(
+        this.context?.isPreviewMode
+          ? DriveSessionState.NAVIGATION_ONLY
+          : DriveSessionState.CAR_SESSION_ACTIVE,
+      );
     }
   }
 
@@ -354,6 +415,18 @@ class DriveSessionStoreImpl {
    * Logic for delayed end-drive confirmation.
    */
   public handleActivityChange(newState: ActivityState) {
+    if (this.context?.isPreviewMode) {
+      if (newState === ActivityState.CAR) {
+        this.context = {
+          ...this.context,
+          isPreviewMode: false,
+        };
+        this.persistCurrentSession();
+        this.notifyListeners();
+      }
+      return;
+    }
+
     if (newState !== ActivityState.CAR && this.isSessionActive()) {
       // Start timer to confirm if drive ended
       if (!this.endDriveTimer) {
@@ -379,7 +452,7 @@ class DriveSessionStoreImpl {
       DriveSessionState.AI_ERROR,
       DriveSessionState.PLANNING_ROUTE,
       DriveSessionState.ENDING_DRIVE_CONFIRMATION,
-      DriveSessionState.NAVIGATION_ONLY
+      DriveSessionState.NAVIGATION_ONLY,
     ].includes(this.currentState);
   }
 
@@ -405,25 +478,27 @@ class DriveSessionStoreImpl {
       sessionId: record.sessionId,
       startTime: rawContext.startTime || record.startedAt || Date.now(),
       history: Array.isArray(rawContext.history) ? rawContext.history : [],
+      isPreviewMode: true,
       route: restoredRoute,
       routePlanData: rawContext.routePlanData,
       isNavigationActive:
         rawContext.isNavigationActive ??
         !!(rawContext.routePlanData || rawContext.route),
       userStartBattery:
-        rawContext.userStartBattery ?? this.context?.userStartBattery ?? 100,
+        rawContext.userStartBattery ??
+        this.context?.userStartBattery ??
+        this.persistedBatteryPrefs?.start ??
+        DEFAULT_ROUTE_START_BATTERY,
       userArrivalBattery:
-        rawContext.userArrivalBattery ?? this.context?.userArrivalBattery ?? 80,
+        rawContext.userArrivalBattery ??
+        this.context?.userArrivalBattery ??
+        this.persistedBatteryPrefs?.arrival ??
+        DEFAULT_ROUTE_ARRIVAL_BATTERY,
     };
   }
 
-  private getSessionSnapshot(
-    options: PersistSessionOptions = {},
-  ) {
-    if (
-      !this.context ||
-      (!this.context.route && !this.context.routePlanData)
-    ) {
+  private getSessionSnapshot(options: PersistSessionOptions = {}) {
+    if (!this.context || (!this.context.route && !this.context.routePlanData)) {
       return null;
     }
 
@@ -472,11 +547,19 @@ class DriveSessionStoreImpl {
   private persistCurrentSession(options: PersistSessionOptions = {}) {
     const snapshot = this.getSessionSnapshot(options);
     if (!snapshot) return;
-    void DriveSessionHistoryStorage.upsertSession(snapshot);
+    void (async () => {
+      const userId = await LocalUserStorage.getCurrentUserId();
+      if (!userId) return;
+
+      await DriveSessionHistoryStorage.upsertSession({
+        ...snapshot,
+        userId,
+      });
+    })();
   }
 
   private notifyListeners() {
-    this.listeners.forEach(l => l(this.currentState));
+    this.listeners.forEach((l) => l(this.currentState));
   }
 
   private clearEndDriveTimer() {

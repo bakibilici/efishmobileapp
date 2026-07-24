@@ -76,8 +76,8 @@ export function DrivingBatterySettingsModal() {
   const [isVisible, setIsVisible] = useState(false);
   
   // Battery preferences state
-  const [startBattery, setStartBattery] = useState(100);
-  const [arrivalBattery, setArrivalBattery] = useState(80);
+  const [startBattery, setStartBattery] = useState(75);
+  const [arrivalBattery, setArrivalBattery] = useState(10);
   
   const scale = useSharedValue(0.9);
   const opacity = useSharedValue(0);
@@ -90,6 +90,9 @@ export function DrivingBatterySettingsModal() {
   useEffect(() => {
     const unsub = DriveSessionStore.onStateChange((state) => {
       if (state === DriveSessionState.PROMPTING) {
+        const p = DriveSessionStore.getBatteryPreferences();
+        setStartBattery(p.start);
+        setArrivalBattery(p.arrival);
         setIsVisible(true);
         opacity.value = withTiming(1, { duration: 500, easing: Easing.out(Easing.quad) });
         scale.value = withTiming(1, { duration: 600, easing: Easing.out(Easing.exp) });

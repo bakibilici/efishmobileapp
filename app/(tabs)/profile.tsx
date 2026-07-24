@@ -49,7 +49,14 @@ export default function ProfileScreen() {
       let isMounted = true;
 
       const loadStats = async () => {
-        const sessions = await DriveSessionHistoryStorage.listSessions();
+        if (!user?.id) {
+          if (isMounted) {
+            setSessionCount(0);
+          }
+          return;
+        }
+
+        const sessions = await DriveSessionHistoryStorage.listSessions(user.id);
         if (!isMounted) return;
         setSessionCount(sessions.length);
       };
@@ -59,14 +66,14 @@ export default function ProfileScreen() {
       return () => {
         isMounted = false;
       };
-    }, []),
+    }, [user?.id]),
   );
 
   const handleLogout = async () => {
-    Alert.alert("Cikis yapilsin mi?", "Demo oturumu kapatilacak.", [
-      { text: "Vazgec", style: "cancel" },
+    Alert.alert("Çıkış yapılsın mı?", "Demo oturumu kapatılacak.", [
+      { text: "Vazgeç", style: "cancel" },
       {
-        text: "Cikis Yap",
+        text: "Çıkış Yap",
         style: "destructive",
         onPress: async () => {
           await logout();
@@ -78,13 +85,13 @@ export default function ProfileScreen() {
   const handleSaveProfile = async () => {
     if (!user) return;
     if (!firstNameDraft.trim() || !lastNameDraft.trim()) {
-      Alert.alert("Eksik bilgi", "Ad ve soyad alanlarini doldurun.");
+      Alert.alert("Eksik bilgi", "Ad ve soyad alanlarını doldurun.");
       return;
     }
 
     const cleanedPhone = phoneDraft.replace(/\D/g, "");
     if (cleanedPhone.length > 0 && cleanedPhone.length !== 10) {
-      Alert.alert("Gecersiz numara", "Telefon numarasi 10 haneli olmali.");
+      Alert.alert("Geçersiz numara", "Telefon numarası 10 haneli olmalı.");
       return;
     }
 
@@ -104,7 +111,7 @@ export default function ProfileScreen() {
       setPhoneDraft("");
     } catch (error) {
       console.error(error);
-      Alert.alert("Hata", "Profil guncellenemedi.");
+      Alert.alert("Hata", "Profil güncellenemedi.");
     }
   };
 
@@ -217,7 +224,7 @@ export default function ProfileScreen() {
               <SettingsItem
                 icon="person-outline"
                 title="My Profile"
-                subtitle="Ad, soyad ve telefon bilgilerinizi duzenleyin"
+                subtitle="Ad, soyad ve telefon bilgilerinizi düzenleyin"
                 color="#0093C9"
                 isFirst
                 onPress={() => setProfileModalVisible(true)}
@@ -229,7 +236,7 @@ export default function ProfileScreen() {
                 subtitle={
                   user.interests.length > 0
                     ? user.interests.join(", ")
-                    : "Atlas icin ilgi alanlari secin"
+                    : "Atlas için ilgi alanları seçin"
                 }
                 color="#7C4DFF"
                 isLast
@@ -287,30 +294,6 @@ export default function ProfileScreen() {
           <AppearanceSelector
             preference={themePreference}
             onChange={setThemePreference}
-            colors={colors}
-          />
-          <SettingsItem
-            icon="hardware-chip-outline"
-            title="Devices"
-            subtitle="Manage connected devices"
-            color="#007AFF"
-            onPress={() => router.push("/devices")}
-            colors={colors}
-          />
-          <SettingsItem
-            icon="car-sport-outline"
-            title="My Vehicles"
-            subtitle="Manage your vehicles"
-            color="#AF52DE"
-            onPress={() => router.push("/vehicles")}
-            colors={colors}
-          />
-          <SettingsItem
-            icon="card-outline"
-            title="Payment Methods"
-            subtitle="Cards and billing"
-            color="#0093C9"
-            onPress={() => router.push("/payment-methods")}
             colors={colors}
           />
           <SettingsItem
@@ -493,7 +476,7 @@ function EditProfileModal({
                 <Text
                   style={[styles.modalSecondaryText, { color: colors.text }]}
                 >
-                  Vazgec
+                  Vazgeç
                 </Text>
               </Pressable>
             </View>
@@ -591,7 +574,7 @@ function EditInterestsModal({
                 <Text
                   style={[styles.modalSecondaryText, { color: colors.text }]}
                 >
-                  Vazgec
+                  Vazgeç
                 </Text>
               </Pressable>
             </View>

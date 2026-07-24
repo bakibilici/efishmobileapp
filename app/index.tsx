@@ -136,6 +136,11 @@ export default function LoginScreen() {
         return;
       }
 
+      // Always resolve login/register against the entered phone number,
+      // not a potentially stale previously-authenticated local session.
+      setUser(null);
+      await LocalUserStorage.clearCurrentUserId();
+
       const existingUser = await LocalUserStorage.getUserByPhone(
         cleanPhone,
         countryCode.replace("+", ""),
@@ -499,7 +504,7 @@ export default function LoginScreen() {
                       { color: colors.textSecondary },
                     ]}
                   >
-                    Bu demo icin SMS gonderilmiyor. 111111 koduyla devam edebilirsiniz.
+                    Bu demo için SMS gönderilmiyor. 111111 koduyla devam edebilirsiniz.
                   </Text>
 
                   <Pressable

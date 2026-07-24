@@ -1,7 +1,4 @@
-import {
-  DemoUserProfile,
-  LocalUserStorage,
-} from "@/services/localUserStorage";
+import { DemoUserProfile, LocalUserStorage } from "@/services/localUserStorage";
 import { clearTokens } from "@/services/tokenStorage";
 import * as Sentry from "@sentry/react-native";
 import { useRouter } from "expo-router";
@@ -41,6 +38,7 @@ export const UserProvider = ({ children }: { children: React.ReactNode }) => {
       void LocalUserStorage.setCurrentUserId(newUser.id);
     } else {
       Sentry.setUser(null);
+      void LocalUserStorage.clearCurrentUserId();
     }
     hasInitialized.current = true;
   };

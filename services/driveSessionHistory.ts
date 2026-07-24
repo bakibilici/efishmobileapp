@@ -3,6 +3,7 @@ import * as SQLite from "expo-sqlite";
 const DB_NAME = "atlas_drive_sessions.db";
 
 export interface DriveSessionSnapshotInput {
+  userId: number;
   sessionId: string;
   title: string;
   originName?: string | null;
@@ -19,6 +20,7 @@ export interface DriveSessionSnapshotInput {
 
 interface DriveSessionRow {
   id: number;
+  user_id: number;
   session_id: string;
   title: string | null;
   origin_name: string | null;
@@ -35,6 +37,7 @@ interface DriveSessionRow {
 
 export interface StoredDriveSessionRecord {
   id: number;
+  userId: number;
   sessionId: string;
   title: string;
   originName: string | null;
@@ -52,6 +55,7 @@ export interface StoredDriveSessionRecord {
 class DriveSessionHistoryStorageImpl {
   private db: SQLite.SQLiteDatabase | null = null;
   private isInitialized = false;
+  private hasInitFinished = false;
 
   constructor() {
     void this.init();
@@ -63,6 +67,7 @@ class DriveSessionHistoryStorageImpl {
       await this.db.execAsync(`
         CREATE TABLE IF NOT EXISTS drive_sessions (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL DEFAULT 0,
           session_id TEXT NOT NULL UNIQUE,
           title TEXT,
           origin_name TEXT,
@@ -80,18 +85,29 @@ class DriveSessionHistoryStorageImpl {
         CREATE INDEX IF NOT EXISTS idx_drive_sessions_updated_at
           ON drive_sessions(updated_at DESC);
       `);
+      await this.db.execAsync(`
+        ALTER TABLE drive_sessions ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0;
+      `).catch(() => {
+        // Column already exists.
+      });
+      await this.db.execAsync(`
+        CREATE INDEX IF NOT EXISTS idx_drive_sessions_user_updated
+          ON drive_sessions(user_id, updated_at DESC);
+      `);
       this.isInitialized = true;
       console.log("[DriveSessionHistoryStorage] Initialized");
     } catch (error) {
       console.error("[DriveSessionHistoryStorage] Init error:", error);
+    } finally {
+      this.hasInitFinished = true;
     }
   }
 
   private async waitForInit() {
-    if (this.isInitialized) return;
+    if (this.isInitialized || this.hasInitFinished) return;
     await new Promise<void>((resolve) => {
       const check = setInterval(() => {
-        if (this.isInitialized) {
+        if (this.isInitialized || this.hasInitFinished) {
           clearInterval(check);
           resolve();
         }
@@ -103,6 +119,7 @@ class DriveSessionHistoryStorageImpl {
     try {
       return {
         id: row.id,
+        userId: row.user_id,
         sessionId: row.session_id,
         title: row.title || "Kaydedilen rota",
         originName: row.origin_name,
@@ -139,6 +156,7 @@ class DriveSessionHistoryStorageImpl {
       await this.db.runAsync(
         `
           INSERT INTO drive_sessions (
+            user_id,
             session_id,
             title,
             origin_name,
@@ -152,8 +170,9 @@ class DriveSessionHistoryStorageImpl {
             station_count,
             route_context_json
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(session_id) DO UPDATE SET
+            user_id = excluded.user_id,
             title = excluded.title,
             origin_name = excluded.origin_name,
             destination_name = excluded.destination_name,
@@ -167,6 +186,7 @@ class DriveSessionHistoryStorageImpl {
             route_context_json = excluded.route_context_json
         `,
         [
+          snapshot.userId,
           snapshot.sessionId,
           title,
           snapshot.originName ?? null,
@@ -186,7 +206,9 @@ class DriveSessionHistoryStorageImpl {
     }
   }
 
-  public async listSessions(): Promise<StoredDriveSessionRecord[]> {
+  public async listSessions(
+    userId: number,
+  ): Promise<StoredDriveSessionRecord[]> {
     if (!this.isInitialized) await this.waitForInit();
     if (!this.db) return [];
 
@@ -195,8 +217,10 @@ class DriveSessionHistoryStorageImpl {
         `
           SELECT *
           FROM drive_sessions
+          WHERE user_id = ?
           ORDER BY updated_at DESC
         `,
+        [userId],
       );
 
       return rows
@@ -210,6 +234,7 @@ class DriveSessionHistoryStorageImpl {
 
   public async getSessionBySessionId(
     sessionId: string,
+    userId: number,
   ): Promise<StoredDriveSessionRecord | null> {
     if (!this.isInitialized) await this.waitForInit();
     if (!this.db) return null;
@@ -219,10 +244,10 @@ class DriveSessionHistoryStorageImpl {
         `
           SELECT *
           FROM drive_sessions
-          WHERE session_id = ?
+          WHERE session_id = ? AND user_id = ?
           LIMIT 1
         `,
-        [sessionId],
+        [sessionId, userId],
       );
       if (!row) return null;
       return this.hydrateRow(row);
@@ -233,5 +258,4 @@ class DriveSessionHistoryStorageImpl {
   }
 }
 
-export const DriveSessionHistoryStorage =
-  new DriveSessionHistoryStorageImpl();
+export const DriveSessionHistoryStorage = new DriveSessionHistoryStorageImpl();

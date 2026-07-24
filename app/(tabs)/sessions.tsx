@@ -21,6 +21,7 @@ import {
   DriveSessionHistoryStorage,
   StoredDriveSessionRecord,
 } from "@/services/driveSessionHistory";
+import { useUser } from "@/context/UserContext";
 import { useTheme } from "@/context/ThemeContext";
 
 const formatRelativeTime = (timestamp: number) => {
@@ -62,6 +63,7 @@ const formatDistance = (distanceKm: number | null) => {
 export default function SessionsScreen() {
   const router = useRouter();
   const { colors, themeScheme } = useTheme();
+  const { user } = useUser();
   const isDark = themeScheme === "dark";
 
   const [sessions, setSessions] = useState<StoredDriveSessionRecord[]>([]);
@@ -81,14 +83,19 @@ export default function SessionsScreen() {
       }
 
       try {
-        const rows = await DriveSessionHistoryStorage.listSessions();
+        if (!user?.id) {
+          setSessions([]);
+          return;
+        }
+
+        const rows = await DriveSessionHistoryStorage.listSessions(user.id);
         setSessions(rows);
       } finally {
         setIsLoading(false);
         setIsRefreshing(false);
       }
     },
-    [],
+    [user?.id],
   );
 
   useEffect(() => {

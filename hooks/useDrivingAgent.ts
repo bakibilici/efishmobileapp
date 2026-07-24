@@ -1,16 +1,25 @@
 import type { DisconnectionDetails } from "@elevenlabs/client";
 import { useConversation } from "@elevenlabs/react-native";
+import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from "expo-av";
+import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Platform } from "react-native";
 import { useUser } from "../context/UserContext";
 import { ActivityState } from "../services/ActivityStateMachine";
+import type { RoutePlanData } from "../services/DriveSessionStore";
 import {
   DriveSessionState,
   DriveSessionStore,
 } from "../services/DriveSessionStore";
 import { fetchDirections } from "../services/GoogleMapsService";
 import { socketService } from "../services/SocketService";
+import { personalizeRoutePlan } from "../services/routePersonalization";
+import {
+  getRoutePlanGatewayUrl,
+  isRoutePlanGatewayUrl,
+  normalizeRoutePlanFromGateway,
+} from "../services/routePlanGateway";
 import { useActivityState } from "./useActivityState";
 import { useChargingSimulation } from "./useChargingSimulation";
 
@@ -22,6 +31,8 @@ const GOOGLE_MAPS_API_KEY =
   Platform.OS === "ios"
     ? process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY
     : process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY;
+
+const ROUTE_PLANNING_HOLD_SOUND = require("../assets/audio/lantern-light-bistro.mp3");
 
 console.log("[useDrivingAgent] 🔑 AGENT_ID =", AGENT_ID);
 console.log(
@@ -51,6 +62,10 @@ export function useDrivingAgent() {
   const blockAutoVoiceRestartRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const planningSoundRef = useRef<Audio.Sound | null>(null);
+  const planningFeedbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  );
   const MAX_RECONNECT_ATTEMPTS = 3;
   const [toolCalls, setToolCalls] = useState<AgentToolCall[]>([]);
   const [lastToolEvent, setLastToolEvent] = useState<AgentToolCall | null>(
@@ -65,12 +80,63 @@ export function useDrivingAgent() {
     );
   }, []);
 
+  const stopPlanningHoldSound = useCallback(async () => {
+    try {
+      if (planningFeedbackTimerRef.current) {
+        clearInterval(planningFeedbackTimerRef.current);
+        planningFeedbackTimerRef.current = null;
+      }
+      const sound = planningSoundRef.current;
+      planningSoundRef.current = null;
+      if (!sound) return;
+      await sound.stopAsync();
+      await sound.unloadAsync();
+    } catch (error) {
+      console.error("[useDrivingAgent] Failed to stop planning hold sound:", error);
+    }
+  }, []);
+
+  const startPlanningHoldSound = useCallback(async () => {
+    try {
+      await stopPlanningHoldSound();
+      await Haptics.selectionAsync();
+      planningFeedbackTimerRef.current = setInterval(() => {
+        void Haptics.selectionAsync();
+      }, 2600);
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        interruptionModeIOS: InterruptionModeIOS.MixWithOthers,
+        interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
+        shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: false,
+      });
+      const { sound } = await Audio.Sound.createAsync(
+        ROUTE_PLANNING_HOLD_SOUND,
+        {
+          shouldPlay: true,
+          isLooping: true,
+          volume: 0.52,
+          progressUpdateIntervalMillis: 1000,
+        },
+      );
+      planningSoundRef.current = sound;
+    } catch (error) {
+      console.error(
+        "[useDrivingAgent] Failed to start planning hold sound:",
+        error,
+      );
+    }
+  }, [stopPlanningHoldSound]);
+
   const stopVoiceSessionPreservingDrive = useCallback(async () => {
     try {
       // Agent explicitly ended the voice leg of the drive. Prevent any
       // auto-reconnect and move the UI back to passive navigation.
       blockAutoVoiceRestartRef.current = true;
       sessionStartedRef.current = false;
+      await stopPlanningHoldSound();
       await conversation.endSession();
     } catch (error) {
       console.error(
@@ -80,10 +146,11 @@ export function useDrivingAgent() {
     } finally {
       setPassiveDriveState();
     }
-  }, [conversation, setPassiveDriveState]);
+  }, [conversation, setPassiveDriveState, stopPlanningHoldSound]);
 
   const stopAgentSession = useCallback(async () => {
     try {
+      await stopPlanningHoldSound();
       await conversation.endSession();
       sessionStartedRef.current = false;
       manuallyEndedRef.current = true;
@@ -92,7 +159,7 @@ export function useDrivingAgent() {
     } catch (error) {
       console.error("[useDrivingAgent] Failed to stop agent session:", error);
     }
-  }, [conversation]);
+  }, [conversation, stopPlanningHoldSound]);
 
   const startAgentSession = useCallback(async () => {
     blockAutoVoiceRestartRef.current = false;
@@ -113,13 +180,10 @@ export function useDrivingAgent() {
 
       // 2. Prepare dynamic variables for Atlas
       const batteryPrefs = DriveSessionStore.getBatteryPreferences();
+      const resolvedStartBattery = batteryPrefs.start ?? 75;
       const currentDriveContext = DriveSessionStore.getContext();
       const existingRoutePlan = currentDriveContext?.routePlanData;
       const userInterests = user?.interests ?? [];
-      const userDisplayName = [user?.first_name, user?.last_name]
-        .filter(Boolean)
-        .join(" ")
-        .trim();
       const destinationLocation =
         existingRoutePlan?.locations.find(
           (location) => location.type === "destination",
@@ -133,39 +197,12 @@ export function useDrivingAgent() {
         : currentDriveContext?.route?.destination
           ? `${currentDriveContext.route.destination.latitude},${currentDriveContext.route.destination.longitude}`
           : "";
-      const activeRouteContext = existingRoutePlan
-        ? JSON.stringify({
-            destination: activeDestinationName,
-            summary: existingRoutePlan.summary,
-            waypoints: existingRoutePlan.waypoints,
-            stationCount: existingRoutePlan.summary.total_station_count,
-          })
-        : "";
       const dynamicVariables = {
-        origin_coords: locationString,
-        min_battery_percent: 10,
-        max_battery_percent: 100,
-        start_battery_percent:
-          batteryPrefs.start || Math.round(charging.batteryLevel || 100),
-        started_battery:
-          batteryPrefs.start || Math.round(charging.batteryLevel || 100),
-        destination_battery_target: batteryPrefs.arrival || 80,
-        target_battery: batteryPrefs.arrival || 80,
-        planning_timestamp: Math.floor(Date.now() / 1000).toString(),
-        destination_name_text: activeDestinationName,
+        username: user?.first_name || "Sürücü",
+        started_battery: resolvedStartBattery,
         destination_coords: activeDestinationCoords,
         destination_label_text: activeDestinationName,
-        active_route_present: existingRoutePlan ? "true" : "false",
-        active_route_context: activeRouteContext,
-        active_route_destination: activeDestinationName,
-        active_route_summary: existingRoutePlan
-          ? `${existingRoutePlan.summary.total_travel_length} km, ${existingRoutePlan.summary.total_travel_duration} dk`
-          : "",
-        driver_name: userDisplayName,
-        driver_interests: userInterests.join(", "),
-        driver_traits_context: userInterests.length
-          ? `${userDisplayName || "Kullanici"} su ilgi alanlarina sahip: ${userInterests.join(", ")}.`
-          : "",
+        destination_name_text: activeDestinationName,
       };
 
       // 3. Start ElevenLabs session with tool callbacks
@@ -189,6 +226,7 @@ export function useDrivingAgent() {
               params,
             );
             DriveSessionStore.setAiState(DriveSessionState.PLANNING_ROUTE);
+            await startPlanningHoldSound();
 
             // Helper to ensure we always have "lat,lon" string
             const formatCoords = (val: any) => {
@@ -244,45 +282,34 @@ export function useDrivingAgent() {
               return cleaned;
             };
 
-            const originCoords =
-              formatCoords(params.origin) ||
-              formatCoords(params.origin_coords) ||
-              currentLocationRef.current;
+            const originCoords = currentLocationRef.current;
             const destinationCoords =
               formatCoords(params.destination) ||
               formatCoords(params.destination_coords) ||
               "";
 
-            // 1. Prepare Query Params for Electrip Backend
-            const baseUrl =
-              "https://electrip-backend.electripglobal.com/v1.0/geo";
+            // 1. Prepare Query Params (Electrip geo or local gateway — same param names)
+            const baseUrl = getRoutePlanGatewayUrl();
+            const useGateway = isRoutePlanGatewayUrl(baseUrl);
             const paramsObj: Record<string, string> = {
-              vehicle: "599", // Demo ID
+              vehicle: "599",
               origin: originCoords || "0,0",
               destination: destinationCoords || "",
               min: "10",
               max: "90",
-              started: String(
-                params.started ||
-                  params.started_battery ||
-                  params.start_battery_percent ||
-                  "60",
-              ),
+              started: String(params.started_battery ?? params.started ?? "75"),
               charge: "AC;DC",
+              avoid: "",
               mode: "normal",
-              destination_charge: String(
-                params.destination_charge ||
-                  params.target_battery ||
-                  params.destination_battery_target ||
-                  "20",
-              ),
+              via: "",
+              destination_charge: "10",
               origin_label: "Konumunuz",
               origin_name: "Konumunuz",
               destination_label: String(
-                params.destination_label || params.destination_label_text || "",
+                params.destination_label_text || params.destination_label || "",
               ),
               destination_name: String(
-                params.destination_name || params.destination_name_text || "",
+                params.destination_name_text || params.destination_name || "",
               ),
               passengers: "0",
               lang: "tr-TR",
@@ -296,6 +323,12 @@ export function useDrivingAgent() {
               JSON.stringify(paramsObj, null, 2),
             );
             const queryParams = new URLSearchParams(paramsObj);
+            if (useGateway) {
+              const interestsParam = userInterests.join(",");
+              if (interestsParam) {
+                queryParams.set("interests", interestsParam);
+              }
+            }
 
             // Set a timeout for the fetch to avoid ElevenLabs timing out on us
             const controller = new AbortController();
@@ -418,16 +451,25 @@ export function useDrivingAgent() {
                 // - Strips HERE-specific optimization fields (routeHandle, polyline, spans, refReplacements)
                 // - Keeps actions (first section full, others trimmed), locations, summary, waypoints
                 const cleanedData = cleanBackendResponse(data.data);
+                const personalizedRoutePlan: RoutePlanData = useGateway
+                  ? normalizeRoutePlanFromGateway(cleanedData as RoutePlanData)
+                  : personalizeRoutePlan(
+                      cleanedData as RoutePlanData,
+                      userInterests,
+                    );
 
                 // Store the full route plan data in the session store for the RoutePlanSheet UI
                 // This will now succeed because context was created synchronously above.
-                if (cleanedData.locations && cleanedData.summary) {
-                  DriveSessionStore.setRoutePlanData(cleanedData);
+                if (
+                  personalizedRoutePlan.locations &&
+                  personalizedRoutePlan.summary
+                ) {
+                  DriveSessionStore.setRoutePlanData(personalizedRoutePlan);
                 }
 
                 const agentResponse = JSON.stringify({
                   success: true,
-                  ...cleanedData,
+                  ...personalizedRoutePlan,
                 });
                 console.log(
                   "[useDrivingAgent] 📤 Agent response length:",
@@ -470,6 +512,7 @@ export function useDrivingAgent() {
                 error: "Sistem hatası: Rota servislerine ulaşılamıyor.",
               });
             } finally {
+              await stopPlanningHoldSound();
               // Ensure we don't get stuck in planning state if something goes wrong
               const currentState = DriveSessionStore.getState();
               if (currentState === DriveSessionState.PLANNING_ROUTE) {
@@ -490,6 +533,7 @@ export function useDrivingAgent() {
             details?.reason,
           );
           const hasRoute = !!DriveSessionStore.getRoutePlanData();
+          void stopPlanningHoldSound();
 
           // Mark session as ended
           sessionStartedRef.current = false;
@@ -514,6 +558,7 @@ export function useDrivingAgent() {
         },
         onError: (error: any) => {
           console.error("[useDrivingAgent] ⚠️ Error:", error);
+          void stopPlanningHoldSound();
           DriveSessionStore.setAiState(DriveSessionState.AI_ERROR);
         },
 
@@ -591,6 +636,7 @@ export function useDrivingAgent() {
       socketService.connect(user?.id?.toString() || "guest-user");
     } catch (error) {
       console.error("[useDrivingAgent] Failed to start agent session:", error);
+      await stopPlanningHoldSound();
       DriveSessionStore.setAiState(DriveSessionState.AI_ERROR);
     }
   }, [
@@ -598,6 +644,8 @@ export function useDrivingAgent() {
     user,
     charging.batteryLevel,
     stopVoiceSessionPreservingDrive,
+    startPlanningHoldSound,
+    stopPlanningHoldSound,
   ]);
 
   const [audioLevel, setAudioLevel] = useState(0);
@@ -653,11 +701,7 @@ export function useDrivingAgent() {
         setPassiveDriveState();
       }
     }
-  }, [
-    conversation.status,
-    conversation.isSpeaking,
-    setPassiveDriveState,
-  ]);
+  }, [conversation.status, conversation.isSpeaking, setPassiveDriveState]);
 
   // Auto-reconnect when WebRTC drops unexpectedly while still in CAR mode
   useEffect(() => {
@@ -701,6 +745,12 @@ export function useDrivingAgent() {
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     };
   }, [conversation.status, activity, startAgentSession, stopAgentSession]);
+
+  useEffect(() => {
+    return () => {
+      void stopPlanningHoldSound();
+    };
+  }, [stopPlanningHoldSound]);
 
   // Poll audio level for visualizer
   useEffect(() => {
@@ -763,10 +813,13 @@ export function useDrivingAgent() {
   return {
     status: conversation.status,
     isSpeaking: conversation.isSpeaking,
+    isMuted: conversation.isMuted,
     audioLevel,
     toolCalls,
     lastToolEvent,
     startSession: startAgentSession,
+    stopConversation: stopVoiceSessionPreservingDrive,
     stopSession: stopAgentSession,
+    setMuted: conversation.setMuted,
   };
 }

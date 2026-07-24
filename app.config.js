@@ -21,13 +21,13 @@ export default ({ config }) => ({
         "Profil fotoğrafı ve araç fotoğrafı çekebilmeniz için kameraya erişim izni gereklidir.",
     },
     supportsTablet: true,
-    bundleIdentifier: "com.tubitak.app",
+    bundleIdentifier: "com.tubitak.uptecra",
     config: {
       googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY,
     },
   },
   android: {
-    package: "com.tubitak.app",
+    package: "com.tubitak.uptecra",
     adaptiveIcon: {
       backgroundColor: "#E6F4FE",
       foregroundImage: "./assets/images/android-icon-foreground.png",
@@ -81,6 +81,9 @@ export default ({ config }) => ({
       {
         android: {
           enableJetifier: true,
+        },
+        ios: {
+          buildReactNativeFromSource: true,
         },
       },
     ],
