@@ -1,31 +1,25 @@
-import type { DisconnectionDetails } from "@elevenlabs/client";
-import { useConversation } from "@elevenlabs/react-native";
+import { AudioSession } from "@livekit/react-native";
+import * as Sentry from "@sentry/react-native";
 import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from "expo-av";
 import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
+import type { RemoteParticipant } from "livekit-client";
+import { ConnectionState, Room, RoomEvent } from "livekit-client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Platform } from "react-native";
+import { PermissionsAndroid, Platform } from "react-native";
 import { useUser } from "../context/UserContext";
 import { ActivityState } from "../services/ActivityStateMachine";
+import { AtlasTokenError, fetchAtlasToken } from "../services/AtlasTokenService";
 import type { RoutePlanData } from "../services/DriveSessionStore";
 import {
   DriveSessionState,
   DriveSessionStore,
 } from "../services/DriveSessionStore";
 import { fetchDirections } from "../services/GoogleMapsService";
-import { socketService } from "../services/SocketService";
 import { personalizeRoutePlan } from "../services/routePersonalization";
-import {
-  getRoutePlanGatewayUrl,
-  isRoutePlanGatewayUrl,
-  normalizeRoutePlanFromGateway,
-} from "../services/routePlanGateway";
+import { normalizeRoutePlanFromGateway } from "../services/routePlanGateway";
 import { useActivityState } from "./useActivityState";
 import { useChargingSimulation } from "./useChargingSimulation";
-
-const AGENT_ID =
-  process.env.EXPO_PUBLIC_ELEVENLABS_AGENT_ID ||
-  "agent_6901kmsmj9v9edc95aqhhab4t19h";
 
 const GOOGLE_MAPS_API_KEY =
   Platform.OS === "ios"
@@ -34,11 +28,21 @@ const GOOGLE_MAPS_API_KEY =
 
 const ROUTE_PLANNING_HOLD_SOUND = require("../assets/audio/lantern-light-bistro.mp3");
 
-console.log("[useDrivingAgent] 🔑 AGENT_ID =", AGENT_ID);
-console.log(
-  "[useDrivingAgent] 🔑 RAW ENV =",
-  process.env.EXPO_PUBLIC_ELEVENLABS_AGENT_ID,
-);
+/** LiveKit data-channel topics shared with the Atlas agent (atlas repo). */
+const CLIENT_TOPIC = "atlas.client";
+const TOOL_TOPIC = "atlas.tool";
+
+/** How long to wait for a GPS fix before connecting without one. */
+const GPS_FIX_TIMEOUT_MS = 3000;
+
+/** Atlas tool names → the tool keys CarModeView's TOOL_STATUS_COPY expects. */
+const ATLAS_TOOL_NAME_MAP: Record<string, string> = {
+  planEvRoute: "create_route_plan",
+  getCurrentLocation: "get_user_location",
+  endConversation: "end_call",
+};
+
+type VoiceStatus = "disconnected" | "connecting" | "connected" | "error";
 
 /** Represents a single tool call lifecycle (request → response). */
 export interface AgentToolCall {
@@ -53,31 +57,52 @@ export interface AgentToolCall {
 
 export function useDrivingAgent() {
   const activity = useActivityState();
-  const conversation = useConversation();
   const { user } = useUser();
   const charging = useChargingSimulation();
   const sessionStartedRef = useRef(false);
+  const connectingRef = useRef(false);
   const manuallyEndedRef = useRef(false);
-  /** When true, agent ended the voice session (e.g. end_call); do not auto-start or reconnect. */
+  /** When true, agent ended the voice session (e.g. farewell); do not auto-start or reconnect. */
   const blockAutoVoiceRestartRef = useRef(false);
+  /** When true, the next session is started with new_session=true (fresh, no resume). */
+  const forceFreshSessionRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const planningSoundRef = useRef<Audio.Sound | null>(null);
   const planningFeedbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
+  const roomRef = useRef<Room | null>(null);
+  const agentParticipantRef = useRef<RemoteParticipant | null>(null);
+  const gpsWatchRef = useRef<Location.LocationSubscription | null>(null);
+  const planWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Failsafe: if planEvRoute never returns a tool_end, unstick the UI. */
+  const PLAN_WATCHDOG_MS = 45000;
   const MAX_RECONNECT_ATTEMPTS = 3;
+  const [status, setStatus] = useState<VoiceStatus>("disconnected");
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
   const [toolCalls, setToolCalls] = useState<AgentToolCall[]>([]);
   const [lastToolEvent, setLastToolEvent] = useState<AgentToolCall | null>(
     null,
   );
   const currentLocationRef = useRef("0,0");
+  const userInterestsRef = useRef<string[]>([]);
+  userInterestsRef.current = user?.interests ?? [];
 
   const setPassiveDriveState = useCallback(() => {
     const hasRoute = !!DriveSessionStore.getRoutePlanData();
     DriveSessionStore.setAiState(
       hasRoute ? DriveSessionState.NAVIGATION_ONLY : DriveSessionState.IDLE,
     );
+  }, []);
+
+  const clearPlanWatchdog = useCallback(() => {
+    if (planWatchdogRef.current) {
+      clearTimeout(planWatchdogRef.current);
+      planWatchdogRef.current = null;
+    }
   }, []);
 
   const stopPlanningHoldSound = useCallback(async () => {
@@ -106,7 +131,12 @@ export function useDrivingAgent() {
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
+        // This call mutates the process-wide AVAudioSession that LiveKit
+        // configured, and nothing restores it afterwards. Leaving it false is
+        // what lets iOS tear the call's audio down the moment the screen locks
+        // — right after a route is planned, which is exactly when the driver
+        // puts the phone away. UIBackgroundModes already declares "audio".
+        staysActiveInBackground: true,
         interruptionModeIOS: InterruptionModeIOS.MixWithOthers,
         interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
         shouldDuckAndroid: false,
@@ -130,6 +160,53 @@ export function useDrivingAgent() {
     }
   }, [stopPlanningHoldSound]);
 
+  const stopGpsWatch = useCallback(() => {
+    gpsWatchRef.current?.remove();
+    gpsWatchRef.current = null;
+  }, []);
+
+  const disconnectRoom = useCallback(async () => {
+    stopGpsWatch();
+    clearPlanWatchdog();
+    const room = roomRef.current;
+    roomRef.current = null;
+    agentParticipantRef.current = null;
+    if (room) {
+      try {
+        await room.disconnect();
+      } catch (error) {
+        console.error("[useDrivingAgent] Failed to disconnect room:", error);
+      }
+    }
+    try {
+      await AudioSession.stopAudioSession();
+    } catch {
+      // Audio session may already be stopped; ignore.
+    }
+  }, [stopGpsWatch, clearPlanWatchdog]);
+
+  const publishClientMessage = useCallback((message: Record<string, unknown>) => {
+    const room = roomRef.current;
+    if (!room || room.state !== ConnectionState.Connected) return;
+    room.localParticipant
+      .publishData(new TextEncoder().encode(JSON.stringify(message)), {
+        reliable: true,
+        topic: CLIENT_TOPIC,
+      })
+      .catch((error) => {
+        console.error("[useDrivingAgent] publishData failed:", error);
+      });
+  }, []);
+
+  const publishBatterySnapshot = useCallback(() => {
+    const batteryPrefs = DriveSessionStore.getBatteryPreferences();
+    publishClientMessage({
+      type: "battery_update",
+      percent: batteryPrefs.start ?? 75,
+      charging: charging.isActive,
+    });
+  }, [publishClientMessage, charging.isActive]);
+
   const stopVoiceSessionPreservingDrive = useCallback(async () => {
     try {
       // Agent explicitly ended the voice leg of the drive. Prevent any
@@ -137,526 +214,494 @@ export function useDrivingAgent() {
       blockAutoVoiceRestartRef.current = true;
       sessionStartedRef.current = false;
       await stopPlanningHoldSound();
-      await conversation.endSession();
+      await disconnectRoom();
     } catch (error) {
       console.error(
-        "[useDrivingAgent] Failed to stop voice session after agent end_call:",
+        "[useDrivingAgent] Failed to stop voice session after agent end:",
         error,
       );
     } finally {
       setPassiveDriveState();
     }
-  }, [conversation, setPassiveDriveState, stopPlanningHoldSound]);
+  }, [disconnectRoom, setPassiveDriveState, stopPlanningHoldSound]);
 
   const stopAgentSession = useCallback(async () => {
     try {
       await stopPlanningHoldSound();
-      await conversation.endSession();
       sessionStartedRef.current = false;
       manuallyEndedRef.current = true;
-      socketService.disconnect();
+      // The drive is over; the next explicit start should be a fresh session.
+      forceFreshSessionRef.current = true;
+      await disconnectRoom();
       DriveSessionStore.endSession();
     } catch (error) {
       console.error("[useDrivingAgent] Failed to stop agent session:", error);
     }
-  }, [conversation, stopPlanningHoldSound]);
+  }, [disconnectRoom, stopPlanningHoldSound]);
+
+  /**
+   * Ingests the server-side planEvRoute result (topic atlas.tool, tool_end).
+   * The agent already fetched the Electrip gateway and stripped heavy geometry
+   * (polyline/spans), so the map polyline is re-fetched via Google Directions.
+   */
+  const ingestRoutePlanResult = useCallback(
+    (result: Record<string, any>) => {
+      const data = result?.data;
+      const sections = data?.routes?.[0]?.sections;
+      if (!result?.success || !Array.isArray(sections) || sections.length === 0) {
+        console.error(
+          "[useDrivingAgent] planEvRoute failed or returned no routes:",
+          result?.error,
+        );
+        return;
+      }
+
+      const firstSection = sections[0];
+      const lastSection = sections[sections.length - 1];
+      if (
+        !firstSection?.departure?.place?.location ||
+        !lastSection?.arrival?.place?.location
+      ) {
+        console.error("[useDrivingAgent] Route missing location data");
+        return;
+      }
+
+      const routeOrigin = {
+        latitude: firstSection.departure.place.location.lat,
+        longitude: firstSection.departure.place.location.lng,
+      };
+      const routeDestination = {
+        latitude: lastSection.arrival.place.location.lat,
+        longitude: lastSection.arrival.place.location.lng,
+      };
+      const stops: { latitude: number; longitude: number }[] = [];
+      for (let i = 0; i < sections.length - 1; i++) {
+        const stopLoc = sections[i].arrival?.place?.location;
+        if (stopLoc) {
+          stops.push({ latitude: stopLoc.lat, longitude: stopLoc.lng });
+        }
+      }
+
+      // 1. Initial synchronous session start (no road-snapped polyline yet).
+      // Ensures DriveSessionStore.context exists for setRoutePlanData and map fitting.
+      const initialRoutePayload = {
+        origin: routeOrigin,
+        destination: routeDestination,
+        stops,
+        polyline: [routeOrigin, ...stops, routeDestination],
+        summary: { duration: 0, distance: 0 },
+      };
+      if (!DriveSessionStore.getContext()) {
+        DriveSessionStore.startSession(initialRoutePayload);
+      } else {
+        DriveSessionStore.setRouteFromFrontend(initialRoutePayload);
+      }
+
+      // 2. Background high-fidelity polyline fetch (Google Directions).
+      fetchDirections(
+        routeOrigin,
+        routeDestination,
+        stops,
+        GOOGLE_MAPS_API_KEY || "",
+      )
+        .then((snapped) => {
+          if (snapped && snapped.points.length > 0) {
+            DriveSessionStore.setRouteFromFrontend({
+              origin: routeOrigin,
+              destination: routeDestination,
+              stops,
+              polyline: snapped.points,
+              summary: {
+                duration: snapped.duration,
+                distance: snapped.distance,
+              },
+            });
+            console.log(
+              "[useDrivingAgent] ✅ Route snapped to road via Google Directions.",
+            );
+          } else {
+            console.warn("[useDrivingAgent] ⚠️ fetchDirections returned no points.");
+          }
+        })
+        .catch((err) => {
+          console.error("[useDrivingAgent] ❌ fetchDirections background error:", err);
+        });
+
+      // 3. Store the route plan for the RoutePlanSheet UI. The agent's gateway
+      // call carries no interests, so add local highlights when absent.
+      const normalized = normalizeRoutePlanFromGateway(data as RoutePlanData);
+      const personalized = personalizeRoutePlan(
+        normalized,
+        userInterestsRef.current,
+      );
+      if (personalized.locations && personalized.summary) {
+        DriveSessionStore.setRoutePlanData(personalized);
+      }
+
+      DriveSessionStore.setAiState(DriveSessionState.CAR_SESSION_ACTIVE);
+    },
+    [],
+  );
+
+  const handleToolEvent = useCallback(
+    (event: Record<string, any>) => {
+      const eventType = event?.type;
+
+      if (eventType === "tool_start") {
+        const mappedName = ATLAS_TOOL_NAME_MAP[event.name] ?? event.name;
+        console.log("[Atlas Tool Request]", event.name, JSON.stringify(event.input));
+        const newCall: AgentToolCall = {
+          toolName: mappedName,
+          toolCallId: `${event.name}-${Date.now()}`,
+          toolType: "server",
+          status: "pending",
+          requestedAt: Date.now(),
+        };
+        setToolCalls((prev) => [...prev, newCall]);
+        setLastToolEvent(newCall);
+
+        if (event.name === "planEvRoute") {
+          DriveSessionStore.setAiState(DriveSessionState.PLANNING_ROUTE);
+          void startPlanningHoldSound();
+          // Failsafe: if the agent never sends tool_end (e.g. it crashes mid-plan),
+          // don't leave the hold sound looping and the UI stuck in PLANNING_ROUTE.
+          clearPlanWatchdog();
+          planWatchdogRef.current = setTimeout(() => {
+            console.warn("[useDrivingAgent] planEvRoute watchdog fired — unsticking UI");
+            void stopPlanningHoldSound();
+            if (DriveSessionStore.getState() === DriveSessionState.PLANNING_ROUTE) {
+              DriveSessionStore.setAiState(DriveSessionState.AI_LISTENING);
+            }
+          }, PLAN_WATCHDOG_MS);
+        }
+        return;
+      }
+
+      if (eventType === "tool_end") {
+        const mappedName = ATLAS_TOOL_NAME_MAP[event.name] ?? event.name;
+        const isError = event.result?.success === false;
+        console.log("[Atlas Tool Response]", event.name, "error:", isError);
+
+        let resolvedId: string | null = null;
+        setToolCalls((prev) => {
+          const pendingIdx = [...prev]
+            .reverse()
+            .findIndex((tc) => tc.toolName === mappedName && tc.status === "pending");
+          if (pendingIdx === -1) return prev;
+          const idx = prev.length - 1 - pendingIdx;
+          resolvedId = prev[idx].toolCallId;
+          return prev.map((tc, i) =>
+            i === idx
+              ? {
+                  ...tc,
+                  status: isError ? "error" : ("success" as const),
+                  respondedAt: Date.now(),
+                }
+              : tc,
+          );
+        });
+        setLastToolEvent((prev) => {
+          if (prev && (prev.toolCallId === resolvedId || prev.toolName === mappedName)) {
+            return {
+              ...prev,
+              status: isError ? "error" : "success",
+              respondedAt: Date.now(),
+            } as AgentToolCall;
+          }
+          return prev;
+        });
+
+        if (event.name === "planEvRoute") {
+          clearPlanWatchdog();
+          try {
+            ingestRoutePlanResult(event.result ?? {});
+          } finally {
+            void stopPlanningHoldSound();
+            // Ensure we don't get stuck in planning state if something goes wrong
+            if (DriveSessionStore.getState() === DriveSessionState.PLANNING_ROUTE) {
+              DriveSessionStore.setAiState(DriveSessionState.AI_LISTENING);
+            }
+          }
+        }
+        return;
+      }
+
+      if (eventType === "session_ended") {
+        console.log("[useDrivingAgent] Agent ended the session:", event.reason);
+        if (sessionStartedRef.current) {
+          void stopVoiceSessionPreservingDrive();
+        }
+        return;
+      }
+
+      if (eventType === "client_error") {
+        // The agent only emits this for no_active_session and
+        // agent_session_unavailable — both mean the session is dead. Logging
+        // and carrying on left the UI showing "Atlas sizi dinliyor" over a
+        // connection that would never answer again.
+        console.error("[useDrivingAgent] Agent client_error:", event.code, event.message);
+        Sentry.captureMessage(`atlas client_error: ${event.code}`, {
+          level: "error",
+          tags: { feature: "atlas-voice" },
+          extra: { code: event.code, message: event.message },
+        });
+        DriveSessionStore.setAiState(DriveSessionState.AI_ERROR);
+        return;
+      }
+
+      // usage / assistant_output_done are telemetry-only for now.
+    },
+    [
+      clearPlanWatchdog,
+      ingestRoutePlanResult,
+      startPlanningHoldSound,
+      stopPlanningHoldSound,
+      stopVoiceSessionPreservingDrive,
+    ],
+  );
+  const handleToolEventRef = useRef(handleToolEvent);
+  handleToolEventRef.current = handleToolEvent;
 
   const startAgentSession = useCallback(async () => {
     blockAutoVoiceRestartRef.current = false;
 
-    if (sessionStartedRef.current || !user) return;
+    if (sessionStartedRef.current || connectingRef.current || !user) return;
+    connectingRef.current = true;
 
     try {
       DriveSessionStore.setAiState(DriveSessionState.AI_CONNECTING);
-
-      // 1. Get current location for Atlas
-      let locationString = "0,0";
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === "granted") {
-        const loc = await Location.getCurrentPositionAsync({});
-        locationString = `${loc.coords.latitude},${loc.coords.longitude}`;
-        currentLocationRef.current = locationString;
-      }
-
-      // 2. Prepare dynamic variables for Atlas
-      const batteryPrefs = DriveSessionStore.getBatteryPreferences();
-      const resolvedStartBattery = batteryPrefs.start ?? 75;
-      const currentDriveContext = DriveSessionStore.getContext();
-      const existingRoutePlan = currentDriveContext?.routePlanData;
-      const userInterests = user?.interests ?? [];
-      const destinationLocation =
-        existingRoutePlan?.locations.find(
-          (location) => location.type === "destination",
-        ) || null;
-      const activeDestinationName =
-        destinationLocation?.name ||
-        existingRoutePlan?.waypoints.destination ||
-        "";
-      const activeDestinationCoords = destinationLocation
-        ? `${destinationLocation.coordinates.lat},${destinationLocation.coordinates.lon}`
-        : currentDriveContext?.route?.destination
-          ? `${currentDriveContext.route.destination.latitude},${currentDriveContext.route.destination.longitude}`
-          : "";
-      const dynamicVariables = {
-        username: user?.first_name || "Sürücü",
-        started_battery: resolvedStartBattery,
-        destination_coords: activeDestinationCoords,
-        destination_label_text: activeDestinationName,
-        destination_name_text: activeDestinationName,
-      };
-
-      // 3. Start ElevenLabs session with tool callbacks
-      console.log(
-        `[useDrivingAgent] Starting session with Agent ID: ${AGENT_ID}`,
-      );
-      console.log(`[useDrivingAgent] Effective Agent ID: ${AGENT_ID}`);
-
-      // Reset tool call history for new session
+      setStatus("connecting");
       setToolCalls([]);
       setLastToolEvent(null);
 
-      conversation.startSession({
-        agentId: AGENT_ID,
-        dynamicVariables,
-        clientTools: {
-          create_route_plan: async (params: any) => {
-            const startTime = Date.now();
-            console.log(
-              "[useDrivingAgent] 🛠️ Client Tool Call: create_route_plan",
-              params,
-            );
-            DriveSessionStore.setAiState(DriveSessionState.PLANNING_ROUTE);
-            await startPlanningHoldSound();
-
-            // Helper to ensure we always have "lat,lon" string
-            const formatCoords = (val: any) => {
-              if (!val) return null;
-              if (typeof val === "string" && val.includes(",")) return val;
-              if (typeof val === "object" && val.latitude && val.longitude) {
-                return `${val.latitude},${val.longitude}`;
-              }
-              if (typeof val === "object" && val.lat && val.lng) {
-                return `${val.lat},${val.lng}`;
-              }
-              return null;
-            };
-
-            // Targeted cleaner: strips HERE Maps optimization fields while keeping
-            // everything the assistant needs (actions, locations, summary, waypoints)
-            const cleanBackendResponse = (backendData: any): any => {
-              if (!backendData) return backendData;
-              const cleaned = { ...backendData };
-
-              if (cleaned.routes) {
-                cleaned.routes = cleaned.routes.map((route: any) => {
-                  // Strip routeHandle (HERE optimization, not useful for assistant)
-                  const { routeHandle, ...routeRest } = route;
-
-                  if (routeRest.sections) {
-                    routeRest.sections = routeRest.sections.map(
-                      (section: any, idx: number) => {
-                        // Strip HERE-specific fields from each section
-                        const {
-                          polyline,
-                          spans,
-                          refReplacements,
-                          ...sectionRest
-                        } = section;
-
-                        // Keep actions only for the first section (navigation preview for demo)
-                        // For subsequent sections, remove actions to save tokens
-                        if (idx > 0 && sectionRest.actions) {
-                          sectionRest.actions = sectionRest.actions.slice(0, 3);
-                        }
-
-                        return sectionRest;
-                      },
-                    );
-                  }
-
-                  return routeRest;
-                });
-              }
-
-              // locations, summary, waypoints are kept as-is (critical for assistant)
-              return cleaned;
-            };
-
-            const originCoords = currentLocationRef.current;
-            const destinationCoords =
-              formatCoords(params.destination) ||
-              formatCoords(params.destination_coords) ||
-              "";
-
-            // 1. Prepare Query Params (Electrip geo or local gateway — same param names)
-            const baseUrl = getRoutePlanGatewayUrl();
-            const useGateway = isRoutePlanGatewayUrl(baseUrl);
-            const paramsObj: Record<string, string> = {
-              vehicle: "599",
-              origin: originCoords || "0,0",
-              destination: destinationCoords || "",
-              min: "10",
-              max: "90",
-              started: String(params.started_battery ?? params.started ?? "75"),
-              charge: "AC;DC",
-              avoid: "",
-              mode: "normal",
-              via: "",
-              destination_charge: "10",
-              origin_label: "Konumunuz",
-              origin_name: "Konumunuz",
-              destination_label: String(
-                params.destination_label_text || params.destination_label || "",
-              ),
-              destination_name: String(
-                params.destination_name_text || params.destination_name || "",
-              ),
-              passengers: "0",
-              lang: "tr-TR",
-              datetime: String(
-                params.datetime || Math.floor(Date.now() / 1000).toString(),
-              ),
-            };
-
-            console.log(
-              "[useDrivingAgent] 📝 Query Params:",
-              JSON.stringify(paramsObj, null, 2),
-            );
-            const queryParams = new URLSearchParams(paramsObj);
-            if (useGateway) {
-              const interestsParam = userInterests.join(",");
-              if (interestsParam) {
-                queryParams.set("interests", interestsParam);
-              }
-            }
-
-            // Set a timeout for the fetch to avoid ElevenLabs timing out on us
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
-
-            try {
-              const url = `${baseUrl}?${queryParams.toString()}`;
-              console.log("[useDrivingAgent] 🌐 Fetching Electrip Route:", url);
-
-              const response = await fetch(url, { signal: controller.signal });
-              clearTimeout(timeoutId);
-
-              const data = await response.json();
-              const fetchDuration = Date.now() - startTime;
-              console.log(
-                `[useDrivingAgent] ✅ Electrip Backend responded in ${fetchDuration}ms`,
-              );
-
-              if (
-                data.success &&
-                data.data?.routes?.[0]?.sections?.length > 0
-              ) {
-                const firstRoute = data.data.routes[0];
-                const sections = firstRoute.sections;
-
-                // Extract points for Google Directions high-fidelity plotting
-                const firstSection = sections[0];
-                const lastSection = sections[sections.length - 1];
-
-                if (
-                  !firstSection?.departure?.place?.location ||
-                  !lastSection?.arrival?.place?.location
-                ) {
-                  console.error(
-                    "[useDrivingAgent] ❌ Route missing location data",
-                  );
-                  return JSON.stringify({
-                    success: false,
-                    error: "Rota verisi eksik.",
-                  });
-                }
-
-                const routeOrigin = {
-                  latitude: firstSection.departure.place.location.lat,
-                  longitude: firstSection.departure.place.location.lng,
-                };
-
-                const routeDestination = {
-                  latitude: lastSection.arrival.place.location.lat,
-                  longitude: lastSection.arrival.place.location.lng,
-                };
-
-                const stops: { latitude: number; longitude: number }[] = [];
-                for (let i = 0; i < sections.length - 1; i++) {
-                  const stopLoc = sections[i].arrival?.place?.location;
-                  if (stopLoc) {
-                    stops.push({
-                      latitude: stopLoc.lat,
-                      longitude: stopLoc.lng,
-                    });
-                  }
-                }
-
-                // 1. Initial Synchronous Session Start (no polyline yet)
-                // This ensures DriveSessionStore.context exists for setRoutePlanData and map fitting.
-                const initialRoutePayload = {
-                  origin: routeOrigin,
-                  destination: routeDestination,
-                  stops,
-                  // Use a straight line as placeholder or leave empty for now
-                  polyline: [routeOrigin, ...stops, routeDestination],
-                  summary: { duration: 0, distance: 0 },
-                };
-
-                if (!DriveSessionStore.getContext()) {
-                  DriveSessionStore.startSession(initialRoutePayload);
-                } else {
-                  DriveSessionStore.setRouteFromFrontend(initialRoutePayload);
-                }
-
-                // 2. Background High-Fidelity Polyline Fetch (Google Directions)
-                fetchDirections(
-                  routeOrigin,
-                  routeDestination,
-                  stops,
-                  GOOGLE_MAPS_API_KEY || "",
-                )
-                  .then((result) => {
-                    if (result && result.points.length > 0) {
-                      const routePayload = {
-                        origin: routeOrigin,
-                        destination: routeDestination,
-                        stops,
-                        polyline: result.points,
-                        summary: {
-                          duration: result.duration,
-                          distance: result.distance,
-                        },
-                      };
-
-                      // Update the existing session with high-fidelity road-snapped polyline
-                      DriveSessionStore.setRouteFromFrontend(routePayload);
-                      console.log(
-                        "[useDrivingAgent] ✅ Route successfully snapped to road via Google Directions.",
-                      );
-                    } else {
-                      console.warn(
-                        "[useDrivingAgent] ⚠️ fetchDirections returned no points.",
-                      );
-                    }
-                  })
-                  .catch((err) => {
-                    console.error(
-                      "[useDrivingAgent] ❌ fetchDirections background error:",
-                      err,
-                    );
-                  });
-
-                // Clean the backend response for the assistant:
-                // - Strips HERE-specific optimization fields (routeHandle, polyline, spans, refReplacements)
-                // - Keeps actions (first section full, others trimmed), locations, summary, waypoints
-                const cleanedData = cleanBackendResponse(data.data);
-                const personalizedRoutePlan: RoutePlanData = useGateway
-                  ? normalizeRoutePlanFromGateway(cleanedData as RoutePlanData)
-                  : personalizeRoutePlan(
-                      cleanedData as RoutePlanData,
-                      userInterests,
-                    );
-
-                // Store the full route plan data in the session store for the RoutePlanSheet UI
-                // This will now succeed because context was created synchronously above.
-                if (
-                  personalizedRoutePlan.locations &&
-                  personalizedRoutePlan.summary
-                ) {
-                  DriveSessionStore.setRoutePlanData(personalizedRoutePlan);
-                }
-
-                const agentResponse = JSON.stringify({
-                  success: true,
-                  ...personalizedRoutePlan,
-                });
-                console.log(
-                  "[useDrivingAgent] 📤 Agent response length:",
-                  agentResponse.length,
-                  "chars",
-                );
-
-                // Reset state to active once plan is successfully processed
-                DriveSessionStore.setAiState(
-                  DriveSessionState.CAR_SESSION_ACTIVE,
-                );
-                return agentResponse;
-              } else {
-                console.error(
-                  "[useDrivingAgent] ❌ Electrip Backend failed or returned no routes:",
-                  data,
-                );
-                return JSON.stringify({
-                  success: false,
-                  error: "Rota hesaplanamadı. Hedefi kontrol edin.",
-                });
-              }
-            } catch (error: any) {
-              clearTimeout(timeoutId);
-              if (error.name === "AbortError") {
-                console.error(
-                  "[useDrivingAgent] ❌ create_route_plan timed out",
-                );
-                return JSON.stringify({
-                  success: false,
-                  error: "Rota servisi yanıt vermedi (Timeout).",
-                });
-              }
-              console.error(
-                "[useDrivingAgent] ❌ create_route_plan error:",
-                error,
-              );
-              return JSON.stringify({
-                success: false,
-                error: "Sistem hatası: Rota servislerine ulaşılamıyor.",
-              });
-            } finally {
-              await stopPlanningHoldSound();
-              // Ensure we don't get stuck in planning state if something goes wrong
-              const currentState = DriveSessionStore.getState();
-              if (currentState === DriveSessionState.PLANNING_ROUTE) {
-                DriveSessionStore.setAiState(DriveSessionState.AI_LISTENING);
-              }
-            }
-          },
-        },
-
-        onConnect: (props: any) => {
-          console.log("[useDrivingAgent] ✅ Connected!", JSON.stringify(props));
-          reconnectAttemptsRef.current = 0; // Reset reconnect counter on successful connect
-        },
-        onDisconnect: (details: DisconnectionDetails) => {
-          console.log(
-            "[useDrivingAgent] ❌ Disconnected",
-            "reason:",
-            details?.reason,
+      // 1. Get current location for Atlas.
+      // Bounded on purpose: a cold fix in a garage or a tunnel can take a very
+      // long time, and this runs before the token fetch and the room connect,
+      // so an unbounded wait leaves the UI stuck in AI_CONNECTING with
+      // connectingRef blocking any retry. The agent already tolerates missing
+      // GPS (it waits 1.5s for it, then greets anyway), so proceeding without
+      // coordinates costs far less than not connecting at all.
+      let coords: { latitude: number; longitude: number } | null = null;
+      const { status: locStatus } =
+        await Location.requestForegroundPermissionsAsync();
+      if (locStatus === "granted") {
+        const loc = await Promise.race([
+          Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          }),
+          new Promise<null>((resolve) =>
+            setTimeout(() => resolve(null), GPS_FIX_TIMEOUT_MS),
+          ),
+        ]);
+        if (loc) {
+          coords = {
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+          };
+          currentLocationRef.current = `${coords.latitude},${coords.longitude}`;
+        } else {
+          console.warn(
+            "[useDrivingAgent] No GPS fix within the timeout; connecting without one.",
           );
+        }
+      }
+
+      // 2. Fetch a LiveKit token from the Atlas token server
+      const identity = `driver-${user.id}`;
+      const { token, url } = await fetchAtlasToken({
+        identity,
+        language: "tr",
+        newSession: forceFreshSessionRef.current,
+      });
+
+      // 3. Configure and start the audio session (speaker output for driving)
+      await AudioSession.configureAudio({
+        ios: { defaultOutput: "speaker" },
+      });
+      await AudioSession.startAudioSession();
+
+      // 4. Connect to the room; the LiveKit server auto-dispatches Atlas into it
+      const room = new Room();
+      roomRef.current = room;
+      agentParticipantRef.current = null;
+
+      const captureAgent = (participant: RemoteParticipant) => {
+        if (participant.identity.startsWith("agent-")) {
+          const isFirstCapture = agentParticipantRef.current === null;
+          agentParticipantRef.current = participant;
+          // Data published before the agent joined the room is dropped, so send
+          // the battery snapshot once the agent is actually present to receive it.
+          if (isFirstCapture) {
+            publishBatterySnapshot();
+          }
+        }
+      };
+
+      room
+        .on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
+          if (state === ConnectionState.Connected) {
+            setStatus("connected");
+            reconnectAttemptsRef.current = 0;
+          } else if (state === ConnectionState.Disconnected) {
+            setStatus("disconnected");
+          } else {
+            // Connecting / Reconnecting / SignalReconnecting
+            setStatus("connecting");
+          }
+        })
+        .on(RoomEvent.ParticipantConnected, captureAgent)
+        .on(RoomEvent.ParticipantDisconnected, (participant) => {
+          if (participant === agentParticipantRef.current) {
+            // The agent left (crash/redeploy) but our transport is still up.
+            // Drop the frozen speaking state so the UI doesn't look stuck.
+            console.warn("[useDrivingAgent] Agent participant left the room");
+            agentParticipantRef.current = null;
+            setIsSpeaking(false);
+            setAudioLevel(0);
+          }
+        })
+        .on(RoomEvent.ParticipantAttributesChanged, (_changed, participant) => {
+          if (participant !== agentParticipantRef.current) return;
+          const agentState = participant.attributes["lk.agent.state"];
+          if (agentState) {
+            setIsSpeaking(agentState === "speaking");
+          }
+        })
+        .on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
+          if (topic !== TOOL_TOPIC) return;
+          try {
+            const event = JSON.parse(new TextDecoder().decode(payload));
+            handleToolEventRef.current(event);
+          } catch (error) {
+            console.error("[useDrivingAgent] Failed to parse tool event:", error);
+          }
+        })
+        .on(RoomEvent.Disconnected, () => {
+          console.log("[useDrivingAgent] ❌ Disconnected from LiveKit room");
           const hasRoute = !!DriveSessionStore.getRoutePlanData();
           void stopPlanningHoldSound();
-
-          // Mark session as ended
+          clearPlanWatchdog();
+          stopGpsWatch();
           sessionStartedRef.current = false;
+          setIsSpeaking(false);
+          void AudioSession.stopAudioSession().catch(() => {});
 
           // Once a route exists, Atlas voice should stay passive until the user
           // explicitly taps the orb again. This avoids unexpected reconnects.
-          if (
-            details?.reason === "agent" ||
-            details?.reason === "user" ||
-            hasRoute
-          ) {
+          if (hasRoute) {
             blockAutoVoiceRestartRef.current = true;
           }
 
-          // As requested, always set to NAVIGATION_ONLY (if route exists) or IDLE on disconnect
           DriveSessionStore.setAiState(
             hasRoute
               ? DriveSessionState.NAVIGATION_ONLY
               : DriveSessionState.IDLE,
           );
           console.log("[useDrivingAgent] AI is now PASSIVE.");
-        },
-        onError: (error: any) => {
-          console.error("[useDrivingAgent] ⚠️ Error:", error);
-          void stopPlanningHoldSound();
-          DriveSessionStore.setAiState(DriveSessionState.AI_ERROR);
-        },
+        });
 
-        // --- Tool Call Callbacks ---
-        // Fires when the agent initiates a tool call (e.g. create_route_plan)
-        onAgentToolRequest: (request) => {
-          console.log("[Atlas Tool Request]", JSON.stringify(request, null, 2));
+      await room.connect(url, token);
 
-          const newCall: AgentToolCall = {
-            toolName: request.tool_name,
-            toolCallId: request.tool_call_id,
-            toolType: request.tool_type,
-            status: "pending",
-            requestedAt: Date.now(),
-          };
-          setToolCalls((prev) => [...prev, newCall]);
-          setLastToolEvent(newCall);
+      // 5. Push GPS as participant attributes FIRST — before the (slower) mic
+      // publish — so it lands inside the agent's 1.5 s waitForGpsAttributes window.
+      if (coords) {
+        await room.localParticipant.setAttributes({
+          latitude: String(coords.latitude),
+          longitude: String(coords.longitude),
+        });
+      }
+
+      // 6. Capture the agent participant if it is already present, then publish mic.
+      // captureAgent sends the initial battery snapshot once the agent is present
+      // (whether already here or via the ParticipantConnected event below).
+      room.remoteParticipants.forEach(captureAgent);
+
+      // Android never prompts for RECORD_AUDIO on its own here: enabling the
+      // microphone track without the runtime grant just produces a silent
+      // session, which looks identical to a working one until nobody answers.
+      if (Platform.OS === "android") {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        );
+        if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
+          throw new Error("Microphone permission denied");
+        }
+      }
+
+      await room.localParticipant.setMicrophoneEnabled(true);
+      setIsMuted(false);
+
+      // 7. Stream GPS + basic telemetry while the session is live
+      gpsWatchRef.current = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.Balanced,
+          timeInterval: 3000,
+          distanceInterval: 15,
         },
-
-        // Fires when the tool returns a result to the agent
-        onAgentToolResponse: (response) => {
-          console.log(
-            "[Atlas Tool Response]",
-            JSON.stringify(response, null, 2),
-          );
-          setToolCalls((prev) =>
-            prev.map((tc) =>
-              tc.toolCallId === response.tool_call_id
-                ? {
-                    ...tc,
-                    status: response.is_error ? "error" : "success",
-                    respondedAt: Date.now(),
-                  }
-                : tc,
-            ),
-          );
-          setLastToolEvent((prev) => {
-            if (prev?.toolCallId === response.tool_call_id) {
-              return {
-                ...prev,
-                status: response.is_error ? "error" : "success",
-                respondedAt: Date.now(),
-              } as AgentToolCall;
-            }
-            return prev;
+        (loc) => {
+          currentLocationRef.current = `${loc.coords.latitude},${loc.coords.longitude}`;
+          publishClientMessage({
+            type: "gps_update",
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+            accuracy: loc.coords.accuracy ?? undefined,
+            speed_mps: loc.coords.speed ?? undefined,
+            heading: loc.coords.heading ?? undefined,
           });
-
-          if (
-            response.tool_name === "end_call" &&
-            !response.is_error &&
-            sessionStartedRef.current
-          ) {
-            void stopVoiceSessionPreservingDrive();
-          }
         },
-
-        onMessage: (message) => {
-          const event = message as Record<string, any>;
-          const eventType = event?.type;
-
-          if (eventType === "agent_tool_request" && event.agent_tool_request) {
-            console.log(
-              "[Atlas Tool Full Request Body]",
-              JSON.stringify(event.agent_tool_request, null, 2),
-            );
-          }
-        },
-      });
+      );
 
       sessionStartedRef.current = true;
       manuallyEndedRef.current = false;
+      forceFreshSessionRef.current = false;
       console.log("[useDrivingAgent] Session started successfully");
-
-      // 4. Connect WebSocket for route events
-      socketService.connect(user?.id?.toString() || "guest-user");
     } catch (error) {
       console.error("[useDrivingAgent] Failed to start agent session:", error);
+      Sentry.captureException(error, {
+        tags: { feature: "atlas-voice", phase: "start-session" },
+      });
+
+      // A misconfigured build or a rejected secret cannot be fixed by trying
+      // again, and the reconnect ladder now fires on "error" — so stop it from
+      // burning three attempts and a token-server round trip on a certainty.
+      if (error instanceof AtlasTokenError && !error.retryable) {
+        blockAutoVoiceRestartRef.current = true;
+      }
+
       await stopPlanningHoldSound();
+      await disconnectRoom();
+      setStatus("error");
       DriveSessionStore.setAiState(DriveSessionState.AI_ERROR);
+    } finally {
+      connectingRef.current = false;
     }
   }, [
-    conversation,
     user,
-    charging.batteryLevel,
-    stopVoiceSessionPreservingDrive,
-    startPlanningHoldSound,
+    disconnectRoom,
+    publishClientMessage,
+    publishBatterySnapshot,
+    stopGpsWatch,
     stopPlanningHoldSound,
+    clearPlanWatchdog,
   ]);
 
-  const [audioLevel, setAudioLevel] = useState(0);
+  const setMuted = useCallback(async (muted: boolean) => {
+    const room = roomRef.current;
+    if (!room) return;
+    try {
+      await room.localParticipant.setMicrophoneEnabled(!muted);
+      setIsMuted(muted);
+    } catch (error) {
+      console.error("[useDrivingAgent] Failed to toggle microphone:", error);
+    }
+  }, []);
 
-  // Sync SDK status to DriveSessionStore
+  // Sync transport status to DriveSessionStore
   useEffect(() => {
-    // Current AI state from the store
     const currentAiState = DriveSessionStore.getState();
     const hasRoute = !!DriveSessionStore.getRoutePlanData();
 
-    if (conversation.status === "connected") {
+    if (status === "connected") {
       // Don't override special states (Planning or Confirmed End)
       // with generic listening/speaking states.
       if (
@@ -666,15 +711,14 @@ export function useDrivingAgent() {
         return;
       }
 
-      // Sync the conversation state (speaking vs listening)
-      const targetState = conversation.isSpeaking
+      const targetState = isSpeaking
         ? DriveSessionState.AI_SPEAKING
         : DriveSessionState.AI_LISTENING;
 
       if (currentAiState !== targetState) {
         DriveSessionStore.setAiState(targetState);
       }
-    } else if (conversation.status === "connecting") {
+    } else if (status === "connecting") {
       if (
         !blockAutoVoiceRestartRef.current &&
         currentAiState !== DriveSessionState.PLANNING_ROUTE &&
@@ -683,13 +727,13 @@ export function useDrivingAgent() {
       ) {
         DriveSessionStore.setAiState(DriveSessionState.AI_CONNECTING);
       }
-    } else if (conversation.status === "error") {
+    } else if (status === "error") {
       if (hasRoute) {
         setPassiveDriveState();
       } else if (currentAiState !== DriveSessionState.AI_ERROR) {
         DriveSessionStore.setAiState(DriveSessionState.AI_ERROR);
       }
-    } else if (conversation.status === "disconnected") {
+    } else if (status === "disconnected") {
       // If voice transport is gone, ensure the drive UI does not remain stuck
       // in a listening/speaking state.
       if (
@@ -701,9 +745,9 @@ export function useDrivingAgent() {
         setPassiveDriveState();
       }
     }
-  }, [conversation.status, conversation.isSpeaking, setPassiveDriveState]);
+  }, [status, isSpeaking, setPassiveDriveState]);
 
-  // Auto-reconnect when WebRTC drops unexpectedly while still in CAR mode
+  // Auto-reconnect when the transport drops unexpectedly while still in CAR mode
   useEffect(() => {
     const hasRoute = !!DriveSessionStore.getRoutePlanData();
 
@@ -714,8 +758,12 @@ export function useDrivingAgent() {
       };
     }
 
+    // "error" belongs here as much as "disconnected": every failure inside
+    // startAgentSession — token server down, DNS, TLS, room.connect rejecting —
+    // lands in its catch and sets "error", never "disconnected". Without this
+    // the retry ladder only covered the one case that rarely happens.
     if (
-      conversation.status === "disconnected" &&
+      (status === "disconnected" || status === "error") &&
       !manuallyEndedRef.current &&
       !sessionStartedRef.current &&
       !blockAutoVoiceRestartRef.current &&
@@ -736,33 +784,37 @@ export function useDrivingAgent() {
         }, delay);
       } else {
         console.log(
-          `[useDrivingAgent] ❌ Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Stopping session completely.`,
+          `[useDrivingAgent] Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached. Going passive.`,
         );
-        stopAgentSession();
+        // Not stopAgentSession(): that sets forceFreshSessionRef, which throws
+        // away the server-side session the driver could still have resumed.
+        // The network failed, the driver did not end anything.
+        void stopVoiceSessionPreservingDrive();
       }
     }
     return () => {
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
     };
-  }, [conversation.status, activity, startAgentSession, stopAgentSession]);
+  }, [status, activity, startAgentSession, stopVoiceSessionPreservingDrive]);
 
   useEffect(() => {
     return () => {
       void stopPlanningHoldSound();
+      void disconnectRoom();
     };
-  }, [stopPlanningHoldSound]);
+  }, [disconnectRoom, stopPlanningHoldSound]);
 
-  // Poll audio level for visualizer
+  // Poll the agent's audio level for the visualizer
   useEffect(() => {
-    if (conversation.status === "connected") {
+    if (status === "connected") {
       const interval = setInterval(() => {
-        setAudioLevel(conversation.getOutputVolume());
-      }, 500); // Changed from 50ms to 500ms to prevent JS thread blockage
+        setAudioLevel(agentParticipantRef.current?.audioLevel ?? 0);
+      }, 500); // 500ms to prevent JS thread blockage
       return () => clearInterval(interval);
     } else {
       setAudioLevel(0);
     }
-  }, [conversation.status, conversation]);
+  }, [status]);
 
   // Handle Activity State Transitions
   useEffect(() => {
@@ -811,15 +863,15 @@ export function useDrivingAgent() {
   }, [startAgentSession, user]);
 
   return {
-    status: conversation.status,
-    isSpeaking: conversation.isSpeaking,
-    isMuted: conversation.isMuted,
+    status,
+    isSpeaking,
+    isMuted,
     audioLevel,
     toolCalls,
     lastToolEvent,
     startSession: startAgentSession,
     stopConversation: stopVoiceSessionPreservingDrive,
     stopSession: stopAgentSession,
-    setMuted: conversation.setMuted,
+    setMuted,
   };
 }

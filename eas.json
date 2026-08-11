@@ -6,16 +6,25 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_ATLAS_TOKEN_URL": "http://localhost:7890/api/token"
+      }
     },
     "preview": {
       "android": {
         "buildType": "apk"
       },
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_ATLAS_TOKEN_URL": "https://atlas.uptecra.com/api/token"
+      }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_ATLAS_TOKEN_URL": "https://atlas.uptecra.com/api/token"
+      }
     }
   },
   "submit": {

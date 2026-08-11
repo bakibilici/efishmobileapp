@@ -1,5 +1,5 @@
 import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
-import { ConversationProvider } from "@elevenlabs/react-native";
+import { registerGlobals } from "@livekit/react-native";
 
 import {
   DarkTheme,
@@ -35,7 +35,7 @@ import { PaymentProvider } from "@/context/payment/PaymentContext";
 import { ActivityService } from "@/services/ActivityService";
 import * as Sentry from "@sentry/react-native";
 
-// --- Polyfills required for ElevenLabs / LiveKit on React Native ---
+// --- Polyfills required for LiveKit WebRTC on React Native ---
 if (typeof global.Event === "undefined") {
   global.Event = class Event {
     type: string;
@@ -63,6 +63,10 @@ if (typeof global.CloseEvent === "undefined") {
   } as any;
 }
 // -----------------------------------------------------------------
+
+// Wire LiveKit's WebRTC globals (getUserMedia audio config, URL polyfill,
+// event shims) once at boot, before any Room is constructed.
+registerGlobals();
 
 Sentry.init({
   dsn: "https://96fccd63cdc72c7b4aa5e0a3874f44e8@o4510855506624512.ingest.de.sentry.io/4510905892405328",
@@ -226,8 +230,7 @@ function RootLayoutNav() {
   }
 
   return (
-    <ConversationProvider>
-      <BottomSheetModalProvider>
+    <BottomSheetModalProvider>
         <ThemeProvider value={themeScheme === "dark" ? DarkTheme : DefaultTheme}>
           <Stack>
             <Stack.Screen name="index" options={{ headerShown: false }} />
@@ -260,8 +263,7 @@ function RootLayoutNav() {
             </>
           )}
         </ThemeProvider>
-      </BottomSheetModalProvider>
-    </ConversationProvider>
+    </BottomSheetModalProvider>
   );
 }
 

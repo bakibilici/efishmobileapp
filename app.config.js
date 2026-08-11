@@ -19,6 +19,8 @@ export default ({ config }) => ({
         "Profil fotoğrafı ve araç fotoğrafı ekleyebilmeniz için galeriye erişim izni gereklidir.",
       NSCameraUsageDescription:
         "Profil fotoğrafı ve araç fotoğrafı çekebilmeniz için kameraya erişim izni gereklidir.",
+      // Keep the Atlas voice session alive while the screen is locked in the car
+      UIBackgroundModes: ["audio"],
     },
     supportsTablet: true,
     bundleIdentifier: "com.tubitak.uptecra",
