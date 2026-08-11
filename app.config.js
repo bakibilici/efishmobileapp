@@ -2,6 +2,10 @@ export default ({ config }) => ({
   ...config,
   name: "Tubitak App Demo",
   slug: "tubitak-app",
+  // The EAS project lives under the uptecra account. Without this the CLI
+  // resolves the project by id alone, which is how the previous project ended
+  // up unreachable from a different login.
+  owner: "uptecra",
   version: "1.0.0",
   orientation: "portrait",
   icon: "./assets/images/app_homepage_icon.png",
@@ -98,7 +102,7 @@ export default ({ config }) => ({
   extra: {
     router: {},
     eas: {
-      projectId: "dde787c2-163e-4c08-b52a-c24b6e4673ce",
+      projectId: "43827cb3-1c90-4a47-a0b2-f8934cbdb005",
     },
   },
 });
