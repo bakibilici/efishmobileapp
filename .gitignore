@@ -44,3 +44,7 @@ app-example
 /android
 
 .env.local
+
+# Android upload key and its passwords - never commit
+credentials.json
+credentials/
