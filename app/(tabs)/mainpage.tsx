@@ -2054,6 +2054,20 @@ export default function MapScreen() {
             )}
           </View>
 
+          {/* TEMPORARY — manual car-mode trigger.
+              Driving detection needs real motion, which a phone sitting on a
+              desk never produces, so there is otherwise no way into car mode
+              while testing. Remove this block and its two styles once the agent
+              is verified against production. */}
+          {driveState === DriveSessionState.IDLE && (
+            <Pressable
+              style={styles.manualCarModeBtn}
+              onPress={() => DriveSessionStore.startSession()}
+            >
+              <Text style={styles.manualCarModeBtnText}>Araba modu (test)</Text>
+            </Pressable>
+          )}
+
           {/* Floating Charging Widget at Bottom */}
           {charging.isActive && charging.isMinimized && (
             <View style={styles.floatingWidgetContainer}>
@@ -3775,6 +3789,27 @@ const styles = StyleSheet.create({
     left: 16,
     right: 16,
     zIndex: 60,
+  },
+  // TEMPORARY — see the manual car-mode trigger in the render body.
+  manualCarModeBtn: {
+    position: "absolute",
+    bottom: 120, // Clear of the tab bar
+    alignSelf: "center",
+    backgroundColor: "#0a7ea4",
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 999,
+    zIndex: 70,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 5,
+  },
+  manualCarModeBtnText: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "600",
   },
   recenterBtn: {
     flexDirection: "row",
