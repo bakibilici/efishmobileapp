@@ -290,7 +290,7 @@ export default function RegisterScreen() {
               PROFIL
             </Text>
             <Text style={[styles.title, { color: colors.text }]}>
-              Atlas sizi tanıyarak başlasın
+              AKBA sizi tanıyarak başlasın
             </Text>
             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
               Demo kaydınız cihazda tutulur. Telefon numaranız hashlenerek
@@ -376,10 +376,10 @@ export default function RegisterScreen() {
               İLGİ ALANLARI
             </Text>
             <Text style={[styles.title, { color: colors.text }]}>
-              Atlas önerilerini size göre şekillendirsin
+              AKBA önerilerini size göre şekillendirsin
             </Text>
             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-              Seçeceğiniz ilgi alanları rota sırası ve mola önerilerinde Atlas
+              Seçeceğiniz ilgi alanları rota sırası ve mola önerilerinde AKBA
               için ek bağlam oluşturur.
             </Text>
 

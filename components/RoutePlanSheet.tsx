@@ -954,7 +954,7 @@ export function RoutePlanSheet({
                           { color: textColor },
                         ]}
                       >
-                        Atlas AI Plus
+                        AKBA AI Plus
                       </Text>
                       <Text
                         style={[

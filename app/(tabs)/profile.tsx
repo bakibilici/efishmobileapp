@@ -236,7 +236,7 @@ export default function ProfileScreen() {
                 subtitle={
                   user.interests.length > 0
                     ? user.interests.join(", ")
-                    : "Atlas için ilgi alanları seçin"
+                    : "AKBA için ilgi alanları seçin"
                 }
                 color="#7C4DFF"
                 isLast

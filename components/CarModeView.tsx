@@ -34,7 +34,7 @@ import { useDrivingAgent } from "../hooks/useDrivingAgent";
 const TOOL_STATUS_COPY: Record<string, { headline: string; detail: string }> = {
   create_route_plan: {
     headline: "ROTA HESAPLANIYOR",
-    detail: "Atlas yeni rotayı hazırlıyor.",
+    detail: "AKBA yeni rotayı hazırlıyor.",
   },
   find_nearby_stations: {
     headline: "İSTASYONLAR ARANIYOR",
@@ -46,7 +46,7 @@ const TOOL_STATUS_COPY: Record<string, { headline: string; detail: string }> = {
   },
   end_call: {
     headline: "OTURUM KAPATILIYOR",
-    detail: "Atlas ses oturumunu sonlandırıyor.",
+    detail: "AKBA ses oturumunu sonlandırıyor.",
   },
 };
 
@@ -529,7 +529,7 @@ export function CarModeView() {
           "İŞLEM DEVAM EDİYOR",
         detail:
           TOOL_STATUS_COPY[pendingTool.toolName]?.detail ||
-          "Atlas isteğinizi işliyor.",
+          "AKBA isteğinizi işliyor.",
         animate: true,
         hideDetailPill: true,
         isError: false,
@@ -539,7 +539,7 @@ export function CarModeView() {
     if (sessionState === DriveSessionState.PLANNING_ROUTE) {
       return {
         headline: "ROTA HESAPLANIYOR",
-        detail: "Atlas yeni rotayı hazırlıyor.",
+        detail: "AKBA yeni rotayı hazırlıyor.",
         animate: true,
         hideDetailPill: true,
         isError: false,
@@ -549,7 +549,7 @@ export function CarModeView() {
     if (isPreviewMode && hasRoutePlan && !isVoiceTransportActive) {
       return {
         headline: "ROTA ÖNİZLEMEDE",
-        detail: "İsterseniz sürüşü başlatabilir veya Atlas'a yeniden bağlanabilirsiniz.",
+        detail: "İsterseniz sürüşü başlatabilir veya AKBA'ya yeniden bağlanabilirsiniz.",
         animate: false,
         hideDetailPill: false,
         isError: false,
@@ -558,8 +558,8 @@ export function CarModeView() {
 
     if (hasRoutePlan && !isVoiceTransportActive) {
       return {
-        headline: "ATLAS PASİF",
-        detail: "Yeniden bağlanıp Atlas ile konuşmaya devam edebilirsiniz.",
+        headline: "AKBA PASİF",
+        detail: "Yeniden bağlanıp AKBA ile konuşmaya devam edebilirsiniz.",
         animate: false,
         hideDetailPill: false,
         isError: false,
@@ -581,7 +581,7 @@ export function CarModeView() {
       sessionState === DriveSessionState.AI_CONNECTING
     ) {
       return {
-        headline: "ATLAS BAĞLANIYOR",
+        headline: "AKBA BAĞLANIYOR",
         detail: "Ses bağlantısı hazırlanıyor.",
         animate: false,
         hideDetailPill: false,
@@ -592,20 +592,20 @@ export function CarModeView() {
     switch (sessionState) {
       case DriveSessionState.AI_LISTENING:
         return {
-          headline: "ATLAS AKTİF",
+          headline: "AKBA AKTİF",
           detail: isMuted
-            ? "Mikrofon kapalı. Açtığınızda Atlas sizi yeniden duyar."
-            : "Atlas sizi dinliyor.",
+            ? "Mikrofon kapalı. Açtığınızda AKBA sizi yeniden duyar."
+            : "AKBA sizi dinliyor.",
           animate: false,
           hideDetailPill: false,
           isError: false,
         };
       case DriveSessionState.AI_SPEAKING:
         return {
-          headline: "ATLAS AKTİF",
+          headline: "AKBA AKTİF",
           detail: isMuted
-            ? "Atlas konuşuyor. Mikrofon şu anda kapalı."
-            : "Atlas konuşuyor.",
+            ? "AKBA konuşuyor. Mikrofon şu anda kapalı."
+            : "AKBA konuşuyor.",
           animate: false,
           hideDetailPill: false,
           isError: false,
@@ -621,7 +621,7 @@ export function CarModeView() {
       case DriveSessionState.CAR_SESSION_ACTIVE:
       case DriveSessionState.NAVIGATION_ONLY:
         return {
-          headline: "ATLAS PASİF",
+          headline: "AKBA PASİF",
           detail: "Konuşmayı yeniden başlatmak için orb'a veya üstteki düğmeye dokunun.",
           animate: false,
           hideDetailPill: false,
@@ -629,7 +629,7 @@ export function CarModeView() {
         };
       default:
         return {
-          headline: "ATLAS AKTİF",
+          headline: "AKBA AKTİF",
           detail: "Size nasıl yardımcı olabilirim?",
           animate: false,
           hideDetailPill: false,
@@ -787,7 +787,7 @@ export function CarModeView() {
 
   const voiceActionLabel = canStopConversation
     ? "Konuşmayı Bitir"
-    : "Atlas'a Bağlan";
+    : "AKBA'ya Bağlan";
   const voiceActionIcon = canStopConversation ? "pause-circle" : "radio-outline";
 
   const handleDismissEndConfirmation = () => {
@@ -829,10 +829,10 @@ export function CarModeView() {
       }
     : manualConfirmAction === "connect_voice"
       ? {
-          title: "Atlas’a yeniden bağlanılsın mı?",
+          title: "AKBA’ya yeniden bağlanılsın mı?",
           subtitle:
             "Sesli konuşma yeniden başlayacak. Sürüş rotanız olduğu gibi korunur.",
-          confirm: "Atlas’a Bağlan",
+          confirm: "AKBA’ya Bağlan",
           cancel: "Vazgeç",
         }
       : manualConfirmAction === "start_drive"
@@ -847,14 +847,14 @@ export function CarModeView() {
         ? {
             title: "Konuşma sonlandırılsın mı?",
             subtitle:
-              "Sadece Atlas konuşması kapanacak. Sürüş ve rota takibi devam edecek.",
+              "Sadece AKBA konuşması kapanacak. Sürüş ve rota takibi devam edecek.",
             confirm: "Konuşmayı Bitir",
             cancel: "Vazgeç",
           }
         : {
             title: "Sürüşü şimdi bitirelim mi?",
             subtitle:
-              "Atlas kapanacak ve sürüş oturumu sonlandırılacak. İsterseniz daha sonra yeniden başlatabilirsiniz.",
+              "AKBA kapanacak ve sürüş oturumu sonlandırılacak. İsterseniz daha sonra yeniden başlatabilirsiniz.",
             confirm: "Sürüşü Bitir",
             cancel: "Vazgeç",
           };

@@ -281,7 +281,7 @@ export default function SessionsScreen() {
                 ]}
               >
                 <Ionicons name="mic-outline" size={18} color="#FFFFFF" />
-                <Text style={styles.primaryActionText}>Atlas ile Bağlan</Text>
+                <Text style={styles.primaryActionText}>AKBA ile Bağlan</Text>
               </Pressable>
             </View>
           </View>
@@ -337,12 +337,12 @@ export default function SessionsScreen() {
 
               <View style={styles.headerTextBlock}>
                 <Text style={[styles.headerTitle, { color: colors.text }]}>
-                  Atlas Sessions
+                  AKBA Sessions
                 </Text>
                 <Text
                   style={[styles.headerSubtitle, { color: colors.textSecondary }]}
                 >
-                  Kaydettiğin rotalara geri dön ve Atlas ile aynı bağlamda yeniden başla.
+                  Kaydettiğin rotalara geri dön ve AKBA ile aynı bağlamda yeniden başla.
                 </Text>
               </View>
             </View>
@@ -391,7 +391,7 @@ export default function SessionsScreen() {
               Henüz kaydedilmiş rota yok
             </Text>
             <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
-              Atlas ile rota oluşturduğunuzda oturum burada görünecek.
+              AKBA ile rota oluşturduğunuzda oturum burada görünecek.
             </Text>
           </View>
         }

@@ -22,7 +22,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentKey, LegalDocument> = {
       {
         heading: "Hizmetin kapsami",
         body:
-          "Uygulama rota planlama, Atlas sesli asistan deneyimi ve surus oturumu goruntuleme amaclariyla sunulur. Sunulan bilgi ve oneriler yardimci niteliktedir; surucu her durumda kendi dikkat ve kararindan sorumludur.",
+          "Uygulama rota planlama, AKBA sesli asistan deneyimi ve surus oturumu goruntuleme amaclariyla sunulur. Sunulan bilgi ve oneriler yardimci niteliktedir; surucu her durumda kendi dikkat ve kararindan sorumludur.",
       },
       {
         heading: "Kullanim sorumlulugu",

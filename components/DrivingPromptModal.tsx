@@ -147,7 +147,7 @@ export function DrivingBatterySettingsModal() {
 
           <View style={styles.descriptionContainer}>
             <Text style={[styles.description, { color: colors.textSecondary }]}>
-              Şu anki şarjınızı ve varışta hedeflediğiniz şarjı belirleyin. Rota detaylarını birazdan Atlas&apos;a sesli olarak söyleyebilirsiniz.
+              Şu anki şarjınızı ve varışta hedeflediğiniz şarjı belirleyin. Rota detaylarını birazdan AKBA&apos;ya sesli olarak söyleyebilirsiniz.
             </Text>
           </View>
 
