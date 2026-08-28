@@ -6,6 +6,7 @@
  * instead of refetching on every pan.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { InteractionManager } from "react-native";
 
 import type { Station } from "@/constants/stations";
 import { fetchElectripStations } from "@/services/ElectripStationService";
@@ -26,17 +27,18 @@ interface Viewport {
 }
 
 /**
- * Rendering every station in the network would stall the map, so callers pass the
- * visible region and get back only what is on screen, nearest first.
+ * Cuts the nationwide list down to the visible region. Render cost is bounded
+ * by clustering (services/stationClustering.ts), not here, so this is a pure
+ * filter — no cap, no reordering, no dropped stations.
  */
 export function stationsInViewport(
   stations: Station[],
   region: Viewport | null,
-  max = 150,
 ): Station[] {
   if (!region || stations.length === 0) return [];
 
-  // A small pad keeps pins from popping in exactly at the edge while panning.
+  // The pad is the buffer: slightly wider than the screen so pins never pop in
+  // at the edge mid-pan (0.5 would be exactly the screen half).
   const latPad = region.latitudeDelta * 0.6;
   const lngPad = region.longitudeDelta * 0.6;
   const minLat = region.latitude - latPad;
@@ -44,34 +46,13 @@ export function stationsInViewport(
   const minLng = region.longitude - lngPad;
   const maxLng = region.longitude + lngPad;
 
-  const visible = stations.filter(
+  return stations.filter(
     (s) =>
       s.latitude >= minLat &&
       s.latitude <= maxLat &&
       s.longitude >= minLng &&
       s.longitude <= maxLng,
   );
-
-  if (visible.length <= max) return visible;
-
-  // Over the cap: keep the ones closest to the centre of the screen, but hand
-  // them back in their original order. Returning them in distance order would
-  // reshuffle the map's children on every pan, and re-ordering children is what
-  // makes AIRMap insert at an out-of-range index under the New Architecture.
-  const nearest = new Set(
-    visible
-      .map((s) => ({
-        id: s.id,
-        d:
-          (s.latitude - region.latitude) ** 2 +
-          (s.longitude - region.longitude) ** 2,
-      }))
-      .sort((a, b) => a.d - b.d)
-      .slice(0, max)
-      .map((entry) => entry.id),
-  );
-
-  return visible.filter((s) => nearest.has(s.id));
 }
 
 export function useElectripStations(coordinate: Coordinate | null) {
@@ -115,8 +96,13 @@ export function useElectripStations(coordinate: Coordinate | null) {
 
   useEffect(() => {
     if (!coordinate || hasLoadedRef.current) return;
-    hasLoadedRef.current = true;
-    void load(coordinate);
+    // The first response is ~4.7 MB of JSON; parsing it during mount is part of
+    // why the first screen lands late. Let the map draw first.
+    const task = InteractionManager.runAfterInteractions(() => {
+      hasLoadedRef.current = true;
+      void load(coordinate);
+    });
+    return () => task.cancel();
   }, [coordinate, load]);
 
   useEffect(

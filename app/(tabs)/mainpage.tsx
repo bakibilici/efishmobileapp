@@ -9,6 +9,12 @@ import {
   useElectripStations,
 } from "@/hooks/useElectripStations";
 import {
+  CLUSTER_SPREAD_EPSILON,
+  clusterBounds,
+  clusterStations,
+  type StationCluster,
+} from "@/services/stationClustering";
+import {
   getRegisteredVehicles,
   getStationDetails,
   startChargingSession,
@@ -120,6 +126,73 @@ const typeLightningCount: Record<StationType, number> = {
 
 // Marker size as percentage of screen width — consistent across all resolutions.
 const SCREEN_W = Dimensions.get("window").width;
+const CLUSTER_SIZE = Math.round(SCREEN_W * 0.105);
+
+// Cluster marker — same shape as MapPinMarker: static on iOS, briefly bitmap-
+// tracked on Android after the count changes, constant zIndex (mutating it is
+// what crashed AIRMap under the New Architecture's interop path).
+const ClusterMarker = React.memo(
+  ({
+    cluster,
+    onPress,
+  }: {
+    cluster: StationCluster;
+    onPress: (cluster: StationCluster) => void;
+  }) => {
+    const [tracking, setTracking] = React.useState(isAndroid);
+
+    React.useEffect(() => {
+      if (!isAndroid) return;
+      setTracking(true);
+      const timer = setTimeout(() => setTracking(false), 1500);
+      return () => clearTimeout(timer);
+    }, [cluster.count]);
+
+    return (
+      <Marker
+        coordinate={{
+          latitude: cluster.latitude,
+          longitude: cluster.longitude,
+        }}
+        onPress={() => onPress(cluster)}
+        anchor={{ x: 0.5, y: 0.5 }}
+        tracksViewChanges={isAndroid ? tracking : false}
+        zIndex={0}
+      >
+        <View
+          collapsable={false}
+          style={{
+            width: CLUSTER_SIZE,
+            height: CLUSTER_SIZE,
+            borderRadius: CLUSTER_SIZE / 2,
+            backgroundColor: "#0093C9",
+            borderWidth: 2,
+            borderColor: "#FFFFFF",
+            alignItems: "center",
+            justifyContent: "center",
+            shadowColor: "#000",
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.25,
+            shadowRadius: 3,
+            elevation: 4,
+          }}
+        >
+          <Text
+            style={{
+              color: "#FFFFFF",
+              fontSize: cluster.count > 99 ? 11 : 13,
+              fontWeight: "800",
+              includeFontPadding: false,
+            }}
+          >
+            {cluster.count > 99 ? "99+" : cluster.count}
+          </Text>
+        </View>
+      </Marker>
+    );
+  },
+);
+
 /**
  * Shapes an Electrip station into the payload the detail sheet renders. Its
  * connectors arrive with the list response, so no second request is needed.
@@ -1099,6 +1172,9 @@ export default function MapScreen() {
   const [bottomSheetSelectedType, setBottomSheetSelectedType] =
     useState<StationType | null>(null);
   const [isTypeListOpen, setIsTypeListOpen] = useState(false);
+  // Stations of a tapped cluster whose members are too close to separate by
+  // zooming; shown in the type-list sheet instead of a type filter.
+  const [clusterList, setClusterList] = useState<Station[] | null>(null);
 
   const chargingBottomSheetRef = useRef<BottomSheetModal>(null);
   const chargingSnapPoints = useMemo(() => ["90%"], []);
@@ -1359,6 +1435,26 @@ export default function MapScreen() {
     [allStations, search, onlyEfish, showPublic],
   );
 
+  // Grid-clustered view of whatever passed the filters. Markers on the map are
+  // bounded by occupied grid cells, not by station count, so a bird's-eye view
+  // of the whole city stays cheap without dropping a single station.
+  const mapMarkers = useMemo(
+    () => clusterStations(filteredStations, viewport, selectedStation?.id),
+    [filteredStations, viewport, selectedStation],
+  );
+
+  const typeSheetStations = useMemo(() => {
+    if (clusterList) return clusterList;
+    if (!bottomSheetSelectedType) return [];
+    return allStations.filter(
+      (s) =>
+        s.type === bottomSheetSelectedType ||
+        (s.socket_stats &&
+          s.socket_stats[bottomSheetSelectedType] &&
+          s.socket_stats[bottomSheetSelectedType].total > 0),
+    );
+  }, [clusterList, bottomSheetSelectedType, allStations]);
+
   useFocusEffect(
     useCallback(() => {
       const parent = navigation.getParent();
@@ -1395,6 +1491,44 @@ export default function MapScreen() {
       prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type],
     );
     // useEffect will handle refetch
+  };
+
+  const handleClusterPress = (cluster: StationCluster) => {
+    Keyboard.dismiss();
+    const { minLat, maxLat, minLng, maxLng } = clusterBounds(cluster);
+    const latSpread = maxLat - minLat;
+    const lngSpread = maxLng - minLng;
+
+    // Members are effectively at one address: zooming cannot separate them, so
+    // list them in the sheet and let the driver pick.
+    if (
+      latSpread < CLUSTER_SPREAD_EPSILON &&
+      lngSpread < CLUSTER_SPREAD_EPSILON
+    ) {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setClusterList(cluster.stations);
+      setBottomSheetSelectedType(null);
+      setIsTypeListOpen(true);
+      bottomSheetRef.current?.dismiss();
+      typeListBottomSheetRef.current?.present();
+      setTimeout(() => {
+        typeListBottomSheetRef.current?.snapToIndex(1);
+      }, 50);
+      DeviceEventEmitter.emit("toggleBottomSheet", true);
+      return;
+    }
+
+    mapRef.current?.animateToRegion(
+      {
+        latitude: (minLat + maxLat) / 2,
+        longitude: (minLng + maxLng) / 2,
+        // 2.2x the spread keeps every member comfortably in view; the floor
+        // stops a tight pair from zooming past street level in one jump.
+        latitudeDelta: Math.max(latSpread * 2.2, 0.01),
+        longitudeDelta: Math.max(lngSpread * 2.2, 0.01),
+      },
+      350,
+    );
   };
 
   const handleMarkerPress = (station: Station) => {
@@ -1759,12 +1893,20 @@ export default function MapScreen() {
             })}
 
             {!shouldShowOnlyRouteMarkers &&
-              filteredStations.map((station) => (
+              mapMarkers.singles.map((station) => (
                 <MapPinMarker
                   key={station.id}
                   station={station}
                   isSelected={selectedStation?.id === station.id}
                   onPress={handleMarkerPress}
+                />
+              ))}
+            {!shouldShowOnlyRouteMarkers &&
+              mapMarkers.clusters.map((cluster) => (
+                <ClusterMarker
+                  key={cluster.id}
+                  cluster={cluster}
+                  onPress={handleClusterPress}
                 />
               ))}
           </MapView>
@@ -3157,7 +3299,9 @@ export default function MapScreen() {
                     color: colors.text,
                   }}
                 >
-                  {bottomSheetSelectedType} Stations
+                  {clusterList
+                    ? `Bu Konumda ${clusterList.length} İstasyon`
+                    : `${bottomSheetSelectedType} Stations`}
                 </Text>
                 <Pressable
                   onPress={() => {
@@ -3165,6 +3309,7 @@ export default function MapScreen() {
                       LayoutAnimation.Presets.easeInEaseOut,
                     );
                     setBottomSheetSelectedType(null);
+                    setClusterList(null);
                     setIsTypeListOpen(false);
                     typeListBottomSheetRef.current?.dismiss();
                     DeviceEventEmitter.emit("toggleBottomSheet", false);
@@ -3179,29 +3324,12 @@ export default function MapScreen() {
                 </Pressable>
               </View>
               <BottomSheetFlatList
-                data={allStations.filter((s) => {
-                  if (!bottomSheetSelectedType) return false;
-                  // Look at primary type OR check socket_stats for matching type
-                  return (
-                    s.type === bottomSheetSelectedType ||
-                    (s.socket_stats &&
-                      s.socket_stats[bottomSheetSelectedType] &&
-                      s.socket_stats[bottomSheetSelectedType].total > 0)
-                  );
-                })}
+                data={typeSheetStations}
                 keyExtractor={(item: Station) => item.id}
                 bounces={false}
                 contentContainerStyle={[
                   { paddingHorizontal: 16, paddingBottom: 24 },
-                  allStations.filter((s) => {
-                    if (!bottomSheetSelectedType) return false;
-                    return (
-                      s.type === bottomSheetSelectedType ||
-                      (s.socket_stats &&
-                        s.socket_stats[bottomSheetSelectedType] &&
-                        s.socket_stats[bottomSheetSelectedType].total > 0)
-                    );
-                  }).length === 0
+                  typeSheetStations.length === 0
                     ? { flex: 1 }
                     : { gap: 12 },
                 ]}
@@ -3267,6 +3395,7 @@ export default function MapScreen() {
                           LayoutAnimation.Presets.easeInEaseOut,
                         );
                         setBottomSheetSelectedType(null);
+                        setClusterList(null);
                         setIsTypeListOpen(false);
                         typeListBottomSheetRef.current?.dismiss();
                         DeviceEventEmitter.emit("toggleBottomSheet", false);
