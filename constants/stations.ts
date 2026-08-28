@@ -13,6 +13,8 @@ export type Station = {
   distanceKm?: number;
   status: ConnectorStatus;
   isEfish?: boolean;
+  /** Which feed this station came from. Absent means the efish WebSocket feed. */
+  source?: "efish" | "electrip";
   is_public?: boolean;
   is_24h?: boolean;
   address?: string;
@@ -21,6 +23,10 @@ export type Station = {
     id: string;
     powerKw: number;
     status: ConnectorStatus;
+    /** Display label, e.g. "A" or "1". Present on the Electrip feed. */
+    name?: string;
+    /** Plug standard, e.g. "DC_CCS". Present on the Electrip feed. */
+    type?: string;
   }[];
 };
 

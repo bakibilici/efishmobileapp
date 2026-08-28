@@ -5,6 +5,10 @@ import SocketErrorModal from "@/components/SocketErrorModal";
 import { useUser } from "@/context/UserContext";
 import { useChargingSimulation } from "@/hooks/useChargingSimulation";
 import {
+  stationsInViewport,
+  useElectripStations,
+} from "@/hooks/useElectripStations";
+import {
   getRegisteredVehicles,
   getStationDetails,
   startChargingSession,
@@ -116,6 +120,31 @@ const typeLightningCount: Record<StationType, number> = {
 
 // Marker size as percentage of screen width — consistent across all resolutions.
 const SCREEN_W = Dimensions.get("window").width;
+/**
+ * Shapes an Electrip station into the payload the detail sheet renders. Its
+ * connectors arrive with the list response, so no second request is needed.
+ * Sockets carry no uuid: a ZES session cannot be started through this backend.
+ */
+const buildElectripDetails = (station: Station) => ({
+  name: station.name,
+  address: station.address,
+  charge_points: [
+    {
+      id: station.id,
+      name: station.name,
+      status: station.status === "available" ? "Available" : "Busy",
+      sockets: (station.connectors || []).map((c) => ({
+        id: c.id,
+        uuid: undefined,
+        name: c.name ? `Soket ${c.name}` : "Soket",
+        power: c.powerKw,
+        type: c.type || station.type,
+        status_display: c.status === "offline" ? "faulted" : c.status,
+      })),
+    },
+  ],
+});
+
 const PIN_W = Math.round(SCREEN_W * 0.08); // 8% of screen width
 const PIN_H = Math.round(PIN_W * 1.78); // maintain pin aspect ratio
 const PIN_SIZE = { w: PIN_W, h: PIN_H };
@@ -167,7 +196,13 @@ const MapPinMarker = React.memo(
         onPress={() => onPress(station)}
         anchor={isAndroid ? { x: 0.5, y: 0.87 } : undefined}
         tracksViewChanges={isAndroid ? tracking : false}
-        zIndex={isSelected ? 999 : 0}
+        // Deliberately constant. Changing a marker's zIndex makes AIRMap pull the
+        // child out and re-insert it at another index, and under the New
+        // Architecture's legacy-interop path that index goes out of range and
+        // aborts the app (-[AIRMap insertReactSubview:atIndex:], SIGABRT).
+        // Selecting a pin also centres the map on it, so stacking order matters
+        // little here. Revisit if react-native-maps gains a native Fabric view.
+        zIndex={0}
       >
         {/* @ts-ignore */}
         <View
@@ -335,6 +370,11 @@ export default function MapScreen() {
   }, [charging.isActive]);
 
   const handleStartPress = async (socketUuid: string) => {
+    // Guarded here rather than at each status branch: the sheet has several entry
+    // points into this flow, and none of them can start a charge on a network the
+    // efish backend does not operate.
+    if (!socketUuid || selectedStation?.source === "electrip") return;
+
     setTargetSocketUuid(socketUuid);
     // Don't dismiss, just switch mode
     setBottomSheetMode("vehicle_select");
@@ -1201,9 +1241,36 @@ export default function MapScreen() {
   // Keep track of current region to refetch when filters change
   const currentRegion = useRef<Region>(initialRegion);
 
+  // The Electrip feed is nationwide, so the map filters it by what is on screen.
+  // A ref alone cannot drive that — this state is what re-renders the markers.
+  const [viewport, setViewport] = useState<Region>(initialRegion);
+
+  const viewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const onRegionChangeComplete = (region: Region) => {
     currentRegion.current = region;
     sendBoundingBoxUpdate(region);
+
+    // Rebuilding the marker set while the map is still settling makes
+    // react-native-maps add children out of order under the New Architecture and
+    // throw inside -[AIRMap insertReactSubview:atIndex:], which aborts the app.
+    // Tapping a pin animates the region, so that path is reached on every tap.
+    // Let the map come to rest first, and ignore movement too small to change
+    // which stations are on screen.
+    if (viewportTimerRef.current) clearTimeout(viewportTimerRef.current);
+    viewportTimerRef.current = setTimeout(() => {
+      setViewport((prev) => {
+        const moved =
+          Math.abs(prev.latitude - region.latitude) >
+            region.latitudeDelta * 0.15 ||
+          Math.abs(prev.longitude - region.longitude) >
+            region.longitudeDelta * 0.15;
+        const zoomed =
+          Math.abs(prev.latitudeDelta - region.latitudeDelta) >
+          prev.latitudeDelta * 0.2;
+        return moved || zoomed ? region : prev;
+      });
+    }, 450);
 
     if (userLocation) {
       const dist = getDistanceFromLatLonInKm(
@@ -1221,6 +1288,13 @@ export default function MapScreen() {
     sendBoundingBoxUpdate(currentRegion.current);
   }, [typeFilters, sendBoundingBoxUpdate]);
 
+  useEffect(
+    () => () => {
+      if (viewportTimerRef.current) clearTimeout(viewportTimerRef.current);
+    },
+    [],
+  );
+
   const handleRecenter = () => {
     if (userLocation && mapRef.current) {
       mapRef.current.animateToRegion({
@@ -1233,20 +1307,56 @@ export default function MapScreen() {
     }
   };
 
-  // Client-side filtering for other toggles (onlyEfish, public) if API doesn't support them yet
+  // The Electrip feed will not load without a coordinate, and the most common way
+  // an integration ends up with an empty map is never resolving one. Falling back
+  // to the map centre means declining location costs precision, not pins.
+  const electripAnchor = useMemo(
+    () => ({
+      latitude: userLocation?.coords.latitude ?? initialRegion.latitude,
+      longitude: userLocation?.coords.longitude ?? initialRegion.longitude,
+    }),
+    [userLocation, initialRegion],
+  );
+
+  const { stations: electripStations } = useElectripStations(electripAnchor);
+
+  // efish stations stream in over the socket already scoped to the map's bounding
+  // box, so they are all drawn. The Electrip feed is the whole country in one
+  // response, so it is cut down to what is actually on screen.
+  const allStations = useMemo(() => {
+    const merged = [
+      ...stationsList,
+      ...stationsInViewport(electripStations, viewport),
+    ];
+
+    // A station whose sheet is open must stay mounted even if the map has since
+    // moved it off screen; unmounting a marker mid-interaction is what
+    // destabilises the map's child list.
+    if (selectedStation && !merged.some((s) => s.id === selectedStation.id)) {
+      merged.push(selectedStation);
+    }
+
+    // Deliberately NOT sorted: re-ordering children is the same operation that
+    // destabilises the map's native child list. efish first, then Electrip in
+    // feed order, so new stations append rather than land mid-list.
+    return merged;
+  }, [stationsList, electripStations, viewport, selectedStation]);
+
+  // Client-side filtering for the toggles the feeds do not apply themselves.
   const filteredStations = useMemo(
     () =>
-      stationsList.filter((station) => {
+      allStations.filter((station) => {
         // The API already filters by Type (AC/DC/HPC).
         // We might still filter by name (search) or other client-side toggles here.
         const matchesQuery = station.name
           .toLowerCase()
           .includes(search.toLowerCase().trim());
-        // For now ignoring onlyEfish / showPublic if API data doesn't provide enough info,
-        // or filtering based on what we have.
-        return matchesQuery;
+        // Now that a second network is on the map, this toggle finally has two
+        // things to choose between.
+        const matchesNetwork = !onlyEfish || station.isEfish === true;
+        return matchesQuery && matchesNetwork;
       }),
-    [stationsList, search, onlyEfish, showPublic],
+    [allStations, search, onlyEfish, showPublic],
   );
 
   useFocusEffect(
@@ -1310,6 +1420,14 @@ export default function MapScreen() {
         longitudeDelta: 0.01,
       };
       mapRef.current.animateToRegion(region, 500);
+    }
+
+    // Electrip stations are not known to the efish backend, and their connectors
+    // already came down with the list response — build the detail view locally.
+    if (station.source === "electrip") {
+      setStationDetails(buildElectripDetails(station));
+      setIsFetchingDetails(false);
+      return;
     }
 
     // Auto-fetch details immediately
@@ -2693,6 +2811,11 @@ export default function MapScreen() {
                                     {status === "available" ? (
                                       <Pressable
                                         onPress={() => setShowSocketError(true)} // Show "Not Plugged" modal
+                                        // Electrip sockets are read-only here: the
+                                        // plug-in flow belongs to the efish network.
+                                        disabled={
+                                          selectedStation?.source === "electrip"
+                                        }
                                         style={({ pressed }) => ({
                                           backgroundColor: "#4BACE4", // Blue
                                           paddingHorizontal: 14,
@@ -2894,15 +3017,17 @@ export default function MapScreen() {
                                       </Text>
                                     )}
 
-                                    <Text
-                                      style={{
-                                        color: colors.text,
-                                        fontWeight: "600",
-                                        fontSize: 13,
-                                      }}
-                                    >
-                                      {socket.price_info?.price} ₺ / kWh
-                                    </Text>
+                                    {socket.price_info?.price ? (
+                                      <Text
+                                        style={{
+                                          color: colors.text,
+                                          fontWeight: "600",
+                                          fontSize: 13,
+                                        }}
+                                      >
+                                        {socket.price_info.price} ₺ / kWh
+                                      </Text>
+                                    ) : null}
                                   </View>
                                 </View>
                               );
@@ -3054,7 +3179,7 @@ export default function MapScreen() {
                 </Pressable>
               </View>
               <BottomSheetFlatList
-                data={stationsList.filter((s) => {
+                data={allStations.filter((s) => {
                   if (!bottomSheetSelectedType) return false;
                   // Look at primary type OR check socket_stats for matching type
                   return (
@@ -3068,7 +3193,7 @@ export default function MapScreen() {
                 bounces={false}
                 contentContainerStyle={[
                   { paddingHorizontal: 16, paddingBottom: 24 },
-                  stationsList.filter((s) => {
+                  allStations.filter((s) => {
                     if (!bottomSheetSelectedType) return false;
                     return (
                       s.type === bottomSheetSelectedType ||
