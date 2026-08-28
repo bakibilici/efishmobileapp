@@ -25,7 +25,13 @@ const LIMIT = 3000;
 /** Connectors at or above this draw are HPC. Matches the API's own hpcCount on ~91% of stations. */
 const HPC_MIN_KW = 150;
 
-const CACHE_KEY_PREFIX = "electrip_stations_v1_";
+/**
+ * One response covers the whole country, so the cache is a single entry — a
+ * cached copy from anywhere serves everywhere. v1 keyed entries per coordinate,
+ * which forced a pointless multi-megabyte refetch whenever the phone moved.
+ */
+const CACHE_KEY = "electrip_stations_v2";
+const LEGACY_CACHE_PREFIX = "electrip_stations_v1_";
 const CACHE_TTL_MS = 30 * 60 * 1000; // 30 min, per the integration note
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -67,14 +73,20 @@ interface CacheEntry {
   stations: Station[];
 }
 
-const memoryCache = new Map<string, CacheEntry>();
+let memoryEntry: CacheEntry | null = null;
+/** Shared by concurrent callers so a burst of mounts costs one request. */
+let inflight: Promise<Station[]> | null = null;
+let legacyCacheCleaned = false;
 
-/**
- * Geolocation returns a slightly different fix every call; without rounding, every
- * fix looks like a new query. ~100 m buckets.
- */
-function cacheKey(lat: number, lng: number): string {
-  return `${CACHE_KEY_PREFIX}${lat.toFixed(3)}_${lng.toFixed(3)}`;
+function cleanLegacyCache(): void {
+  if (legacyCacheCleaned) return;
+  legacyCacheCleaned = true;
+  AsyncStorage.getAllKeys()
+    .then((keys) => {
+      const stale = keys.filter((k) => k.startsWith(LEGACY_CACHE_PREFIX));
+      return stale.length ? AsyncStorage.multiRemove(stale) : undefined;
+    })
+    .catch(() => {});
 }
 
 /** cpType is an unordered array — check membership by priority, not position. */
@@ -197,19 +209,58 @@ async function readPersistedCache(key: string): Promise<CacheEntry | null> {
  * Fetches the ZES network around a coordinate. Returns cached stations when a
  * fetch within the last 30 minutes covered the same ~100 m bucket.
  */
+/**
+ * Stale-while-revalidate: whatever is cached is returned immediately — even
+ * past its TTL — and a stale copy triggers one background refresh whose result
+ * reaches the caller through `onRefresh`. The map is never blocked on a
+ * multi-megabyte download, and hammering the screen never stacks requests
+ * (concurrent callers share one in-flight fetch).
+ */
 export async function fetchElectripStations(
   latitude: number,
   longitude: number,
+  onRefresh?: (stations: Station[]) => void,
 ): Promise<Station[]> {
-  const key = cacheKey(latitude, longitude);
+  cleanLegacyCache();
   const now = Date.now();
 
-  const cached = memoryCache.get(key) ?? (await readPersistedCache(key));
-  if (cached && now - cached.at < CACHE_TTL_MS) {
-    memoryCache.set(key, cached);
+  const cached = memoryEntry ?? (await readPersistedCache(CACHE_KEY));
+  if (cached) {
+    memoryEntry = cached;
+    if (now - cached.at >= CACHE_TTL_MS && !inflight) {
+      inflight = fetchFromNetwork(latitude, longitude)
+        .then((stations) => {
+          onRefresh?.(stations);
+          return stations;
+        })
+        .catch((error) => {
+          // Refresh failures are invisible: the stale copy stays on screen.
+          console.warn(
+            "[ElectripStations] Background refresh failed:",
+            error instanceof Error ? error.message : String(error),
+          );
+          return cached.stations;
+        })
+        .finally(() => {
+          inflight = null;
+        });
+    }
     return cached.stations;
   }
 
+  // Nothing cached (first run): callers share one network fetch.
+  if (!inflight) {
+    inflight = fetchFromNetwork(latitude, longitude).finally(() => {
+      inflight = null;
+    });
+  }
+  return inflight;
+}
+
+async function fetchFromNetwork(
+  latitude: number,
+  longitude: number,
+): Promise<Station[]> {
   const url =
     `${BASE}/charge-station?latitude=${latitude}&longitude=${longitude}` +
     `&distance=${DISTANCE}&limit=${LIMIT}&service=${SERVICE}`;
@@ -255,10 +306,10 @@ export async function fetchElectripStations(
     .map(toStation)
     .filter((s): s is Station => s !== null);
 
-  const entry: CacheEntry = { at: now, stations };
-  memoryCache.set(key, entry);
+  const entry: CacheEntry = { at: Date.now(), stations };
+  memoryEntry = entry;
   // Persist the normalised list (~280 KB) rather than the 4.7 MB raw response.
-  AsyncStorage.setItem(key, JSON.stringify(entry)).catch((error) =>
+  AsyncStorage.setItem(CACHE_KEY, JSON.stringify(entry)).catch((error) =>
     console.warn("[ElectripStations] Cache write failed:", error),
   );
 

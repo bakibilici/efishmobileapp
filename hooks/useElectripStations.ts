@@ -70,6 +70,9 @@ export function useElectripStations(coordinate: Coordinate | null) {
       const result = await fetchElectripStations(
         coord.latitude,
         coord.longitude,
+        // A stale cache is served instantly; when the background refresh lands,
+        // swap the map's data without another mount cycle.
+        (fresh) => setStations(fresh),
       );
       setStations(result);
     } catch (e) {
