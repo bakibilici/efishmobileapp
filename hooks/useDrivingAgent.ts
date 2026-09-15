@@ -327,8 +327,10 @@ export function useDrivingAgent() {
           console.error("[useDrivingAgent] ❌ fetchDirections background error:", err);
         });
 
-      // 3. Store the route plan for the RoutePlanSheet UI. The agent's gateway
-      // call carries no interests, so add local highlights when absent.
+      // 3. Store the route plan for the RoutePlanSheet UI. The gateway now
+      // receives the driver's interests (published as a participant attribute
+      // above) and returns its own highlights; personalizeRoutePlan only fills
+      // in locally when that server pass produced nothing.
       const normalized = normalizeRoutePlanFromGateway(data as RoutePlanData);
       const personalized = personalizeRoutePlan(
         normalized,
@@ -507,7 +509,10 @@ export function useDrivingAgent() {
       }
 
       // 2. Fetch a LiveKit token from the Atlas token server
-      const identity = `driver-${user.id}`;
+      // The SQLite row id restarts at 1 on every install, so two demo phones
+      // used to share one agent identity (and one memory). The phone hash is
+      // stable per person across devices and passes the token server's rule.
+      const identity = `driver-${(user.phone_hash || String(user.id)).slice(0, 32)}`;
       const { token, url } = await fetchAtlasToken({
         identity,
         language: "tr",
@@ -602,13 +607,36 @@ export function useDrivingAgent() {
 
       await room.connect(url, token);
 
-      // 5. Push GPS as participant attributes FIRST — before the (slower) mic
-      // publish — so it lands inside the agent's 1.5 s waitForGpsAttributes window.
+      // 5. Push GPS + profile as participant attributes FIRST — before the
+      // (slower) mic publish — so they land inside the agent's 1.5 s
+      // waitForGpsAttributes window, and in particular before the driver can
+      // speak a destination. Interests go out as attributes rather than a data
+      // message because attributes are participant state: an agent that
+      // restarts mid-session re-reads them, while a data message is gone.
+      const attributes: Record<string, string> = {};
       if (coords) {
-        await room.localParticipant.setAttributes({
-          latitude: String(coords.latitude),
-          longitude: String(coords.longitude),
-        });
+        attributes.latitude = String(coords.latitude);
+        attributes.longitude = String(coords.longitude);
+      }
+      // Deliberately outside the coords check — a driver starting in an
+      // underground garage has no fix yet, but still has stop preferences.
+      // The gateway only ever surfaces two suggestions and consumes this list
+      // in order, so the practical needs are sent ahead of the nice-to-haves.
+      const PRIORITY_INTERESTS = [
+        "İhtiyaç molası",
+        "İbadet alanı",
+        "Tuvalet molası", // pre-rename profiles
+      ];
+      const interests = [...(user?.interests ?? [])]
+        .sort(
+          (a, b) =>
+            Number(PRIORITY_INTERESTS.includes(b)) -
+            Number(PRIORITY_INTERESTS.includes(a)),
+        )
+        .slice(0, 8);
+      if (interests.length) attributes.interests = interests.join(",");
+      if (Object.keys(attributes).length) {
+        await room.localParticipant.setAttributes(attributes);
       }
 
       // 6. Capture the agent participant if it is already present, then publish mic.
@@ -821,6 +849,12 @@ export function useDrivingAgent() {
     // Let the global store handle delayed confirmation prompts on state exit
     DriveSessionStore.handleActivityChange(activity);
 
+    if (activity !== ActivityState.CAR) {
+      // "Sürüşü Bitir" only blocks the auto-start for the drive it ended;
+      // the next drive should trigger by itself again.
+      manuallyEndedRef.current = false;
+    }
+
     if (activity === ActivityState.CAR && user) {
       if (
         !sessionStartedRef.current &&
@@ -831,6 +865,9 @@ export function useDrivingAgent() {
       }
     }
   }, [activity, startAgentSession, user]);
+
+  // Re-send the battery level whenever the driver changes it in car mode.
+  useEffect(() => DriveSessionStore.onBatteryPreferencesChange(() => publishBatterySnapshot()), [publishBatterySnapshot]);
 
   useEffect(() => {
     if (

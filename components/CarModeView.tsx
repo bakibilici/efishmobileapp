@@ -11,6 +11,7 @@ import {
   Text,
   TouchableOpacity,
   View,
+  Alert,
 } from "react-native";
 import Animated, {
   Easing,
@@ -516,6 +517,38 @@ export function CarModeView() {
         DriveSessionState.AI_SPEAKING,
       ].includes(sessionState));
 
+  const [hasEverConnected, setHasEverConnected] = useState(false);
+  useEffect(() => {
+    if (status === "connected") setHasEverConnected(true);
+  }, [status]);
+
+  const batteryStart = DriveSessionStore.getBatteryPreferences().start;
+  const promptBatteryLevel = () => {
+    const apply = (value?: string | number) => {
+      const n = Math.round(Number(String(value ?? "").replace("%", "").trim()));
+      if (!Number.isFinite(n) || n < 1 || n > 100) return;
+      void DriveSessionStore.setBatteryPreferences(n, DriveSessionStore.getBatteryPreferences().arrival);
+    };
+    if (Platform.OS === "ios") {
+      Alert.prompt(
+        "Batarya seviyesi",
+        "Aracın şu anki şarj yüzdesini girin.",
+        [
+          { text: "Vazgeç", style: "cancel" },
+          { text: "Kaydet", onPress: (v?: string) => apply(v) },
+        ],
+        "plain-text",
+        String(batteryStart),
+        "number-pad",
+      );
+    } else {
+      Alert.alert("Batarya seviyesi", "Aracın şu anki şarj yüzdesi", [
+        ...[20, 40, 60, 80].map((v) => ({ text: `%${v}`, onPress: () => apply(v) })),
+        { text: "Vazgeç", style: "cancel" as const },
+      ]);
+    }
+  };
+
   const assistantStatus = useMemo(() => {
     const pendingTool =
       [...toolCalls]
@@ -566,6 +599,17 @@ export function CarModeView() {
       };
     }
 
+    if (!hasRoutePlan && status === "disconnected" && !hasEverConnected) {
+      // First frame of a fresh session: nothing has failed yet.
+      return {
+        headline: "AKBA HAZIRLANIYOR",
+        detail: "Ses bağlantısı kuruluyor.",
+        animate: false,
+        hideDetailPill: false,
+        isError: false,
+      };
+    }
+
     if (!hasRoutePlan && (status === "disconnected" || status === "error")) {
       return {
         headline: "BAĞLANTI KOPTU",
@@ -592,10 +636,12 @@ export function CarModeView() {
     switch (sessionState) {
       case DriveSessionState.AI_LISTENING:
         return {
-          headline: "AKBA AKTİF",
+          headline: hasRoutePlan ? "AKBA AKTİF" : "NEREYE GİDİYORSUN?",
           detail: isMuted
             ? "Mikrofon kapalı. Açtığınızda AKBA sizi yeniden duyar."
-            : "AKBA sizi dinliyor.",
+            : hasRoutePlan
+              ? "AKBA sizi dinliyor."
+              : "Gitmek istediğiniz yeri söyleyin, AKBA rotayı planlasın.",
           animate: false,
           hideDetailPill: false,
           isError: false,
@@ -769,7 +815,9 @@ export function CarModeView() {
     sessionState === DriveSessionState.ENDING_DRIVE_CONFIRMATION;
   const isEndConfirmVisible = !!manualConfirmAction || isAutomaticEndConfirm;
 
-  const canReconnectVoice = hasRoutePlan && !isVoiceTransportActive;
+  // The header button used to be inert until a route existed; now it also
+  // (re)connects AKBA before the first route.
+  const canReconnectVoice = !isVoiceTransportActive;
   const canStopConversation = isVoiceTransportActive;
   const canToggleMic = isVoiceTransportActive;
   const isDriveActionPreviewStart = isPreviewMode;
@@ -919,6 +967,28 @@ export function CarModeView() {
               </View>
 
               <View style={styles.headerActionsRow}>
+                <TouchableOpacity
+                  onPress={promptBatteryLevel}
+                  activeOpacity={0.78}
+                  accessibilityLabel="Batarya seviyesini gir"
+                  style={[
+                    styles.secondaryHeaderAction,
+                    {
+                      backgroundColor: isDark
+                        ? "rgba(255,255,255,0.08)"
+                        : "rgba(15,23,42,0.06)",
+                      borderColor: isDark
+                        ? "rgba(255,255,255,0.1)"
+                        : "rgba(15,23,42,0.08)",
+                    },
+                  ]}
+                >
+                  <Ionicons name="battery-half" size={18} color={textColor} />
+                  <Text style={[styles.secondaryHeaderActionText, { color: textColor }]}>
+                    {`%${batteryStart}`}
+                  </Text>
+                </TouchableOpacity>
+
                 <TouchableOpacity
                   onPress={handleVoiceButtonPress}
                   activeOpacity={0.78}

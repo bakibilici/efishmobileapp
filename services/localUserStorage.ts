@@ -13,6 +13,8 @@ export interface DemoUserProfile {
   phone_code: string;
   phone_number: string;
   phone_last_four: string;
+  /** SHA-256 of the normalised phone; stable per person and per device, unlike the row id. */
+  phone_hash: string;
   interests: string[];
   created_at: number;
   updated_at: number;
@@ -264,6 +266,7 @@ class LocalUserStorageImpl {
       phone_code: row.phone_code,
       phone_number: this.maskPhoneNumber(row.phone_code, row.phone_last_four),
       phone_last_four: row.phone_last_four,
+      phone_hash: row.phone_hash,
       interests: JSON.parse(row.interests_json || "[]"),
       created_at: row.created_at,
       updated_at: row.updated_at,

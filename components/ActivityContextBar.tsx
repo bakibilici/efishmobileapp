@@ -103,8 +103,8 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
           borderColor: isDark
             ? "rgba(255, 159, 10, 0.3)"
             : "rgba(255, 159, 10, 0.2)",
-          label: "Driving",
-          data: `${dSpeedText} km/h`,
+          label: "Sürüş",
+          data: `${dSpeedText} km/sa`,
         };
       case ActivityState.RUNNING: {
         const displaySpeed = Math.round(speed * 10) / 10;
@@ -117,8 +117,8 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
           borderColor: isDark
             ? "rgba(0, 147, 201, 0.3)"
             : "rgba(0, 147, 201, 0.2)",
-          label: "Running",
-          speedText: `${displaySpeed} km/h • `,
+          label: displaySpeed >= 9 ? "Koşu (hızlı)" : "Koşu (yavaş)",
+          speedText: `${displaySpeed} km/sa • `,
           showSteps: true,
         };
       }
@@ -126,10 +126,10 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
         const isUnknownSpeed = displaySpeed < 0;
         const isPaused = !isUnknownSpeed && displaySpeed < 1;
 
-        let primaryString = "Walking";
-        if (isPaused) primaryString = "Idle";
+        let primaryString = "Yürüyüş";
+        if (isPaused) primaryString = "Beklemede";
 
-        const speedText = isUnknownSpeed ? "" : `${displaySpeed} km/h • `;
+        const speedText = isUnknownSpeed ? "" : `${displaySpeed} km/sa • `;
 
         return {
           icon: "walk",
@@ -158,8 +158,8 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
             borderColor: isDark
               ? "rgba(255, 214, 10, 0.3)"
               : "rgba(255, 214, 10, 0.2)",
-            label: "Walking",
-            speedText: isUnknownSpeed ? "" : `${displaySpeed} km/h • `,
+            label: "Şarjda",
+            speedText: isUnknownSpeed ? "" : `${displaySpeed} km/sa • `,
             showSteps: true,
           };
         }
@@ -173,8 +173,9 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
           borderColor: isDark
             ? "rgba(255, 214, 10, 0.3)"
             : "rgba(255, 214, 10, 0.2)",
-          label: "Charging",
+          label: "Şarjda",
           data: null,
+          showSteps: true,
         };
       }
       case ActivityState.IDLE:
@@ -188,8 +189,9 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
           borderColor: isDark
             ? "rgba(88, 122, 153, 0.3)"
             : "rgba(88, 122, 153, 0.2)",
-          label: "Idle",
+          label: "Beklemede",
           data: null,
+          showSteps: true,
         };
     }
   };
@@ -283,7 +285,7 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
                       style={{ color: colors.text, fontSize: 14 }}
                     />
                     <Text style={[styles.dataText, { color: colors.text }]}>
-                      {" steps"}
+                      {" adım"}
                     </Text>
                     {activityState === ActivityState.CHARGING && (
                       <View style={styles.multiplierBadge}>

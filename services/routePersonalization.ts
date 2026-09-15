@@ -64,6 +64,33 @@ const INTEREST_TEMPLATES: InterestTemplate[] = [
       "Şarj sırasında burada kısa bir nefes molası verip çevreyi değerlendirebilirsiniz.",
     matchers: ["manzara", "view", "scenic"],
   },
+  // Both of these must stay ABOVE the "quiet" template. Matching is forward-only
+  // (interest.includes(matcher)), so any label ending in "molası" is captured by
+  // a broader "mola"-style matcher listed earlier — which is exactly what used to
+  // send "İhtiyaç molası" to "Sessiz mola noktası".
+  {
+    key: "restroom",
+    interestLabel: "İhtiyaç molası",
+    icon: "accessibility-outline",
+    shortLabel: "İhtiyaç",
+    title: "İhtiyaç molası",
+    message:
+      "Bu durak yakınında kısa bir ihtiyaç ve dinlenme molası vermek daha kolay olabilir.",
+    // "tuvalet" stays so profiles saved under the old label still resolve.
+    matchers: ["ihtiyaç", "tuvalet", "wc"],
+  },
+  {
+    key: "worship",
+    interestLabel: "İbadet alanı",
+    icon: "moon",
+    shortLabel: "İbadet",
+    title: "İbadet molası",
+    message:
+      "Şarj molasında ibadet için yakında bir cami veya mescit bulunabilir.",
+    // "badet" covers the runtime where lowercasing "İ" without Turkish locale
+    // rules leaves a combining dot, which plain "ibadet" would not match.
+    matchers: ["ibadet", "badet", "cami", "mescit", "namaz"],
+  },
   {
     key: "quiet",
     interestLabel: "Sessiz mola",
@@ -72,7 +99,10 @@ const INTEREST_TEMPLATES: InterestTemplate[] = [
     title: "Sessiz mola noktası",
     message:
       "Bu durak, yolun temposunu düşürüp daha sakin bir mola vermek için uygun olabilir.",
-    matchers: ["sessiz", "sakin", "quiet", "mola"],
+    // No bare "mola" here: matching is forward containment, so it also swallowed
+    // "Çocuk dostu mola" (and would swallow "İhtiyaç molası"). "Sessiz mola" is
+    // already covered by "sessiz".
+    matchers: ["sessiz", "sakin", "quiet"],
   },
   {
     key: "walk",

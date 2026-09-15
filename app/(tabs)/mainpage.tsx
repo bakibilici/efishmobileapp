@@ -73,6 +73,7 @@ import MapView, {
 // ... existing imports ...
 
 import { ActivityContextBar } from "@/components/ActivityContextBar";
+import { ActivityNotice } from "@/components/ActivityNotice";
 import { RoutePlanSheet } from "@/components/RoutePlanSheet";
 import { Station, StationType } from "@/constants/stations";
 import { Colors } from "@/constants/theme";
@@ -1430,9 +1431,11 @@ export default function MapScreen() {
         // Now that a second network is on the map, this toggle finally has two
         // things to choose between.
         const matchesNetwork = !onlyEfish || station.isEfish === true;
-        return matchesQuery && matchesNetwork;
+        // The HPC/DC/AC chips must filter the ZES pins too, not only the efish feed.
+        const matchesType = typeFilters.length === 0 || typeFilters.includes(station.type);
+        return matchesQuery && matchesNetwork && matchesType;
       }),
-    [allStations, search, onlyEfish, showPublic],
+    [allStations, search, onlyEfish, showPublic, typeFilters],
   );
 
   // Grid-clustered view of whatever passed the filters. Markers on the map are
@@ -1610,7 +1613,10 @@ export default function MapScreen() {
       };
     });
 
-    const toggles = [
+    // "Public" and "Favorites" never did anything, and "Only efish" empties
+    // the map when the efish feed is not connected — hide them in that case.
+    const hasEfishStations = stationsList.length > 0;
+    const toggleDefs = [
       {
         key: "onlyEfish",
         label: "Only efish",
@@ -1649,8 +1655,9 @@ export default function MapScreen() {
       },
     ];
 
+    const toggles = hasEfishStations ? toggleDefs : [];
     return { types, toggles };
-  }, [typeFilters, onlyEfish, showPublic, showFavorites]);
+  }, [typeFilters, onlyEfish, showPublic, showFavorites, stationsList.length]);
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
@@ -2309,22 +2316,20 @@ export default function MapScreen() {
 
                 <View style={{ marginTop: 12, paddingBottom: 4 }}>
                   <ActivityContextBar mode={headerMode} onPress={forceExpand} />
+                  <ActivityNotice dark={isDark} />
                 </View>
               </Animated.View>
             )}
           </View>
 
-          {/* TEMPORARY — manual car-mode trigger.
-              Driving detection needs real motion, which a phone sitting on a
-              desk never produces, so there is otherwise no way into car mode
-              while testing. Remove this block and its two styles once the agent
-              is verified against production. */}
+          {/* Manual entry into car mode. Driving detection also starts it by
+              itself once the phone moves faster than 15 km/h. */}
           {driveState === DriveSessionState.IDLE && (
             <Pressable
               style={styles.manualCarModeBtn}
               onPress={() => DriveSessionStore.startSession()}
             >
-              <Text style={styles.manualCarModeBtnText}>Araba modu (test)</Text>
+              <Text style={styles.manualCarModeBtnText}>Sürüş Modu</Text>
             </Pressable>
           )}
 

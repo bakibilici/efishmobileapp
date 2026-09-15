@@ -1,6 +1,6 @@
 export default ({ config }) => ({
   ...config,
-  name: "Tubitak App Demo",
+  name: "AKBA",
   slug: "tubitak-app",
   // The EAS project lives under the uptecra account. Without this the CLI
   // resolves the project by id alone, which is how the previous project ended
@@ -62,7 +62,7 @@ export default ({ config }) => ({
       "expo-splash-screen",
       {
         image: "./assets/images/splash-icon.png",
-        imageWidth: 200,
+        imageWidth: 220,
         resizeMode: "contain",
         backgroundColor: "#ffffff",
         dark: {

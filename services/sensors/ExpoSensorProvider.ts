@@ -35,14 +35,16 @@ export class ExpoSensorProvider implements ISensorDataProvider {
 
     this.stop(); // Clear any existing
 
+    // Each sensor starts independently: a denied location permission must not
+    // take the pedometer or the accelerometer down with it.
+    const results = await Promise.allSettled([this.initPedometer(), this.initLocation()]);
+    results.forEach((r) => {
+      if (r.status === 'rejected') console.warn('[ExpoSensorProvider] sensor failed to initialize:', r.reason);
+    });
     try {
-      await Promise.all([
-        this.initPedometer(),
-        this.initLocation()
-      ]);
       this.initAccelerometer();
     } catch (e) {
-      console.warn('[ExpoSensorProvider] Some sensors failed to initialize:', e);
+      console.warn('[ExpoSensorProvider] accelerometer failed to initialize:', e);
     }
 
     // Start Unified Polling Loop off the UI thread
@@ -107,8 +109,13 @@ export class ExpoSensorProvider implements ISensorDataProvider {
     if (status !== 'granted') return;
 
     if (this.config.enableBackgroundLocation) {
-      const bgStatus = await Location.requestBackgroundPermissionsAsync();
-      if (bgStatus.status !== 'granted') return; // We fallback to foreground location if background is denied
+      // "While Using" is enough for speed while the app is open; a denied
+      // background grant used to abort the watch and CAR could never fire.
+      try {
+        await Location.requestBackgroundPermissionsAsync();
+      } catch (e) {
+        console.warn('[ExpoSensorProvider] background location unavailable, using foreground:', e);
+      }
     }
 
     this.locationSub = await Location.watchPositionAsync(
@@ -118,8 +125,8 @@ export class ExpoSensorProvider implements ISensorDataProvider {
         timeInterval: 2000, 
       },
       (location) => {
-        // speed comes in m/s natively
-        this.currentSpeed = location.coords.speed || 0;
+        // speed comes in m/s natively; iOS reports -1 when it has no estimate
+        this.currentSpeed = Math.max(0, location.coords.speed ?? 0);
       }
     );
   }

@@ -10,6 +10,8 @@ export const PREDEFINED_USER_INTERESTS = [
   "Yürüyüş",
   "Ailece rota",
   "Çocuk dostu mola",
+  "İhtiyaç molası",
+  "İbadet alanı",
 ] as const;
 
 export const USER_INTERESTS_NOTE =

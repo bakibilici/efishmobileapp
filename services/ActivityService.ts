@@ -15,9 +15,12 @@ import { ExpoSensorProvider } from "./sensors/ExpoSensorProvider";
 import { MockSensorProvider } from "./sensors/MockSensorProvider";
 import { StepStore } from "./sensors/StepStore";
 import { ChargingSessionStore } from "./ChargingSessionStore";
+import { DeviceChargingMonitor } from "./sensors/DeviceChargingMonitor";
+import { ActivityState } from "./ActivityStateMachine";
 
 // Singleton instances
-const stateMachine = new ActivityStateMachine();
+// CAR → IDLE waits longer than the generic 5 s: a red light must not end a drive.
+const stateMachine = new ActivityStateMachine({ carToIdleDelayMs: 45000 });
 
 // In dev, we keep both so we can hot-swap them when the CLI connects/disconnects
 const realProvider = new ExpoSensorProvider();
@@ -147,6 +150,9 @@ export const ActivityService = {
     await pipeline.start();
     console.log("[ActivityService] Pipeline running.");
 
+    // Phone charger → CHARGING state (2x steps), vetoed while driving.
+    void DeviceChargingMonitor.start(() => stateMachine.getState() === ActivityState.CAR);
+
     // In dev mode, start listening for CLI simulation data
     startBridgePoller();
   },
@@ -156,6 +162,7 @@ export const ActivityService = {
     if (!isRunning) return;
     isRunning = false;
     stopBridgePoller();
+    DeviceChargingMonitor.stop();
     pipeline.stop();
     console.log("[ActivityService] Pipeline stopped.");
   },

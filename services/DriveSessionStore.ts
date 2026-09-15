@@ -122,11 +122,14 @@ class DriveSessionStoreImpl {
   private persistedBatteryPrefs: { start: number; arrival: number } | null =
     null;
   private listeners: Set<(state: DriveSessionState) => void> = new Set();
+  private batteryListeners: Set<() => void> = new Set();
   private pendingVoiceReconnect = false;
 
   // Timer for end-drive confirmation
   private endDriveTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly END_DRIVE_THRESHOLD_MS = 30000; // 30 seconds of inactivity before prompting
+  // A red light or a queue easily lasts 40 s; asking "Sürüş bitti mi?" that
+  // early reads as a false detection. Two minutes covers ordinary traffic.
+  private readonly END_DRIVE_THRESHOLD_MS = 120000;
 
   constructor() {
     this.context = {
@@ -233,6 +236,12 @@ class DriveSessionStoreImpl {
     this.persistedBatteryPrefs = { start, arrival };
     this.persistCurrentSession();
     this.notifyListeners();
+    this.batteryListeners.forEach((listener) => listener());
+  }
+
+  public onBatteryPreferencesChange(listener: () => void): () => void {
+    this.batteryListeners.add(listener);
+    return () => this.batteryListeners.delete(listener);
   }
 
   public getBatteryPreferences() {
@@ -516,10 +525,12 @@ class DriveSessionStoreImpl {
       (this.context.routePlanData?.summary?.total_travel_duration != null
         ? this.context.routePlanData.summary.total_travel_duration * 60
         : null);
+    // Google Directions reports metres; Electrip reports kilometres.
+    const routeDistanceM = this.context.route?.summary?.distance;
     const distanceKm =
-      this.context.route?.summary?.distance ??
-      this.context.routePlanData?.summary?.total_travel_length ??
-      null;
+      routeDistanceM != null
+        ? Math.round(routeDistanceM / 100) / 10
+        : this.context.routePlanData?.summary?.total_travel_length ?? null;
     const stationCount =
       this.context.routePlanData?.summary?.total_station_count ??
       this.context.route?.stops?.length ??

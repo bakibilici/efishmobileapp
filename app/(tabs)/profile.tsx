@@ -238,6 +238,7 @@ export default function ProfileScreen() {
                     ? user.interests.join(", ")
                     : "AKBA için ilgi alanları seçin"
                 }
+                subtitleNumberOfLines={1}
                 color="#7C4DFF"
                 isLast
                 onPress={() => setInterestsModalVisible(true)}
@@ -522,7 +523,11 @@ function EditInterestsModal({
                 {USER_INTERESTS_NOTE}
               </Text>
 
-              <View style={styles.interestsWrap}>
+              <ScrollView
+                style={styles.interestsScroll}
+                contentContainerStyle={styles.interestsWrap}
+                showsVerticalScrollIndicator={false}
+              >
                 {PREDEFINED_USER_INTERESTS.map((interest) => {
                   const selected = selectedInterests.includes(interest);
                   return (
@@ -552,7 +557,7 @@ function EditInterestsModal({
                     </Pressable>
                   );
                 })}
-              </View>
+              </ScrollView>
 
               <Pressable
                 style={[
@@ -695,6 +700,7 @@ function SettingsItem({
   icon,
   title,
   subtitle,
+  subtitleNumberOfLines,
   color,
   isFirst,
   isLast,
@@ -707,6 +713,8 @@ function SettingsItem({
   icon: keyof typeof Ionicons.glyphMap;
   title: string;
   subtitle?: string;
+  /** Clamp for subtitles built from unbounded data, e.g. a joined list. */
+  subtitleNumberOfLines?: number;
   color: string;
   isFirst?: boolean;
   isLast?: boolean;
@@ -747,6 +755,7 @@ function SettingsItem({
             {subtitle ? (
               <Text
                 style={[styles.itemSubtitle, { color: colors.textTertiary }]}
+                numberOfLines={subtitleNumberOfLines}
               >
                 {subtitle}
               </Text>
@@ -945,6 +954,9 @@ const styles = StyleSheet.create({
   modalContent: {
     width: "100%",
     maxWidth: 340,
+    // The interests modal grows with the chip list; without a ceiling the Kaydet
+    // button slides off the bottom of a small screen with no way to reach it.
+    maxHeight: "85%",
     borderRadius: 20,
     padding: 20,
     shadowColor: "#000",
@@ -952,6 +964,10 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 18,
     elevation: 10,
+  },
+  interestsScroll: {
+    flexGrow: 0,
+    flexShrink: 1,
   },
   modalTitle: {
     fontSize: 18,

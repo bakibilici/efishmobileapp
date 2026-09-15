@@ -94,7 +94,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="sessions"
         options={() => ({
-          title: "Sessions",
+          title: "Oturumlar",
           headerShown: false,
           tabBarIcon: ({ color, focused }) => (
             <SmartCar
