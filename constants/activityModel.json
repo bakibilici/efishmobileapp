@@ -1,0 +1,14 @@
+{
+  "enabled": false,
+  "version": null,
+  "featureOrder": [
+    "stepFreq",
+    "avgSpeed",
+    "variance",
+    "charging"
+  ],
+  "classes": [],
+  "tree": null,
+  "trainedAt": null,
+  "accuracy": null
+}

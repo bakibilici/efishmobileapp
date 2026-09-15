@@ -1,5 +1,6 @@
 import { ActivityStateMachine } from "../ActivityStateMachine";
 import { ActivityState as ClassifierState, classifyActivity } from "./ActivityClassifier";
+import { ActivityRecorder } from "./ActivityRecorder";
 import { SensorDataBuffer } from "./SensorDataBuffer";
 import { SpeedStore } from "./SpeedStore";
 import { StepStore } from "./StepStore";
@@ -142,5 +143,20 @@ export class ActivityPipeline {
     const latestCharging = ChargingSessionStore.isCharging;
 
     this.stateMachine.transition(classifiedState, latestCharging);
+
+    // E. Field-test evidence: one feature row per window (no-op unless recording).
+    const steps = windowData.reduce((sum, d) => sum + d.steps, 0);
+    const variance = windowData.reduce((sum, d) => sum + d.motionVariance, 0) / windowData.length;
+    ActivityRecorder.onWindow({
+      t: Date.now(),
+      windowSec: this.checkWindowSeconds,
+      steps,
+      stepFreq: steps / this.checkWindowSeconds,
+      avgSpeed,
+      variance,
+      charging: latestCharging,
+      classified: classifiedState,
+      fsm: this.stateMachine.getState(),
+    });
   }
 }

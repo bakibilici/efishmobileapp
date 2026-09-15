@@ -32,7 +32,7 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentKey, LegalDocument> = {
       {
         heading: "Hesap kullanimi",
         body:
-          "Demo hesap cihaz uzerinde tutulur. Telefon numaraniz dogrudan degil, hashlenmis bicimde saklanir. Hesabiniza ait bilgilerin dogru ve guncel olmasindan siz sorumlusunuz.",
+          "Demo hesap cihaz uzerinde tutulur. Telefon numaranız yalnızca cihazınızda, doğrudan okunamayacak biçimde saklanır. Hesabiniza ait bilgilerin dogru ve guncel olmasindan siz sorumlusunuz.",
       },
       {
         heading: "Icerik ve servis degisiklikleri",

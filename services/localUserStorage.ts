@@ -16,6 +16,8 @@ export interface DemoUserProfile {
   /** SHA-256 of the normalised phone; stable per person and per device, unlike the row id. */
   phone_hash: string;
   interests: string[];
+  consent_at: number | null;
+  consent_version: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -28,6 +30,8 @@ interface UserRow {
   phone_hash: string;
   phone_last_four: string;
   interests_json: string;
+  consent_at: number | null;
+  consent_version: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -42,6 +46,8 @@ interface CreateUserInput {
   phoneNumber: string;
   phoneCode?: string;
   interests: string[];
+  /** Version of the Aydınlatma Metni / Kullanım Koşulları the person accepted. */
+  consentVersion?: string;
 }
 
 interface UpdateUserInput {
@@ -197,6 +203,13 @@ class LocalUserStorageImpl {
           value TEXT NOT NULL
         );
       `);
+      // Consent audit trail (KVKK m.10): when and which version was accepted.
+      for (const ddl of [
+        "ALTER TABLE users ADD COLUMN consent_at INTEGER",
+        "ALTER TABLE users ADD COLUMN consent_version TEXT",
+      ]) {
+        try { await this.db.execAsync(ddl); } catch { /* column already exists */ }
+      }
       await this.ensureHashVersion();
       this.isInitialized = true;
       console.log("[LocalUserStorage] Initialized");
@@ -267,6 +280,8 @@ class LocalUserStorageImpl {
       phone_number: this.maskPhoneNumber(row.phone_code, row.phone_last_four),
       phone_last_four: row.phone_last_four,
       phone_hash: row.phone_hash,
+      consent_at: row.consent_at ?? null,
+      consent_version: row.consent_version ?? null,
       interests: JSON.parse(row.interests_json || "[]"),
       created_at: row.created_at,
       updated_at: row.updated_at,
@@ -318,10 +333,12 @@ class LocalUserStorageImpl {
           phone_hash,
           phone_last_four,
           interests_json,
+          consent_at,
+          consent_version,
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         input.firstName.trim(),
@@ -330,6 +347,8 @@ class LocalUserStorageImpl {
         phoneHash,
         phoneLastFour,
         JSON.stringify(input.interests),
+        input.consentVersion ? now : null,
+        input.consentVersion ?? null,
         now,
         now,
       ],
@@ -391,6 +410,29 @@ class LocalUserStorageImpl {
     );
 
     return this.getUserById(userId);
+  }
+
+  /** Small key/value preferences (e.g. share_location) kept next to the user rows. */
+  public async getPreference(key: string): Promise<string | null> {
+    if (!this.isInitialized) await this.waitForInit();
+    if (!this.db) return null;
+    const row = await this.db.getFirstAsync<MetaRow>("SELECT value FROM local_meta WHERE key = ?", [`pref:${key}`]);
+    return row?.value ?? null;
+  }
+
+  public async setPreference(key: string, value: string): Promise<void> {
+    if (!this.isInitialized) await this.waitForInit();
+    if (!this.db) return;
+    await this.db.runAsync("INSERT OR REPLACE INTO local_meta (key, value) VALUES (?, ?)", [`pref:${key}`, value]);
+  }
+
+  /** KVKK m.11/d: remove the person's row on request. Drive sessions are deleted by the caller. */
+  public async deleteUser(userId: number): Promise<void> {
+    if (!this.isInitialized) await this.waitForInit();
+    if (!this.db) return;
+    await this.db.runAsync("DELETE FROM users WHERE id = ?", [userId]);
+    const current = await this.getCurrentUserId();
+    if (current === userId) await this.clearCurrentUserId();
   }
 
   public async setCurrentUserId(userId: number) {

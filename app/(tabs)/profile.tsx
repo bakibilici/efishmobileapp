@@ -6,6 +6,11 @@ import { useTheme } from "@/context/ThemeContext";
 import { useUser } from "@/context/UserContext";
 import { DriveSessionHistoryStorage } from "@/services/driveSessionHistory";
 import { LocalUserStorage } from "@/services/localUserStorage";
+import { LegalTextModal } from "@/components/LegalTextViewer";
+import { LEGAL_TEXTS, LegalTextKey } from "@/constants/legalTexts";
+import { ActivityLabel, ActivityRecorder } from "@/services/sensors/ActivityRecorder";
+import * as FileSystem from "expo-file-system/legacy";
+import * as Sharing from "expo-sharing";
 import { Ionicons } from "@expo/vector-icons";
 import * as Sentry from "@sentry/react-native";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -17,6 +22,7 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableWithoutFeedback,
@@ -81,6 +87,78 @@ export default function ProfileScreen() {
       },
     ]);
   };
+
+  // ── Hesabım (KVKK m.11) ──────────────────────────────────────────────
+  const [legalDoc, setLegalDoc] = useState<LegalTextKey | null>(null);
+  const [shareLocation, setShareLocation] = useState(true);
+  useEffect(() => {
+    void LocalUserStorage.getPreference("share_location").then((v) => setShareLocation(v !== "off"));
+  }, [user?.id]);
+
+  const toggleShareLocation = async (value: boolean) => {
+    setShareLocation(value);
+    await LocalUserStorage.setPreference("share_location", value ? "on" : "off");
+  };
+
+  const handleExportData = async () => {
+    if (!user) return;
+    try {
+      const sessions = await DriveSessionHistoryStorage.listSessions(user.id);
+      const payload = {
+        exported_at: new Date().toISOString(),
+        profile: {
+          first_name: user.first_name,
+          last_name: user.last_name,
+          phone: `+${user.phone_code} ••• ${user.phone_last_four}`,
+          interests: user.interests,
+          consent_version: user.consent_version,
+          consent_at: user.consent_at ? new Date(user.consent_at).toISOString() : null,
+          created_at: new Date(user.created_at).toISOString(),
+        },
+        drive_sessions: sessions,
+        note: "Konum bilgileri ~1 km hassasiyetine yuvarlanmış olarak saklanır.",
+      };
+      const uri = `${FileSystem.documentDirectory}akba-verilerim-${Date.now()}.json`;
+      await FileSystem.writeAsStringAsync(uri, JSON.stringify(payload, null, 2));
+      if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(uri, { mimeType: "application/json" });
+      else Alert.alert("Dışa aktarıldı", uri);
+    } catch (err) {
+      Alert.alert("Dışa aktarma başarısız", String(err));
+    }
+  };
+
+  const handleDeleteAccount = () => {
+    if (!user) return;
+    Alert.alert(
+      "Hesap silinsin mi?",
+      "Profiliniz, ilgi alanlarınız ve kayıtlı sürüşleriniz bu cihazdan silinir. Sunucudaki oturum özetleri en geç 30 gün içinde kaldırılır.",
+      [
+        { text: "Vazgeç", style: "cancel" },
+        {
+          text: "Hesabımı Sil",
+          style: "destructive",
+          onPress: async () => {
+            await DriveSessionHistoryStorage.deleteSessionsForUser(user.id);
+            await LocalUserStorage.deleteUser(user.id);
+            await logout();
+          },
+        },
+      ],
+    );
+  };
+
+  // ── Saha testi kaydı (mode-detection dataset) ────────────────────────
+  const [recorderTick, setRecorderTick] = useState(0);
+  useEffect(() => ActivityRecorder.subscribe(() => setRecorderTick((t) => t + 1)), []);
+  const recorderCounts = ActivityRecorder.counts();
+  const recorderLabel = ActivityRecorder.getLabel();
+  const RECORD_LABELS: { key: ActivityLabel; text: string }[] = [
+    { key: "IDLE", text: "Bekleme" },
+    { key: "WALKING", text: "Yürüyüş" },
+    { key: "RUNNING", text: "Koşu" },
+    { key: "CAR", text: "Sürüş" },
+    { key: "CHARGING", text: "Şarj" },
+  ];
 
   const handleSaveProfile = async () => {
     if (!user) return;
@@ -309,6 +387,104 @@ export default function ProfileScreen() {
             colors={colors}
           />
         </View>
+
+        {user && (
+          <>
+            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>HESABIM</Text>
+            <View style={[styles.group, { backgroundColor: colors.card }]}>
+              <SettingsItem
+                icon="document-text-outline"
+                title="Aydınlatma Metni"
+                subtitle={user.consent_version ? `Onay: ${user.consent_version}${user.consent_at ? " · " + new Date(user.consent_at).toLocaleDateString("tr-TR") : ""}` : "Kayıt sırasında onaylandı"}
+                color="#0093C9"
+                isFirst
+                onPress={() => setLegalDoc("privacy")}
+                colors={colors}
+              />
+              <SettingsItem
+                icon="reader-outline"
+                title="Kullanım Koşulları"
+                color="#0093C9"
+                onPress={() => setLegalDoc("terms")}
+                colors={colors}
+              />
+              <SettingsItem
+                icon="download-outline"
+                title="Verilerimi Dışa Aktar"
+                subtitle="Profil ve sürüş geçmişi, JSON olarak"
+                color="#34C759"
+                onPress={handleExportData}
+                colors={colors}
+              />
+              <View style={[styles.switchRow, { borderTopColor: colors.border }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.switchTitle, { color: colors.text }]}>Konum Paylaşımı</Text>
+                  <Text style={[styles.switchSubtitle, { color: colors.textTertiary }]}>
+                    Kapalıyken konumunuz AKBA'ya gönderilmez
+                  </Text>
+                </View>
+                <Switch value={shareLocation} onValueChange={toggleShareLocation} />
+              </View>
+              <SettingsItem
+                icon="trash-outline"
+                title="Hesabımı Sil"
+                subtitle="Cihazdaki tüm verileriniz silinir"
+                color="#FF3B30"
+                isLast
+                destructive
+                hideChevron
+                onPress={handleDeleteAccount}
+                colors={colors}
+              />
+            </View>
+
+            <Text style={[styles.sectionTitle, { color: colors.textTertiary }]}>SAHA TESTİ KAYDI</Text>
+            <View style={[styles.group, styles.recorderPanel, { backgroundColor: colors.card }]}>
+              <Text style={[styles.switchSubtitle, { color: colors.textTertiary }]}>
+                Ne yaptığınızı seçin, kaydı başlatın; sensör pencereleri etiketli olarak toplanır ve paylaşılabilir.
+              </Text>
+              <View style={styles.recorderChips}>
+                {RECORD_LABELS.map((item) => {
+                  const active = recorderLabel === item.key;
+                  return (
+                    <Pressable
+                      key={item.key}
+                      onPress={() => ActivityRecorder.setLabel(active ? null : item.key)}
+                      style={[
+                        styles.recorderChip,
+                        { borderColor: active ? colors.primary : colors.border, backgroundColor: active ? colors.primary : "transparent" },
+                      ]}
+                    >
+                      <Text style={{ color: active ? "#fff" : colors.text, fontWeight: "600", fontSize: 13 }}>{item.text}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <View style={styles.recorderActions}>
+                <Pressable
+                  onPress={() => (ActivityRecorder.isRecording() ? ActivityRecorder.stop() : ActivityRecorder.start())}
+                  style={[styles.recorderButton, { backgroundColor: ActivityRecorder.isRecording() ? "#FF3B30" : colors.primary }]}
+                >
+                  <Text style={styles.recorderButtonText}>{ActivityRecorder.isRecording() ? "Kaydı Durdur" : "Kaydı Başlat"}</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => ActivityRecorder.exportAndShare().catch((e) => Alert.alert("Paylaşılamadı", String(e)))}
+                  disabled={recorderCounts.windows === 0}
+                  style={[styles.recorderButton, { backgroundColor: colors.backgroundSecondary, opacity: recorderCounts.windows === 0 ? 0.5 : 1 }]}
+                >
+                  <Text style={[styles.recorderButtonText, { color: colors.text }]}>Paylaş</Text>
+                </Pressable>
+                <Pressable onPress={() => ActivityRecorder.clear()} style={[styles.recorderButton, { backgroundColor: colors.backgroundSecondary }]}>
+                  <Text style={[styles.recorderButtonText, { color: colors.text }]}>Temizle</Text>
+                </Pressable>
+              </View>
+              <Text style={[styles.switchSubtitle, { color: colors.textTertiary }]}>
+                {`${recorderCounts.windows} pencere · ${recorderCounts.transitions} geçiş${ActivityRecorder.isRecording() ? " · kayıt sürüyor" : ""}`}
+              </Text>
+            </View>
+            <LegalTextModal documentKey={legalDoc} visible={legalDoc !== null} onClose={() => setLegalDoc(null)} colors={colors} />
+          </>
+        )}
 
         {user && (
           <View style={[styles.group, { backgroundColor: colors.card }]}>
@@ -939,6 +1115,15 @@ const styles = StyleSheet.create({
   itemValue: {
     fontSize: 15,
   },
+  switchRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 12, borderTopWidth: StyleSheet.hairlineWidth },
+  switchTitle: { fontSize: 15, fontWeight: "600" },
+  switchSubtitle: { fontSize: 12, marginTop: 2 },
+  recorderPanel: { padding: 14, gap: 10 },
+  recorderChips: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  recorderChip: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 16, borderWidth: 1 },
+  recorderActions: { flexDirection: "row", gap: 8 },
+  recorderButton: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: "center" },
+  recorderButtonText: { color: "#fff", fontWeight: "700", fontSize: 13 },
   version: {
     textAlign: "center",
     fontSize: 12,

@@ -1,4 +1,6 @@
 import { LEGAL_DOCUMENTS, LegalDocumentKey } from "@/constants/legalDocuments";
+import { LEGAL_CONSENT_VERSION } from "@/constants/legalTexts";
+import { LegalScrollText } from "@/components/LegalTextViewer";
 import {
   PREDEFINED_USER_INTERESTS,
   USER_INTERESTS_NOTE,
@@ -23,7 +25,6 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { WebView } from "react-native-webview";
 
 type RegisterStep = "PROFILE" | "INTERESTS";
 
@@ -96,16 +97,13 @@ export default function RegisterScreen() {
         }
 
         setResolvedPdfUri(asset.localUri);
-        enableTimer = setTimeout(() => {
-          if (isMounted) {
-            setCanAcknowledgeDocument(true);
-          }
-        }, 1200);
+        // The acknowledge button is unlocked by LegalScrollText once the
+        // reader actually reaches the end of the text — no timer.
       } catch (error) {
         console.error("Failed to load legal PDF:", error);
         if (isMounted) {
           Alert.alert(
-            "Belge acilamadi",
+            "Belge açılamadı",
             "PDF onizlemesi yuklenemedi. Lutfen tekrar deneyin.",
           );
           setVisibleDocument(null);
@@ -171,8 +169,8 @@ export default function RegisterScreen() {
   const handleTermsToggle = () => {
     if (!hasReadRequiredDocuments) {
       Alert.alert(
-        "Belgeleri once okuyun",
-        "Devam etmeden once Kullanim Kosullari ve Aydinlatma Metni metinlerini acip sonuna kadar incelemeniz gerekir.",
+        "Belgeleri önce okuyun",
+        "Devam etmeden önce Kullanım Koşulları ve Aydınlatma Metni metinlerini açıp sonuna kadar incelemeniz gerekir.",
       );
       return;
     }
@@ -213,6 +211,7 @@ export default function RegisterScreen() {
       }
 
       const createdUser = await LocalUserStorage.createUser({
+        consentVersion: LEGAL_CONSENT_VERSION,
         firstName,
         lastName,
         phoneNumber,
@@ -462,16 +461,16 @@ export default function RegisterScreen() {
                       onPress={() => openDocument("terms")}
                       style={{ color: colors.primary, fontWeight: "600" }}
                     >
-                      Kullanim Kosullari
+                      Kullanım Koşulları
                     </Text>
                     {" ve "}
                     <Text
                       onPress={() => openDocument("privacy")}
                       style={{ color: colors.primary, fontWeight: "600" }}
                     >
-                      Aydinlatma Metni
+                      Aydınlatma Metni
                     </Text>{" "}
-                    metinlerini okudum ve kabul ediyorum.
+                    metinlerini okudum ve onaylıyorum.
                   </Text>
                   <Text
                     style={[
@@ -484,8 +483,8 @@ export default function RegisterScreen() {
                     ]}
                   >
                     {hasReadRequiredDocuments
-                      ? "Her iki metin goruntulendi. Artik onay verebilirsiniz."
-                      : "Onay verebilmek icin her iki metni de modal icinde sonuna kadar okuyun."}
+                      ? "Her iki metin görüntülendi. Artık onay verebilirsiniz."
+                      : "Onay verebilmek için her iki metni de sonuna kadar okuyun."}
                   </Text>
                 </View>
               </View>
@@ -572,22 +571,10 @@ export default function RegisterScreen() {
 
                 <View style={styles.modalWebViewContainer}>
                   {resolvedPdfUri ? (
-                    <WebView
-                      source={{ uri: resolvedPdfUri }}
-                      style={styles.modalWebView}
-                      originWhitelist={["*"]}
-                      scalesPageToFit
-                      allowFileAccess
-                      allowingReadAccessToURL={resolvedPdfUri}
-                      allowUniversalAccessFromFileURLs
-                      mixedContentMode="always"
-                      setSupportMultipleWindows={false}
-                      onError={(event) => {
-                        console.error(
-                          "Legal PDF preview error:",
-                          event.nativeEvent,
-                        );
-                      }}
+                    <LegalScrollText
+                      documentKey={visibleDocument === "privacy" ? "privacy" : "terms"}
+                      colors={colors}
+                      onReachEnd={() => setCanAcknowledgeDocument(true)}
                     />
                   ) : (
                     <View style={styles.modalLoading}>
@@ -630,7 +617,7 @@ export default function RegisterScreen() {
                       { color: colors.textTertiary },
                     ]}
                   >
-                    Belge onizlemesi acildiktan sonra onay verebilirsiniz.
+                    Metnin sonuna kadar kaydırınca onaylayabilirsiniz.
                   </Text>
                   <Pressable
                     onPress={handleDocumentAcknowledge}

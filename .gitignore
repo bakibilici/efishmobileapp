@@ -48,3 +48,6 @@ app-example
 # Android upload key and its passwords - never commit
 credentials.json
 credentials/
+
+# simulator evidence runs (copied into the test report, not versioned)
+simulation-reports/

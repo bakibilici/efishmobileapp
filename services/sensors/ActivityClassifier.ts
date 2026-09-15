@@ -1,3 +1,4 @@
+import { isLearnedModelEnabled, predictWithLearnedModel } from "./ActivityModel";
 import { SensorDataPayload } from './types';
 import { SensorDataBuffer } from './SensorDataBuffer';
 
@@ -36,6 +37,17 @@ export function classifyActivity(
   windowData: SensorDataPayload[],
   config: ClassifierConfig = DEFAULT_CONFIG
 ): ActivityState {
+  if (isLearnedModelEnabled() && windowData.length > 0) {
+    const stepsTotal = windowData.reduce((sum, d) => sum + d.steps, 0);
+    const span = Math.max(1, (windowData[windowData.length - 1].timestamp - windowData[0].timestamp) / 1000);
+    const predicted = predictWithLearnedModel({
+      stepFreq: stepsTotal / span,
+      avgSpeed: windowData.reduce((sum, d) => sum + d.speed, 0) / windowData.length,
+      variance: windowData.reduce((sum, d) => sum + d.motionVariance, 0) / windowData.length,
+      charging: false,
+    });
+    if (predicted) return predicted;
+  }
   if (!windowData || windowData.length === 0) {
     return 'UNKNOWN';
   }

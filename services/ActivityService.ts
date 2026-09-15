@@ -16,6 +16,7 @@ import { MockSensorProvider } from "./sensors/MockSensorProvider";
 import { StepStore } from "./sensors/StepStore";
 import { ChargingSessionStore } from "./ChargingSessionStore";
 import { DeviceChargingMonitor } from "./sensors/DeviceChargingMonitor";
+import { ActivityRecorder } from "./sensors/ActivityRecorder";
 import { ActivityState } from "./ActivityStateMachine";
 
 // Singleton instances
@@ -147,6 +148,7 @@ export const ActivityService = {
     isRunning = true;
 
     console.log("[ActivityService] Starting pipeline...");
+    ActivityRecorder.attach(stateMachine);
     await pipeline.start();
     console.log("[ActivityService] Pipeline running.");
 

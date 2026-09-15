@@ -1,5 +1,32 @@
 import * as SQLite from "expo-sqlite";
 
+const RETENTION_MS = 365 * 24 * 60 * 60 * 1000; // routes are kept for 12 months
+const COORD_KEYS = new Set(["latitude", "longitude", "lat", "lng", "lon"]);
+
+/**
+ * Two decimals (~1 km) for every stored coordinate — origin, destination,
+ * stops, waypoints. Long point arrays (the drawn route shape) are kept as they
+ * are so a saved session can still be redrawn; they describe a road, not a
+ * person's position.
+ */
+export function roundCoordinatesForStorage<T>(value: T): T {
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.length > 50 ? v : v.map(walk);
+    if (v && typeof v === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [k, inner] of Object.entries(v as Record<string, unknown>)) {
+        if (COORD_KEYS.has(k) && typeof inner === "number") out[k] = Math.round(inner * 100) / 100;
+        else if (COORD_KEYS.has(k) && typeof inner === "string" && inner.trim() !== "" && !isNaN(Number(inner)))
+          out[k] = (Math.round(Number(inner) * 100) / 100).toFixed(2);
+        else out[k] = walk(inner);
+      }
+      return out;
+    }
+    return v;
+  };
+  return walk(value) as T;
+}
+
 const DB_NAME = "atlas_drive_sessions.db";
 
 export interface DriveSessionSnapshotInput {
@@ -94,6 +121,8 @@ class DriveSessionHistoryStorageImpl {
         CREATE INDEX IF NOT EXISTS idx_drive_sessions_user_updated
           ON drive_sessions(user_id, updated_at DESC);
       `);
+      const purged = await this.purgeExpired();
+      if (purged) console.log(`[driveSessionHistory] purged ${purged} session(s) older than 12 months`);
       this.isInitialized = true;
       console.log("[DriveSessionHistoryStorage] Initialized");
     } catch (error) {
@@ -198,12 +227,24 @@ class DriveSessionHistoryStorageImpl {
           snapshot.durationSeconds ?? null,
           snapshot.distanceKm ?? null,
           snapshot.stationCount ?? null,
-          JSON.stringify(snapshot.routeContext),
+          JSON.stringify(roundCoordinatesForStorage(snapshot.routeContext)),
         ],
       );
     } catch (error) {
       console.error("[DriveSessionHistoryStorage] Upsert error:", error);
     }
+  }
+
+  /** Retention: rows older than 12 months are removed at start-up (KVKK m.7). */
+  public async purgeExpired(): Promise<number> {
+    if (!this.db) return 0;
+    const result = await this.db.runAsync("DELETE FROM drive_sessions WHERE started_at < ?", [Date.now() - RETENTION_MS]);
+    return result.changes ?? 0;
+  }
+
+  public async deleteSessionsForUser(userId: number): Promise<void> {
+    if (!this.db) return;
+    await this.db.runAsync("DELETE FROM drive_sessions WHERE user_id = ?", [userId]);
   }
 
   public async listSessions(

@@ -266,6 +266,16 @@ async function runScenario(
   const fsm = new ActivityStateMachine({ debounceMs: 0 });
   const pipeline = new ActivityPipeline(provider, fsm, 3); // 3s classification window
 
+  // Expected FSM state per scenario — the ground truth for the accuracy figure
+  const EXPECTED: Record<string, string> = {
+    walking: "WALKING", idle: "IDLE", car: "CAR", charging_walk: "CHARGING",
+    charging_idle: "CHARGING", running_slow: "RUNNING", running_fast: "RUNNING",
+  };
+  const expected = EXPECTED[scenario.name];
+  const samples: { tick: number; fsm: string; expected: string }[] = [];
+  let simulatedMs = 0;
+  let firstCorrectMs: number | null = null;
+
   // Track state transitions
   const stateHistory: { time: number; state: string }[] = [];
   let previousState = fsm.getState();
@@ -340,6 +350,11 @@ async function runScenario(
 
     // Trigger classification manually (bypass setInterval wait)
     pipeline.processWindow();
+    if (expected) {
+      samples.push({ tick: i, fsm: fsm.getState(), expected });
+      if (firstCorrectMs === null && fsm.getState() === expected) firstCorrectMs = simulatedMs;
+    }
+    simulatedMs += tick.durationMs;
 
     // Pace simulation
     const delayMs = tick.durationMs / speedMultiplier;
@@ -367,7 +382,43 @@ async function runScenario(
       `  History:            ${stateHistory.map((h) => h.state).join(" → ")}`,
     );
   }
+  if (expected) {
+    // Windows after a 5 s warm-up count towards accuracy (the FSM needs a
+    // full window before it can have an opinion).
+    const scored = samples.filter((_, idx) => idx >= 2);
+    const correct = scored.filter((x) => x.fsm === x.expected).length;
+    const accuracy = scored.length ? correct / scored.length : 0;
+    const confusion: Record<string, number> = {};
+    for (const x of scored) confusion[x.fsm] = (confusion[x.fsm] ?? 0) + 1;
+    console.log(`  Expected State:     ${expected}`);
+    console.log(`  Window Accuracy:    ${(accuracy * 100).toFixed(1)}% (${correct}/${scored.length})`);
+    console.log(`  Detection Latency:  ${firstCorrectMs === null ? "never" : `${(firstCorrectMs / 1000).toFixed(0)} s`}`);
+    console.log(`  Observed States:    ${JSON.stringify(confusion)}`);
+    appendReport({
+      scenario: scenario.name, expected, speedMultiplier, windows: scored.length, correct,
+      accuracy, detectionLatencyMs: firstCorrectMs, observed: confusion,
+      transitions: stateHistory.map((h) => h.state), at: new Date().toISOString(),
+    });
+  }
   console.log("");
+}
+
+// ─── Evidence report ─────────────────────────────────────────────────────────
+// Every scored scenario appends one row to simulation-reports/latest.jsonl so
+// the field-test report can quote real numbers. Run with `-x 1` for values
+// that reflect the real 5 s window.
+function appendReport(row: Record<string, unknown>): void {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require("fs") as typeof import("fs");
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require("path") as typeof import("path");
+    const dir = path.join(process.cwd(), "simulation-reports");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(path.join(dir, "latest.jsonl"), JSON.stringify(row) + "\n");
+  } catch (err) {
+    console.warn("report not written:", err);
+  }
 }
 
 // ─── Main ────────────────────────────────────────────────────────────────────

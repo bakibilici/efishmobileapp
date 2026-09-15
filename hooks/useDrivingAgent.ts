@@ -8,6 +8,7 @@ import { ConnectionState, Room, RoomEvent } from "livekit-client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PermissionsAndroid, Platform } from "react-native";
 import { useUser } from "../context/UserContext";
+import { LocalUserStorage } from "../services/localUserStorage";
 import { ActivityState } from "../services/ActivityStateMachine";
 import { AtlasTokenError, fetchAtlasToken } from "../services/AtlasTokenService";
 import type { RoutePlanData } from "../services/DriveSessionStore";
@@ -185,7 +186,17 @@ export function useDrivingAgent() {
     }
   }, [stopGpsWatch, clearPlanWatchdog]);
 
+  // KVKK m.11/e: when the driver turns location sharing off, no position
+  // leaves the phone (AKBA then plans from the İstanbul fallback).
+  const shareLocationRef = useRef(true);
+  useEffect(() => {
+    void LocalUserStorage.getPreference("share_location").then((v: string | null) => {
+      shareLocationRef.current = v !== "off";
+    });
+  }, [user?.id]);
+
   const publishClientMessage = useCallback((message: Record<string, unknown>) => {
+    if (message.type === "gps_update" && !shareLocationRef.current) return;
     const room = roomRef.current;
     if (!room || room.state !== ConnectionState.Connected) return;
     room.localParticipant
@@ -614,7 +625,7 @@ export function useDrivingAgent() {
       // message because attributes are participant state: an agent that
       // restarts mid-session re-reads them, while a data message is gone.
       const attributes: Record<string, string> = {};
-      if (coords) {
+      if (coords && shareLocationRef.current) {
         attributes.latitude = String(coords.latitude);
         attributes.longitude = String(coords.longitude);
       }
