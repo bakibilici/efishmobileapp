@@ -522,12 +522,19 @@ export function CarModeView() {
     if (status === "connected") setHasEverConnected(true);
   }, [status]);
 
-  const batteryStart = DriveSessionStore.getBatteryPreferences().start;
+  // Read through state: the store notifying with an unchanged session state
+  // does not re-render this view, so the pill kept showing the old level.
+  const [batteryPrefs, setBatteryPrefs] = useState(() => DriveSessionStore.getBatteryPreferences());
+  useEffect(
+    () => DriveSessionStore.onBatteryPreferencesChange(() => setBatteryPrefs(DriveSessionStore.getBatteryPreferences())),
+    [],
+  );
+  const batteryStart = batteryPrefs.start;
   const promptBatteryLevel = () => {
     const apply = (value?: string | number) => {
       const n = Math.round(Number(String(value ?? "").replace("%", "").trim()));
       if (!Number.isFinite(n) || n < 1 || n > 100) return;
-      void DriveSessionStore.setBatteryPreferences(n, DriveSessionStore.getBatteryPreferences().arrival);
+      void DriveSessionStore.setBatteryPreferences(n, DriveSessionStore.getBatteryPreferences().arrival, true);
     };
     if (Platform.OS === "ios") {
       Alert.prompt(
@@ -985,7 +992,7 @@ export function CarModeView() {
                 >
                   <Ionicons name="battery-half" size={18} color={textColor} />
                   <Text style={[styles.secondaryHeaderActionText, { color: textColor }]}>
-                    {`%${batteryStart}`}
+                    {batteryPrefs.updatedAt === null ? "%?" : `%${batteryStart}`}
                   </Text>
                 </TouchableOpacity>
 

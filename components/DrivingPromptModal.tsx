@@ -90,6 +90,9 @@ export function DrivingBatterySettingsModal() {
   useEffect(() => {
     const unsub = DriveSessionStore.onStateChange((state) => {
       if (state === DriveSessionState.PROMPTING) {
+        // The store notifies for many reasons; re-seeding on each one snapped
+        // the sliders back while the driver was still adjusting them.
+        if (isVisible) return;
         const p = DriveSessionStore.getBatteryPreferences();
         setStartBattery(p.start);
         setArrivalBattery(p.arrival);

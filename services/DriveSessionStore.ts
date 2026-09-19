@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { ActivityState } from "./ActivityStateMachine";
 import {
   DriveSessionHistoryStorage,
@@ -114,6 +115,8 @@ interface RestoreDriveSessionOptions {
   reconnectVoice?: boolean;
 }
 
+const BATTERY_PREFS_KEY = "akba.battery_prefs";
+
 class DriveSessionStoreImpl {
   private currentState: DriveSessionState = DriveSessionState.IDLE;
   private context: DriveSessionContext | null = null;
@@ -121,6 +124,8 @@ class DriveSessionStoreImpl {
   /** Survives endSession(null context); kept in sync with AsyncStorage + context */
   private persistedBatteryPrefs: { start: number; arrival: number } | null =
     null;
+  /** When the driver last set the start level; null until they ever have. */
+  private batteryUpdatedAt: number | null = null;
   private listeners: Set<(state: DriveSessionState) => void> = new Set();
   private batteryListeners: Set<() => void> = new Set();
   private pendingVoiceReconnect = false;
@@ -147,14 +152,25 @@ class DriveSessionStoreImpl {
       start: DEFAULT_ROUTE_START_BATTERY,
       arrival: DEFAULT_ROUTE_ARRIVAL_BATTERY,
     };
-    if (!this.persistedBatteryPrefs && this.context) {
-      this.persistedBatteryPrefs = {
-        start: this.context.userStartBattery ?? DEFAULT_ROUTE_START_BATTERY,
-        arrival:
-          this.context.userArrivalBattery ?? DEFAULT_ROUTE_ARRIVAL_BATTERY,
-      };
+    try {
+      const raw = await AsyncStorage.getItem(BATTERY_PREFS_KEY);
+      const saved = raw ? JSON.parse(raw) : null;
+      if (saved && Number.isFinite(saved.start) && Number.isFinite(saved.arrival)) {
+        this.persistedBatteryPrefs = { start: saved.start, arrival: saved.arrival };
+        this.batteryUpdatedAt = Number.isFinite(saved.updatedAt) ? saved.updatedAt : null;
+        if (this.context) {
+          this.context = {
+            ...this.context,
+            userStartBattery: saved.start,
+            userArrivalBattery: saved.arrival,
+          };
+        }
+      }
+    } catch (error) {
+      console.error("[DriveSessionStore] battery prefs load failed:", error);
     }
     this.notifyListeners();
+    this.batteryListeners.forEach((listener) => listener());
   }
 
   public getState(): DriveSessionState {
@@ -217,7 +233,15 @@ class DriveSessionStoreImpl {
     this.persistCurrentSession();
   }
 
-  public async setBatteryPreferences(start: number, arrival: number) {
+  /**
+   * `confirmed`: the driver typed or picked this level just now. Without it the
+   * timestamp only moves when the level actually changes, so starting a drive
+   * with an untouched slider does not pass an old value off as current.
+   */
+  public async setBatteryPreferences(start: number, arrival: number, confirmed = false) {
+    if (confirmed || start !== this.getBatteryPreferences().start) {
+      this.batteryUpdatedAt = Date.now();
+    }
     if (!this.context) {
       this.context = {
         sessionId: "pending",
@@ -237,6 +261,10 @@ class DriveSessionStoreImpl {
     this.persistCurrentSession();
     this.notifyListeners();
     this.batteryListeners.forEach((listener) => listener());
+    AsyncStorage.setItem(
+      BATTERY_PREFS_KEY,
+      JSON.stringify({ start, arrival, updatedAt: this.batteryUpdatedAt }),
+    ).catch((error) => console.error("[DriveSessionStore] battery prefs save failed:", error));
   }
 
   public onBatteryPreferencesChange(listener: () => void): () => void {
@@ -246,6 +274,7 @@ class DriveSessionStoreImpl {
 
   public getBatteryPreferences() {
     return {
+      updatedAt: this.batteryUpdatedAt,
       start:
         this.context?.userStartBattery ??
         this.persistedBatteryPrefs?.start ??

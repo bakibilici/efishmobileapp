@@ -211,9 +211,13 @@ export function useDrivingAgent() {
 
   const publishBatterySnapshot = useCallback(() => {
     const batteryPrefs = DriveSessionStore.getBatteryPreferences();
+    // Until the driver has entered a level there is nothing true to report;
+    // AKBA then asks for it instead of planning on a made-up default.
+    if (batteryPrefs.updatedAt === null) return;
     publishClientMessage({
       type: "battery_update",
-      percent: batteryPrefs.start ?? 75,
+      percent: batteryPrefs.start,
+      updated_at: batteryPrefs.updatedAt,
       charging: charging.isActive,
     });
   }, [publishClientMessage, charging.isActive]);
@@ -372,6 +376,20 @@ export function useDrivingAgent() {
         };
         setToolCalls((prev) => [...prev, newCall]);
         setLastToolEvent(newCall);
+
+        // A level the driver confirmed or corrected aloud is the newest truth:
+        // keep the pill and the stored value in step with it.
+        const spokenBattery =
+          event.name === "planEvRoute" ? event.input?.battery
+          : event.name === "setBatteryPercent" ? event.input?.charge
+          : undefined;
+        if (typeof spokenBattery === "number" && spokenBattery >= 0 && spokenBattery <= 100) {
+          void DriveSessionStore.setBatteryPreferences(
+            Math.round(spokenBattery),
+            DriveSessionStore.getBatteryPreferences().arrival,
+            true,
+          );
+        }
 
         if (event.name === "planEvRoute") {
           DriveSessionStore.setAiState(DriveSessionState.PLANNING_ROUTE);
