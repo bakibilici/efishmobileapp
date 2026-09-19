@@ -242,15 +242,9 @@ class DriveSessionStoreImpl {
     if (confirmed || start !== this.getBatteryPreferences().start) {
       this.batteryUpdatedAt = Date.now();
     }
-    if (!this.context) {
-      this.context = {
-        sessionId: "pending",
-        startTime: Date.now(),
-        history: [],
-        userStartBattery: start,
-        userArrivalBattery: arrival,
-      };
-    } else {
+    // With no drive in progress only the stored level changes; creating a
+    // context here made the next route skip startSession().
+    if (this.context) {
       this.context = {
         ...this.context,
         userStartBattery: start,
@@ -522,16 +516,9 @@ class DriveSessionStoreImpl {
       isNavigationActive:
         rawContext.isNavigationActive ??
         !!(rawContext.routePlanData || rawContext.route),
-      userStartBattery:
-        rawContext.userStartBattery ??
-        this.context?.userStartBattery ??
-        this.persistedBatteryPrefs?.start ??
-        DEFAULT_ROUTE_START_BATTERY,
-      userArrivalBattery:
-        rawContext.userArrivalBattery ??
-        this.context?.userArrivalBattery ??
-        this.persistedBatteryPrefs?.arrival ??
-        DEFAULT_ROUTE_ARRIVAL_BATTERY,
+      // The level describes the car now, not the day this drive was recorded.
+      userStartBattery: this.getBatteryPreferences().start,
+      userArrivalBattery: this.getBatteryPreferences().arrival,
     };
   }
 

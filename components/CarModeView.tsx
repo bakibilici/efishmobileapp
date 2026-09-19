@@ -549,10 +549,26 @@ export function CarModeView() {
         "number-pad",
       );
     } else {
-      Alert.alert("Batarya seviyesi", "Aracın şu anki şarj yüzdesi", [
-        ...[20, 40, 60, 80].map((v) => ({ text: `%${v}`, onPress: () => apply(v) })),
-        { text: "Vazgeç", style: "cancel" as const },
-      ]);
+      // Android renders at most three buttons and no dismissal unless asked.
+      const known = batteryPrefs.updatedAt !== null;
+      Alert.alert(
+        "Batarya seviyesi",
+        known
+          ? `Şu an %${batteryStart}. Tam yüzdeyi AKBA'ya sesli de söyleyebilirsiniz.`
+          : "Tam yüzdeyi AKBA'ya sesli söyleyebilirsiniz: \"Şarjım yüzde altmış beş.\"",
+        known
+          ? [
+              { text: "Vazgeç", style: "cancel" as const },
+              { text: "−10", onPress: () => apply(Math.max(1, batteryStart - 10)) },
+              { text: "+10", onPress: () => apply(Math.min(100, batteryStart + 10)) },
+            ]
+          : [
+              { text: "Vazgeç", style: "cancel" as const },
+              { text: "%50", onPress: () => apply(50) },
+              { text: "%80", onPress: () => apply(80) },
+            ],
+        { cancelable: true },
+      );
     }
   };
 

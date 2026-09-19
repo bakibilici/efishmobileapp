@@ -75,6 +75,8 @@ export function useDrivingAgent() {
   );
   const roomRef = useRef<Room | null>(null);
   const agentParticipantRef = useRef<RemoteParticipant | null>(null);
+  /** The battery snapshot is re-sent once per connection, on the agent's first "listening". */
+  const batteryResentRef = useRef(false);
   const gpsWatchRef = useRef<Location.LocationSubscription | null>(null);
   const planWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Failsafe: if planEvRoute never returns a tool_end, unstick the UI. */
@@ -220,6 +222,14 @@ export function useDrivingAgent() {
       updated_at: batteryPrefs.updatedAt,
       charging: charging.isActive,
     });
+    // A data message sent while the agent is still starting up is lost;
+    // participant attributes are state, so the agent reads them whenever it is ready.
+    void roomRef.current?.localParticipant
+      .setAttributes({
+        battery_percent: String(batteryPrefs.start),
+        battery_updated_at: String(batteryPrefs.updatedAt),
+      })
+      .catch(() => {});
   }, [publishClientMessage, charging.isActive]);
 
   const stopVoiceSessionPreservingDrive = useCallback(async () => {
@@ -558,6 +568,7 @@ export function useDrivingAgent() {
       const room = new Room();
       roomRef.current = room;
       agentParticipantRef.current = null;
+      batteryResentRef.current = false;
 
       const captureAgent = (participant: RemoteParticipant) => {
         if (participant.identity.startsWith("agent-")) {
@@ -599,6 +610,12 @@ export function useDrivingAgent() {
           const agentState = participant.attributes["lk.agent.state"];
           if (agentState) {
             setIsSpeaking(agentState === "speaking");
+          }
+          // The join-time snapshot can reach the agent before it listens for
+          // data; by its first "listening" it does. Re-sending is idempotent.
+          if (agentState === "listening" && !batteryResentRef.current) {
+            batteryResentRef.current = true;
+            publishBatterySnapshot();
           }
         })
         .on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
@@ -664,6 +681,13 @@ export function useDrivingAgent() {
         )
         .slice(0, 8);
       if (interests.length) attributes.interests = interests.join(",");
+      // The battery level rides along as participant state, so it is already
+      // there when the agent comes up (see publishBatterySnapshot).
+      const batteryAtJoin = DriveSessionStore.getBatteryPreferences();
+      if (batteryAtJoin.updatedAt !== null) {
+        attributes.battery_percent = String(batteryAtJoin.start);
+        attributes.battery_updated_at = String(batteryAtJoin.updatedAt);
+      }
       if (Object.keys(attributes).length) {
         await room.localParticipant.setAttributes(attributes);
       }
