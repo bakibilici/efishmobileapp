@@ -19,7 +19,7 @@ import Animated, {
   withTiming,
   type SharedValue,
 } from "react-native-reanimated";
-import Svg, { Circle, Defs, RadialGradient, Stop } from "react-native-svg";
+import Svg, { Circle, Defs, LinearGradient, RadialGradient, Stop } from "react-native-svg";
 
 import { DriveSessionState } from "../services/DriveSessionStore";
 
@@ -42,11 +42,13 @@ interface Blob {
 }
 
 const BLOBS: Blob[] = [
-  { id: "magenta", color: "#FF2D92", size: 96, orbit: 17, turns: 1, breaths: 2, phase: 0.0 },
-  { id: "violet", color: "#7B5CFF", size: 104, orbit: 15, turns: -1, breaths: 3, phase: 0.21 },
-  { id: "blue", color: "#1E8BFF", size: 110, orbit: 19, turns: 2, breaths: 2, phase: 0.46 },
-  { id: "cyan", color: "#2FE6F0", size: 88, orbit: 22, turns: -2, breaths: 3, phase: 0.69 },
-  { id: "amber", color: "#FF9A4D", size: 66, orbit: 25, turns: 3, breaths: 1, phase: 0.87 },
+  // Small enough, and far enough out, that each colour keeps a region of its
+  // own; where two meet they add up to light instead of washing out to white.
+  { id: "magenta", color: "#FF2E8B", size: 74, orbit: 26, turns: 1, breaths: 2, phase: 0.0 },
+  { id: "violet", color: "#8A4DFF", size: 80, orbit: 22, turns: -1, breaths: 3, phase: 0.2 },
+  { id: "blue", color: "#1F7BFF", size: 84, orbit: 27, turns: 2, breaths: 2, phase: 0.43 },
+  { id: "cyan", color: "#19E3FF", size: 66, orbit: 30, turns: -2, breaths: 3, phase: 0.66 },
+  { id: "amber", color: "#FF8A3C", size: 52, orbit: 31, turns: 3, breaths: 1, phase: 0.85 },
 ];
 
 /** A soft disc of one colour that fades to nothing at its edge. */
@@ -55,7 +57,7 @@ const Glow = ({ id, color, size, core = 0.95 }: { id: string; color: string; siz
     <Defs>
       <RadialGradient id={id} cx="50%" cy="50%" r="50%">
         <Stop offset="0" stopColor={color} stopOpacity={core} />
-        <Stop offset="0.45" stopColor={color} stopOpacity={core * 0.55} />
+        <Stop offset="0.5" stopColor={color} stopOpacity={core * 0.82} />
         <Stop offset="1" stopColor={color} stopOpacity={0} />
       </RadialGradient>
     </Defs>
@@ -76,19 +78,19 @@ const BlobLayer = ({
 }) => {
   const style = useAnimatedStyle(() => {
     const angle = (t.value * blob.turns + blob.phase) * TAU;
-    const radius = blob.orbit * (0.55 + 0.8 * energy.value);
+    const radius = blob.orbit * (0.8 + 0.35 * energy.value);
     const breath = Math.sin((t.value * blob.breaths + blob.phase) * TAU);
     return {
-      opacity: Math.min(1, (0.62 + 0.38 * energy.value) * presence.value),
+      opacity: Math.min(1, (0.86 + 0.14 * energy.value) * presence.value),
       transform: [
         { translateX: Math.cos(angle) * radius },
         { translateY: Math.sin(angle) * radius },
-        { scale: 0.92 + 0.09 * breath + 0.26 * energy.value },
+        { scale: 0.94 + 0.1 * breath + 0.34 * energy.value },
       ],
     };
   });
   return (
-    <Animated.View style={[styles.centered, { width: blob.size, height: blob.size }, style]}>
+    <Animated.View style={[styles.centered, styles.light, { width: blob.size, height: blob.size }, style]}>
       <Glow id={`orb-${blob.id}`} color={blob.color} size={blob.size} />
     </Animated.View>
   );
@@ -177,9 +179,18 @@ export const AssistantOrbAurora = ({
 
   const fieldStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${swirl.value}deg` }] }));
 
+  const ambientStyle = useAnimatedStyle(() => ({
+    opacity: presence.value * (0.5 + 0.2 * breath.value * breathAmp.value),
+  }));
+
+  const rimStyle = useAnimatedStyle(() => ({
+    opacity: presence.value * (0.55 + 0.45 * energy.value),
+    transform: [{ rotate: `${-swirl.value * 0.5}deg` }],
+  }));
+
   const coreStyle = useAnimatedStyle(() => ({
-    opacity: presence.value * (0.12 + 0.68 * energy.value),
-    transform: [{ scale: 0.55 + 0.7 * energy.value + 0.06 * breath.value * breathAmp.value }],
+    opacity: presence.value * (0.08 + 0.5 * energy.value),
+    transform: [{ scale: 0.4 + 0.6 * energy.value + 0.08 * breath.value * breathAmp.value }],
   }));
 
   return (
@@ -196,22 +207,40 @@ export const AssistantOrbAurora = ({
         </Animated.View>
 
         <Animated.View style={[styles.sphere, sphereStyle]}>
+          {/* A low violet fill so the glass never goes black where no light is passing */}
+          <Animated.View style={[styles.centered, ambientStyle]}>
+            <Glow id="orb-ambient" color="#4A35E8" size={SPHERE + 16} core={0.85} />
+          </Animated.View>
+
           <Animated.View style={[styles.fill, styles.center, fieldStyle]}>
             {BLOBS.map((blob) => (
               <BlobLayer key={blob.id} blob={blob} t={t} energy={energy} presence={presence} />
             ))}
           </Animated.View>
 
-          <Animated.View style={[styles.centered, styles.core, coreStyle]}>
+          <Animated.View style={[styles.centered, styles.core, styles.light, coreStyle]}>
             <Glow id="orb-core" color="#FFFFFF" size={84} core={1} />
+          </Animated.View>
+
+          <Animated.View style={[styles.centered, rimStyle]}>
+            <Svg width={SPHERE} height={SPHERE}>
+              <Defs>
+                <LinearGradient id="orb-rim" x1="0" y1="0" x2="1" y2="1">
+                  <Stop offset="0" stopColor="#FF4FA3" stopOpacity={0.95} />
+                  <Stop offset="0.5" stopColor="#8A4DFF" stopOpacity={0.35} />
+                  <Stop offset="1" stopColor="#19E3FF" stopOpacity={0.95} />
+                </LinearGradient>
+              </Defs>
+              <Circle cx={SPHERE / 2} cy={SPHERE / 2} r={SPHERE / 2 - 2} fill="none" stroke="url(#orb-rim)" strokeWidth={4} />
+            </Svg>
           </Animated.View>
 
           {/* Glass: darker towards the rim, a highlight top-left, a thin bright edge */}
           <Svg width={SPHERE} height={SPHERE} style={styles.centered}>
             <Defs>
               <RadialGradient id="orb-depth" cx="50%" cy="50%" r="50%">
-                <Stop offset="0.55" stopColor="#050814" stopOpacity={0} />
-                <Stop offset="1" stopColor="#050814" stopOpacity={0.62} />
+                <Stop offset="0.7" stopColor="#050814" stopOpacity={0} />
+                <Stop offset="1" stopColor="#050814" stopOpacity={0.3} />
               </RadialGradient>
               <RadialGradient id="orb-specular" cx="32%" cy="24%" r="34%">
                 <Stop offset="0" stopColor="#FFFFFF" stopOpacity={0.5} />
@@ -250,7 +279,10 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#070B1A",
+    backgroundColor: "#060920",
+    // Lets the lights inside blend with each other only, not with the map behind.
+    isolation: "isolate",
   },
+  light: { mixBlendMode: "screen" },
   core: { width: 84, height: 84 },
 });
