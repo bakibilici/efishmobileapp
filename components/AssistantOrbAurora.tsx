@@ -149,7 +149,7 @@ export const AssistantOrbAurora = ({
     presence.value = withTiming(active ? 1 : 0.5, { duration: 450 });
     breathAmp.value = withTiming(connecting ? 0.7 : listening ? 1 : speaking ? 0.25 : 0.35, { duration: 450 });
     if (!speaking) {
-      energy.value = withTiming(connecting ? 0.34 : listening ? 0.2 : 0, {
+      energy.value = withTiming(connecting ? 0.5 : listening ? 0.22 : 0, {
         duration: 420,
         easing: Easing.out(Easing.cubic),
       });
@@ -180,7 +180,7 @@ export const AssistantOrbAurora = ({
   const fieldStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${swirl.value}deg` }] }));
 
   const ambientStyle = useAnimatedStyle(() => ({
-    opacity: presence.value * (0.5 + 0.2 * breath.value * breathAmp.value),
+    opacity: presence.value * (0.68 + 0.2 * breath.value * breathAmp.value),
   }));
 
   const rimStyle = useAnimatedStyle(() => ({

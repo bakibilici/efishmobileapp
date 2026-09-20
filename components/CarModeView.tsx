@@ -459,7 +459,7 @@ export function CarModeView() {
   const isDark = themeScheme === "dark";
   const glassTint = isDark ? "dark" : "light";
   const textColor = isDark ? "#fff" : "#000";
-  const subtextColor = isDark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.5)";
+  const subtextColor = isDark ? "rgba(255,255,255,0.68)" : "rgba(0,0,0,0.62)";
 
   // Animation values
   const entranceAnim = useSharedValue(0);
@@ -941,7 +941,14 @@ export function CarModeView() {
     >
       {/* Floating Top Panel */}
       <Animated.View style={[styles.floatingHeader, animatedHeaderStyle]}>
-        <BlurView intensity={90} tint={glassTint} style={styles.headerGlass}>
+        <BlurView
+          intensity={90}
+          tint={glassTint}
+          style={[
+            styles.headerGlass,
+            { backgroundColor: isDark ? "rgba(14,18,26,0.58)" : "rgba(255,255,255,0.7)" },
+          ]}
+        >
           <SafeAreaView style={styles.headerSafeArea}>
             <View style={styles.headerContent}>
               <View style={styles.headerTopRow}>
@@ -980,6 +987,8 @@ export function CarModeView() {
                         },
                       ]}
                       numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.78}
                     >
                       {assistantStatus.headline}
                     </Text>
@@ -991,22 +1000,19 @@ export function CarModeView() {
                     </Text>
                   </View>
                 </View>
-              </View>
-
-              <View style={styles.headerActionsRow}>
                 <TouchableOpacity
                   onPress={promptBatteryLevel}
                   activeOpacity={0.78}
                   accessibilityLabel="Batarya seviyesini gir"
                   style={[
-                    styles.secondaryHeaderAction,
+                    styles.batteryHeaderAction,
                     {
                       backgroundColor: isDark
                         ? "rgba(255,255,255,0.08)"
-                        : "rgba(15,23,42,0.06)",
+                        : "rgba(15,23,42,0.09)",
                       borderColor: isDark
                         ? "rgba(255,255,255,0.1)"
-                        : "rgba(15,23,42,0.08)",
+                        : "rgba(15,23,42,0.14)",
                     },
                   ]}
                 >
@@ -1015,7 +1021,9 @@ export function CarModeView() {
                     {batteryPrefs.updatedAt === null ? "%?" : `%${batteryStart}`}
                   </Text>
                 </TouchableOpacity>
+              </View>
 
+              <View style={styles.headerActionsRow}>
                 <TouchableOpacity
                   onPress={handleVoiceButtonPress}
                   activeOpacity={0.78}
@@ -1025,10 +1033,10 @@ export function CarModeView() {
                       opacity: canStopConversation || canReconnectVoice ? 1 : 0.5,
                       backgroundColor: isDark
                         ? "rgba(255,255,255,0.08)"
-                        : "rgba(15,23,42,0.06)",
+                        : "rgba(15,23,42,0.09)",
                       borderColor: isDark
                         ? "rgba(255,255,255,0.1)"
-                        : "rgba(15,23,42,0.08)",
+                        : "rgba(15,23,42,0.14)",
                     },
                   ]}
                   disabled={!canStopConversation && !canReconnectVoice}
@@ -1037,8 +1045,12 @@ export function CarModeView() {
                   <Text
                     style={[
                       styles.secondaryHeaderActionText,
+                      styles.headerActionLabel,
                       { color: textColor },
                     ]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.8}
                   >
                     {voiceActionLabel}
                   </Text>
@@ -1058,12 +1070,12 @@ export function CarModeView() {
                           : "rgba(255,159,10,0.12)"
                         : isDark
                           ? "rgba(255,255,255,0.08)"
-                          : "rgba(15,23,42,0.06)",
+                          : "rgba(15,23,42,0.09)",
                       borderColor: isMuted
                         ? "rgba(255,159,10,0.24)"
                         : isDark
                           ? "rgba(255,255,255,0.1)"
-                          : "rgba(15,23,42,0.08)",
+                          : "rgba(15,23,42,0.14)",
                     },
                   ]}
                 >
@@ -1095,7 +1107,7 @@ export function CarModeView() {
                     size={18}
                     color="#FFFFFF"
                   />
-                  <Text style={styles.endDriveTextCompact}>
+                  <Text style={styles.endDriveTextCompact} numberOfLines={1}>
                     {isDriveActionPreviewStart ? "Sürüşü Başlat" : "Sürüşü Bitir"}
                   </Text>
                 </TouchableOpacity>
@@ -1111,7 +1123,14 @@ export function CarModeView() {
           pointerEvents="none"
           style={[styles.floatingStats, animatedStatsStyle]}
         >
-          <BlurView intensity={70} tint={glassTint} style={styles.statGlass}>
+          <BlurView
+            intensity={70}
+            tint={glassTint}
+            style={[
+              styles.statGlass,
+              { backgroundColor: isDark ? "rgba(14,18,26,0.58)" : "rgba(255,255,255,0.7)" },
+            ]}
+          >
             <Text style={[styles.statValue, { color: textColor }]}>
               {Number.isFinite(displaySpeed) && displaySpeed >= 0
                 ? displaySpeed
@@ -1121,7 +1140,14 @@ export function CarModeView() {
               km/h
             </Text>
           </BlurView>
-          <BlurView intensity={70} tint={glassTint} style={styles.statGlass}>
+          <BlurView
+            intensity={70}
+            tint={glassTint}
+            style={[
+              styles.statGlass,
+              { backgroundColor: isDark ? "rgba(14,18,26,0.58)" : "rgba(255,255,255,0.7)" },
+            ]}
+          >
             <Text style={[styles.statValue, { color: textColor }]}>
               {arrivalTimeFormatted}
             </Text>
@@ -1255,6 +1281,7 @@ const styles = StyleSheet.create({
   headerTopRow: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 10,
   },
   statusBadge: {
     flexDirection: "row",
@@ -1329,6 +1356,21 @@ const styles = StyleSheet.create({
   secondaryHeaderActionText: {
     fontSize: 13,
     fontWeight: "800",
+  },
+  /** Takes the room the icon leaves, so the label can shrink instead of wrapping. */
+  headerActionLabel: {
+    flexShrink: 1,
+  },
+  batteryHeaderAction: {
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    alignSelf: "center",
   },
   iconHeaderAction: {
     width: 44,
