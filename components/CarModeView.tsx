@@ -31,6 +31,10 @@ import {
 } from "../services/DriveSessionStore";
 
 import { useDrivingAgent } from "../hooks/useDrivingAgent";
+import { AssistantOrbAurora } from "./AssistantOrbAurora";
+
+/** "aurora": the glass sphere with moving light. "classic": the original ring-and-core orb below. */
+const ORB_STYLE: "aurora" | "classic" = "aurora";
 
 const TOOL_STATUS_COPY: Record<string, { headline: string; detail: string }> = {
   create_route_plan: {
@@ -1139,7 +1143,11 @@ export function CarModeView() {
           disabled={isVoiceTransportActive}
           style={styles.orbTouchTarget}
         >
-          <AssistantOrb state={sessionState} audioLevel={audioLevel} />
+          {ORB_STYLE === "aurora" ? (
+            <AssistantOrbAurora state={sessionState} audioLevel={audioLevel} />
+          ) : (
+            <AssistantOrb state={sessionState} audioLevel={audioLevel} />
+          )}
         </TouchableOpacity>
 
         {!assistantStatus.hideDetailPill && (
