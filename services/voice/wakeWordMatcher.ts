@@ -2,10 +2,12 @@
  * Pure matching for the on-device "AKBA" wake word. No React Native imports,
  * so scripts/voice/check-voice-helpers.ts can exercise it under plain node.
  *
- * The recognizer does not know the word, so it writes whatever it heard:
- * "AKBA", "Akba", "akpa", "ağba", "akbaa", "hakba", or two words "ak ba".
- * Matching is whole-token only, which keeps "akbaba", "Akbank" and "Akbay"
- * from waking the assistant.
+ * The recognizer does not know the word, so it writes whatever it heard. A
+ * Turkish one: "AKBA", "Akba", "akpa", "ağba", "akbaa", "hakba", or two words
+ * "ak ba". An English one (a phone without on-device Turkish, see
+ * wakeWordLocales): "Akbah", "Acba", "Aqba", "ack ba", "ak bah". Matching is
+ * whole-token only, which keeps "akbaba", "Akbank", "Akbay", "Akbar" and
+ * "Ackbar" from waking the assistant.
  */
 
 /** tr-TR lower-casing, then Turkish letters and stray combining marks folded to ASCII. */
@@ -23,11 +25,15 @@ export function foldTurkish(text: string): string {
     .replace(/[̀-ͯ]/g, "");
 }
 
-/** One token: optional leading "h", a/k-or-g, b-or-p, one or more a's. */
-const WAKE_TOKEN = /^h?a[kg][bp]a+$/;
-/** Split form "ak ba": first half, then second half. */
-const WAKE_HEAD = /^h?a[kg]$/;
-const WAKE_TAIL = /^[bp]a+$/;
+/**
+ * One token: optional leading "h", "a", the k sound (k, g, c, q or ck), b or
+ * p, one or more a's, optional trailing "h". Nothing else may follow, so an
+ * "r" ("akbar"), "n" ("akbank") or a second syllable ("akbaba") never matches.
+ */
+const WAKE_TOKEN = /^h?a(?:ck|[kgcq])[bp]a+h?$/;
+/** Split form "ak ba" / "ack bah": first half, then second half. */
+const WAKE_HEAD = /^h?a(?:ck|[kgcq])$/;
+const WAKE_TAIL = /^[bp]a+h?$/;
 
 export function tokenize(text: string): string[] {
   return foldTurkish(text)

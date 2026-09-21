@@ -1,3 +1,4 @@
+import { getLocales } from "expo-localization";
 import { Platform } from "react-native";
 import type {
   ExpoSpeechRecognitionErrorCode,
@@ -5,6 +6,12 @@ import type {
   ExpoSpeechRecognitionOptions,
   ExpoSpeechRecognitionResultEvent,
 } from "expo-speech-recognition";
+import {
+  describeUnusableLocales,
+  isLocaleRefusal,
+  matchInstalledLocale,
+  wakeWordLocaleCandidates,
+} from "./wakeWordLocales";
 import { matchesWakeWord } from "./wakeWordMatcher";
 
 /**
@@ -14,6 +21,12 @@ import { matchesWakeWord } from "./wakeWordMatcher";
  * and, through patches/expo-speech-recognition+3.1.3.patch, iOS now fails
  * instead of silently falling back to Apple's servers; on Android only API 33+
  * is used, where the library creates the on-device recognizer.
+ *
+ * The language is the first of tr-TR, the phone's own Turkish and English
+ * tags and en-US that has an on-device recognizer here (see wakeWordLocales),
+ * so a phone set to English wakes on "AKBA" too. A locale the recognizer
+ * refuses on its first run (see isLocaleRefusal) is ruled out until the next
+ * arm, and the next one is tried.
  *
  * This module never asks for a permission itself (see
  * requestWakeWordPermissionIfNeverAsked, which the voice session calls).
@@ -31,7 +44,7 @@ export type WakeWordStatus = {
   reason: string | null;
 };
 
-export const WAKE_WORD_LOCALE = "tr-TR";
+type Readiness = { ok: true; locale: string } | { ok: false; reason: string };
 
 /** Normal end (the recognizer ran a while, or heard something) → quick restart. */
 const RESTART_AFTER_END_MS = 300;
@@ -105,15 +118,28 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-function buildStartOptions(speech: SpeechRecognitionPackage): ExpoSpeechRecognitionOptions {
+/** The phone's preferred languages, most preferred first; empty if unreadable. */
+function preferredLocaleTags(): string[] {
+  try {
+    return getLocales().map((locale) => locale.languageTag);
+  } catch {
+    return [];
+  }
+}
+
+function buildStartOptions(
+  speech: SpeechRecognitionPackage,
+  lang: string,
+): ExpoSpeechRecognitionOptions {
   return {
-    lang: WAKE_WORD_LOCALE,
+    lang,
     continuous: true,
     interimResults: true,
     maxAlternatives: 3,
     requiresOnDeviceRecognition: true,
     addsPunctuation: false,
-    contextualStrings: ["AKBA", "Akba"],
+    // Also what makes an English recognizer write the name as "AKBA".
+    contextualStrings: ["AKBA", "Akba", "akba"],
     // Passive listening must not look like a call to the car. videoChat and
     // voiceChat (like allowBluetooth) open the hands-free profile, which
     // switches a Bluetooth car kit into call mode and cuts its music; the
@@ -148,10 +174,22 @@ class WakeWordListenerImpl {
   private lastError: ExpoSpeechRecognitionErrorCode | null = null;
   private runStartedAt = 0;
   private runHeardSomething = false;
+  /** The recognizer sent a result event this run, even an empty one: it is working. */
+  private runHadResult = false;
+  /** Runs started in the current locale; 1 while its first one is going. */
+  private runsInLocale = 0;
   private consecutiveHardErrors = 0;
   private consecutiveQuickEnds = 0;
   private matching = false;
   private warnedReasons = new Set<string>();
+  /** The language the recognizer runs in, picked afresh at every arm. */
+  private locale: string | null = null;
+  /**
+   * Locales the recognizer refused since the last arm (see isLocaleRefusal).
+   * Cleared at every arm, so one whose model has finished downloading since
+   * is tried again.
+   */
+  private refusedLocales = new Set<string>();
 
   getStatus(): WakeWordStatus {
     return this.status;
@@ -175,13 +213,20 @@ class WakeWordListenerImpl {
     const generation = ++this.generation;
     this.consecutiveHardErrors = 0;
     this.consecutiveQuickEnds = 0;
+    this.refusedLocales.clear();
+    await this.prepareAndStart(generation);
+  }
 
-    const blocker = await this.checkReadiness();
+  /** Picks a locale (again, after one was refused) and starts listening in it. */
+  private async prepareAndStart(generation: number): Promise<void> {
+    const readiness = await this.checkReadiness();
     if (generation !== this.generation || !this.wanted) return;
-    if (blocker) {
-      this.giveUp(blocker);
+    if (!readiness.ok) {
+      this.giveUp(readiness.reason);
       return;
     }
+    this.locale = readiness.locale;
+    this.runsInLocale = 0;
     // A stop from an earlier generation may still be settling.
     await this.stopNative();
     if (generation !== this.generation || !this.wanted) return;
@@ -232,57 +277,69 @@ class WakeWordListenerImpl {
     }
   }
 
-  /** Returns why the wake word cannot run here, or null when it can. Never prompts. */
-  private async checkReadiness(): Promise<string | null> {
+  /**
+   * The locale to listen in, or why the wake word cannot run here. Never
+   * prompts. The first candidate with an on-device recognizer that has not
+   * been refused since the last arm wins; the rest are not checked.
+   */
+  private async checkReadiness(): Promise<Readiness> {
+    const fail = (reason: string): Readiness => ({ ok: false, reason });
     const speech = loadSpeechModule();
-    if (!speech) return "speech module not in this build";
+    if (!speech) return fail("speech module not in this build");
 
     if (Platform.OS === "android") {
       // Below API 33 the library's "on-device" flag is only a preference and
       // the recognizer may stream to a server.
       if (typeof Platform.Version !== "number" || Platform.Version < 33) {
-        return "Android 13 or newer is needed for on-device recognition";
+        return fail("Android 13 or newer is needed for on-device recognition");
       }
     } else if (Platform.OS !== "ios") {
-      return "unsupported platform";
+      return fail("unsupported platform");
     }
 
     try {
       const mic = await withTimeout(speech.getMicrophonePermissionsAsync(), CHECK_TIMEOUT_MS);
-      if (!mic.granted) return "microphone permission not granted";
+      if (!mic.granted) return fail("microphone permission not granted");
       const recognizer = await withTimeout(
         speech.getSpeechRecognizerPermissionsAsync(),
         CHECK_TIMEOUT_MS,
       );
-      if (!recognizer.granted) return "speech recognition permission not granted";
+      if (!recognizer.granted) return fail("speech recognition permission not granted");
 
-      if (Platform.OS === "ios") {
-        // Patched to accept a locale; without it both checks used the phone's
-        // default language, not Turkish.
-        if (!speech.isRecognitionAvailable(WAKE_WORD_LOCALE)) {
-          return "speech recognizer unavailable for tr-TR";
-        }
-        if (!speech.supportsOnDeviceRecognition(WAKE_WORD_LOCALE)) {
-          return "on-device recognition unsupported for tr-TR";
-        }
-      } else {
+      let installedLocales: string[] = [];
+      if (Platform.OS === "android") {
         if (!speech.supportsOnDeviceRecognition()) {
-          return "on-device recognition unsupported";
+          return fail("on-device recognition unsupported");
         }
-        const { installedLocales } = await withTimeout(
+        ({ installedLocales } = await withTimeout(
           speech.getSupportedLocales({}),
           CHECK_TIMEOUT_MS,
-        );
-        const hasTurkish = installedLocales.some((locale) =>
-          locale.toLowerCase().replace("_", "-").startsWith("tr"),
-        );
-        if (!hasTurkish) return "tr-TR on-device model not installed";
+        ));
       }
+
+      const noOnDevice: string[] = [];
+      const unavailable: string[] = [];
+      for (const candidate of wakeWordLocaleCandidates(preferredLocaleTags())) {
+        // iOS: patched to take a locale; without one both checks used the
+        // phone's default language. Android: the models installed for
+        // offline use are the ones its on-device recognizer can run.
+        const locale =
+          Platform.OS === "ios" ? candidate : matchInstalledLocale(candidate, installedLocales);
+        if (!locale || this.refusedLocales.has(locale)) {
+          noOnDevice.push(candidate);
+        } else if (Platform.OS === "ios" && !speech.supportsOnDeviceRecognition(locale)) {
+          noOnDevice.push(candidate);
+        } else if (Platform.OS === "ios" && !speech.isRecognitionAvailable(locale)) {
+          unavailable.push(candidate);
+        } else {
+          return { ok: true, locale };
+        }
+      }
+      return fail(describeUnusableLocales(noOnDevice, unavailable));
     } catch (error) {
       this.warnOnce("Readiness check failed", error);
-      return "readiness check failed";
+      return fail("readiness check failed");
     }
-    return null;
   }
 
   private ensureSubscribed(speech: SpeechModule) {
@@ -310,15 +367,22 @@ class WakeWordListenerImpl {
       this.giveUp("speech module not in this build");
       return;
     }
+    const lang = this.locale;
+    if (!lang) {
+      this.giveUp("no wake-word locale chosen");
+      return;
+    }
     const speech = pkg.ExpoSpeechRecognitionModule;
     this.ensureSubscribed(speech);
     this.lastError = null;
     this.runStartedAt = Date.now();
     this.runHeardSomething = false;
+    this.runHadResult = false;
+    this.runsInLocale += 1;
     this.stopping = false;
     this.nativeActive = true;
     try {
-      speech.start(buildStartOptions(pkg));
+      speech.start(buildStartOptions(pkg, lang));
     } catch (error) {
       this.nativeActive = false;
       this.giveUp("recognizer failed to start", error);
@@ -367,6 +431,7 @@ class WakeWordListenerImpl {
   };
 
   private handleResult = (event: ExpoSpeechRecognitionResultEvent) => {
+    this.runHadResult = true;
     if (!this.wanted || this.stopping || this.matching) return;
     const transcripts = (event.results ?? []).map((result) => result.transcript);
     if (transcripts.some((text) => text.trim().length > 0)) {
@@ -400,7 +465,7 @@ class WakeWordListenerImpl {
     if (!this.stopping && this.wanted && FATAL_ERRORS.has(event.error)) {
       // Keep the message: "language-not-supported" is also how the patched
       // library refuses to fall back to server recognition.
-      this.warnOnce(`Recognizer error ${event.error}`, event.message);
+      this.warnOnce(`Recognizer error ${event.error} (${this.locale})`, event.message);
     }
   };
 
@@ -424,6 +489,21 @@ class WakeWordListenerImpl {
       this.consecutiveQuickEnds = 0;
     }
 
+    const run = {
+      first: this.runsInLocale === 1,
+      quick: ranMs < QUICK_RUN_MS,
+      hadResult: this.runHadResult,
+    };
+    if (error && isLocaleRefusal(error, run)) {
+      // This locale cannot run on the device after all: rule it out and try
+      // the next one. Each pass rules one out, so this ends within the
+      // candidate list, in a locale that works or in a give-up.
+      if (this.locale) this.refusedLocales.add(this.locale);
+      this.consecutiveHardErrors = 0;
+      this.consecutiveQuickEnds = 0;
+      void this.prepareAndStart(this.generation);
+      return;
+    }
     if (error && FATAL_ERRORS.has(error)) {
       this.giveUp(`recognizer error ${error}`);
       return;

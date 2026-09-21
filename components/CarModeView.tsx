@@ -41,36 +41,53 @@ import { AssistantOrbRibbon } from "./AssistantOrbRibbon";
  */
 const ORB_STYLE: "ribbon" | "aurora" | "classic" = "ribbon";
 
-const TOOL_STATUS_COPY: Record<string, { headline: string; detail: string }> = {
-  create_route_plan: {
-    headline: "ROTA HESAPLANIYOR",
-    detail: "AKBA yeni rotayı hazırlıyor.",
-  },
-  find_nearby_stations: {
-    headline: "İSTASYONLAR ARANIYOR",
-    detail: "Yakındaki uygun şarj noktaları bulunuyor.",
-  },
-  get_user_location: {
-    headline: "KONUM BULUNUYOR",
-    detail: "Bulunduğunuz konum doğrulanıyor.",
-  },
-  end_call: {
-    headline: "OTURUM KAPATILIYOR",
-    detail: "AKBA ses oturumunu sonlandırıyor.",
-  },
+const ROUTE_PLANNING_TEXT = "Rota planlanıyor…";
+
+/**
+ * The header line while AKBA runs a tool, keyed by the tool names
+ * useDrivingAgent reports (only tools the agent sends tool events for). A tool
+ * without a line here (an instant one such as setBatteryPercent) leaves the
+ * header to the agent's own "thinking" state.
+ */
+const TOOL_STATUS_COPY: Record<string, string> = {
+  create_route_plan: ROUTE_PLANNING_TEXT,
+  geocodeDestination: "Adresi arıyor…",
 };
 
-type StatusTone = "listening" | "speaking" | "busy" | "idle" | "warn" | "error";
+/** Passive, no route yet, the phone is listening for its name. */
+const WAKE_WORD_CAPTION = "“AKBA” de, dinleyeyim";
 
-/** Shown in the passive states while the on-device wake word is listening. */
-const WAKE_WORD_HINT = "“AKBA” diye seslenmen yeterli";
+/**
+ * The header prints what AKBA is doing only when it is doing something:
+ * work in progress, an error, or the wake-word caption. Listening, speaking,
+ * muted, preview and passive print nothing; the orb and the controls show them.
+ */
+type HeaderStatus =
+  | { kind: "busy"; text: string }
+  | { kind: "error"; text: string; detail: string }
+  | { kind: "wake" };
+
+/** A "thinking" shorter than this never reaches the screen, so it cannot flash. */
+const THINKING_LINE_DELAY_MS = 400;
+
+/** True once `active` has held for `delayMs`; false again the moment it drops. */
+function useHeldFor(active: boolean, delayMs: number): boolean {
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    if (!active) {
+      setHeld(false);
+      return;
+    }
+    const timer = setTimeout(() => setHeld(true), delayMs);
+    return () => clearTimeout(timer);
+  }, [active, delayMs]);
+  return active && held;
+}
+
+type StatusTone = "busy" | "error";
 
 const STATUS_TONE_COLOR: Record<StatusTone, string> = {
-  listening: "#22C55E",
-  speaking: "#0A84FF",
   busy: "#F59E0B",
-  idle: "#94A3B8",
-  warn: "#FF9F0A",
   error: "#FF3B30",
 };
 
@@ -436,6 +453,7 @@ export function CarModeView() {
     startSession,
     toolCalls,
     status,
+    agentState,
     isMuted,
     setMuted,
     wakeWordArmed,
@@ -451,8 +469,6 @@ export function CarModeView() {
   const headerY = useSharedValue(-120);
   const statsX = useSharedValue(120);
   const assistantY = useSharedValue(150);
-  const detailPillOpacity = useSharedValue(1);
-  const detailPillTranslateY = useSharedValue(0);
 
   const getRouteDurationSeconds = () => {
     const context = DriveSessionStore.getContext();
@@ -562,208 +578,78 @@ export function CarModeView() {
     }
   };
 
-  const assistantStatus = useMemo(() => {
-    const pendingTool =
-      [...toolCalls]
+  const isThinking = useHeldFor(
+    status === "connected" && agentState === "thinking",
+    THINKING_LINE_DELAY_MS,
+  );
+
+  const headerStatus = useMemo((): HeaderStatus | null => {
+    // A call left pending by a dropped session is not work in progress.
+    if (status === "connected") {
+      const pendingTool = [...toolCalls]
         .reverse()
-        .find((toolCall) => toolCall.status === "pending") || null;
-
-    if (pendingTool) {
-      return {
-        headline:
-          TOOL_STATUS_COPY[pendingTool.toolName]?.headline ||
-          "İŞLEM DEVAM EDİYOR",
-        detail:
-          TOOL_STATUS_COPY[pendingTool.toolName]?.detail ||
-          "AKBA isteğinizi işliyor.",
-        stateLabel: "AKBA çalışıyor",
-        tone: "busy" as StatusTone,
-        animate: true,
-        hideDetailPill: true,
-        isError: false,
-      };
+        .find((call) => call.status === "pending" && TOOL_STATUS_COPY[call.toolName]);
+      if (pendingTool) return { kind: "busy", text: TOOL_STATUS_COPY[pendingTool.toolName] };
     }
-
     if (sessionState === DriveSessionState.PLANNING_ROUTE) {
-      return {
-        headline: "ROTA HESAPLANIYOR",
-        detail: "AKBA yeni rotayı hazırlıyor.",
-        stateLabel: "Rota hazırlanıyor",
-        tone: "busy" as StatusTone,
-        animate: true,
-        hideDetailPill: true,
-        isError: false,
-      };
+      return { kind: "busy", text: ROUTE_PLANNING_TEXT };
     }
-
-    if (isPreviewMode && hasRoutePlan && !isVoiceTransportActive) {
-      return {
-        headline: "ROTA ÖNİZLEMEDE",
-        detail: "İsterseniz sürüşü başlatabilir veya AKBA'ya yeniden bağlanabilirsiniz.",
-        stateLabel: "Rota önizlemede",
-        tone: "idle" as StatusTone,
-        animate: false,
-        hideDetailPill: false,
-        isError: false,
-      };
-    }
-
-    if (hasRoutePlan && !isVoiceTransportActive) {
-      return {
-        headline: "AKBA PASİF",
-        detail: wakeWordArmed
-          ? WAKE_WORD_HINT
-          : "Yeniden bağlanıp AKBA ile konuşmaya devam edebilirsiniz.",
-        stateLabel: "Konuşma kapalı",
-        tone: "idle" as StatusTone,
-        animate: false,
-        hideDetailPill: false,
-        isError: false,
-        wakeHint: wakeWordArmed,
-      };
-    }
-
-    // No route yet, AKBA not live, but the phone is listening for "AKBA":
-    // an ordinary passive state, neither "starting" nor a broken connection.
+    // Passive and listening for "AKBA": an ordinary state, not a broken
+    // connection. With a trip on screen the trip is enough.
     if (wakeWordArmed && !isVoiceTransportActive) {
-      return {
-        headline: "AKBA PASİF",
-        detail: WAKE_WORD_HINT,
-        stateLabel: "Konuşma kapalı",
-        tone: "idle" as StatusTone,
-        animate: false,
-        hideDetailPill: false,
-        isError: false,
-        wakeHint: true,
-      };
+      return tripSummary ? null : { kind: "wake" };
     }
-
-    if (!hasRoutePlan && status === "disconnected" && !hasEverConnected) {
-      // First frame of a fresh session: nothing has failed yet.
-      return {
-        headline: "AKBA HAZIRLANIYOR",
-        detail: "Birkaç saniye içinde sizi dinlemeye başlayacak.",
-        stateLabel: "Bağlantı kuruluyor",
-        tone: "busy" as StatusTone,
-        animate: false,
-        hideDetailPill: false,
-        isError: false,
-      };
-    }
-
-    if (!hasRoutePlan && (status === "disconnected" || status === "error")) {
-      return {
-        headline: "BAĞLANTI KOPTU",
-        detail: "Tekrar bağlanmak için orb'a dokunun.",
-        stateLabel: "Bağlantı yok",
-        tone: "error" as StatusTone,
-        animate: false,
-        hideDetailPill: false,
-        isError: true,
-      };
-    }
-
     if (
-      status === "connecting" ||
-      sessionState === DriveSessionState.AI_CONNECTING
+      sessionState === DriveSessionState.AI_ERROR ||
+      (!hasRoutePlan &&
+        (status === "error" || (status === "disconnected" && hasEverConnected)))
     ) {
       return {
-        headline: "AKBA BAĞLANIYOR",
-        detail: "Birkaç saniye içinde sizi dinlemeye başlayacak.",
-        stateLabel: "Bağlantı kuruluyor",
-        tone: "busy" as StatusTone,
-        animate: false,
-        hideDetailPill: false,
-        isError: false,
+        kind: "error",
+        text: "Bağlantı koptu",
+        detail: "Tekrar bağlanmak için orb'a dokunun.",
       };
     }
-
-    switch (sessionState) {
-      case DriveSessionState.AI_LISTENING:
-        return {
-          headline: hasRoutePlan ? "AKBA AKTİF" : "NEREYE GİDİYORSUN?",
-          detail: isMuted
-            ? "Mikrofon kapalı. Açtığınızda AKBA sizi yeniden duyar."
-            : hasRoutePlan
-              ? "AKBA sizi dinliyor."
-              : "Gitmek istediğiniz yeri söyleyin, AKBA rotayı planlasın.",
-          stateLabel: isMuted ? "Mikrofon kapalı" : "AKBA dinliyor",
-          tone: (isMuted ? "warn" : "listening") as StatusTone,
-          animate: false,
-          hideDetailPill: false,
-          isError: false,
-        };
-      case DriveSessionState.AI_SPEAKING:
-        return {
-          headline: "AKBA AKTİF",
-          detail: isMuted
-            ? "AKBA konuşuyor. Mikrofon şu anda kapalı."
-            : "Araya girmek için konuşmanız yeterli.",
-          stateLabel: "AKBA konuşuyor",
-          tone: "speaking" as StatusTone,
-          animate: false,
-          hideDetailPill: false,
-          isError: false,
-        };
-      case DriveSessionState.AI_ERROR:
-        return {
-          headline: "BAĞLANTI KOPTU",
-          detail: "Tekrar bağlanmak için orb'a dokunun.",
-          stateLabel: "Bağlantı yok",
-          tone: "error" as StatusTone,
-          animate: false,
-          hideDetailPill: false,
-          isError: true,
-        };
-      case DriveSessionState.CAR_SESSION_ACTIVE:
-      case DriveSessionState.NAVIGATION_ONLY:
-        return {
-          headline: "AKBA PASİF",
-          detail: wakeWordArmed
-            ? WAKE_WORD_HINT
-            : "Konuşmayı yeniden başlatmak için orb'a veya üstteki düğmeye dokunun.",
-          stateLabel: "Konuşma kapalı",
-          tone: "idle" as StatusTone,
-          animate: false,
-          hideDetailPill: false,
-          isError: false,
-          wakeHint: wakeWordArmed,
-        };
-      default:
-        return {
-          headline: "AKBA AKTİF",
-          detail: "Size nasıl yardımcı olabilirim?",
-          stateLabel: "AKBA hazır",
-          tone: "listening" as StatusTone,
-          animate: false,
-          hideDetailPill: false,
-          isError: false,
-        };
+    // Until the agent has joined and set itself up, AKBA cannot hear anyone.
+    // A room left without an agent turns into the error above after 15 s
+    // (useDrivingAgent), so this cannot pulse forever.
+    if (
+      status === "connecting" ||
+      sessionState === DriveSessionState.AI_CONNECTING ||
+      (status === "connected" && (agentState === null || agentState === "initializing"))
+    ) {
+      return { kind: "busy", text: "Bağlanıyor…" };
     }
+    if (isThinking) return { kind: "busy", text: "Düşünüyor…" };
+    return null;
   }, [
+    agentState,
     hasEverConnected,
     hasRoutePlan,
-    isPreviewMode,
-    isMuted,
+    isThinking,
     isVoiceTransportActive,
     sessionState,
     status,
     toolCalls,
+    tripSummary,
     wakeWordArmed,
   ]);
 
-  useEffect(() => {
-    detailPillOpacity.value = 0;
-    detailPillTranslateY.value = 8;
-    detailPillOpacity.value = withTiming(1, {
-      duration: 260,
-      easing: Easing.out(Easing.ease),
-    });
-    detailPillTranslateY.value = withTiming(0, {
-      duration: 260,
-      easing: Easing.out(Easing.ease),
-    });
-  }, [assistantStatus.detail, detailPillOpacity, detailPillTranslateY]);
+  // No longer printed, still spoken: VoiceOver hears what AKBA is doing.
+  const voiceStateLabel =
+    headerStatus?.kind === "error"
+      ? "AKBA bağlantısı koptu"
+      : headerStatus?.kind === "busy"
+        ? `AKBA: ${headerStatus.text.replace(/…$/, "")}`
+        : !isVoiceTransportActive
+          ? wakeWordArmed
+            ? "AKBA kapalı, “AKBA” deyince dinler"
+            : "AKBA kapalı"
+          : agentState === "speaking"
+            ? "AKBA konuşuyor"
+            : isMuted
+              ? "AKBA dinlemiyor, mikrofon kapalı"
+              : "AKBA dinliyor";
 
   useEffect(() => {
     const isVisible =
@@ -839,11 +725,6 @@ export function CarModeView() {
     opacity: entranceAnim.value,
   }));
 
-  const animatedDetailPillStyle = useAnimatedStyle(() => ({
-    opacity: detailPillOpacity.value,
-    transform: [{ translateY: detailPillTranslateY.value }],
-  }));
-
   const isActive =
     sessionState !== DriveSessionState.IDLE &&
     sessionState !== DriveSessionState.PROMPTING;
@@ -862,16 +743,30 @@ export function CarModeView() {
 
   if (!isActive) return null;
 
-  // With a route planned the header is about the trip; what AKBA is doing moves
-  // to the status line. Work in progress and errors still take the headline.
-  const showTripInHeader =
-    tripSummary !== null && !assistantStatus.animate && !assistantStatus.isError;
-  // With the trip in the header its detail line is taken by the trip facts,
-  // so the wake-word hint takes the status line's place instead.
-  const statusLineText =
-    showTripInHeader && "wakeHint" in assistantStatus && assistantStatus.wakeHint
-      ? WAKE_WORD_HINT
-      : assistantStatus.stateLabel;
+  // Work and errors take one compact line: the trip's second line when a trip
+  // is on screen, so the header keeps its height as the line comes and goes.
+  const statusLine =
+    headerStatus?.kind === "busy" || headerStatus?.kind === "error" ? (
+      <View style={styles.statusLineRow}>
+        <StatusDot tone={headerStatus.kind} />
+        <Text
+          style={[
+            styles.statusLineText,
+            { color: headerStatus.kind === "error" ? colors.danger : textColor },
+          ]}
+          numberOfLines={1}
+        >
+          {headerStatus.text}
+        </Text>
+      </View>
+    ) : null;
+  const headerAccessibilityLabel = [
+    voiceStateLabel,
+    tripSummary && `Hedef ${tripSummary.destination}, ${tripSummary.line}`,
+    headerStatus?.kind === "error" && !tripSummary ? headerStatus.detail : null,
+  ]
+    .filter(Boolean)
+    .join(". ");
 
   const handleConfirmEndDrive = () => {
     setManualConfirmAction(null);
@@ -999,42 +894,59 @@ export function CarModeView() {
           <SafeAreaView style={styles.headerSafeArea}>
             <View style={styles.headerContent}>
               <View style={styles.headerTopRow}>
-                <View style={styles.statusTextStack}>
-                  <View style={styles.statusStateRow}>
-                    <StatusDot tone={assistantStatus.tone} />
-                    <Text
-                      style={[styles.statusEyebrow, { color: subtextColor }]}
-                      numberOfLines={1}
-                    >
-                      {statusLineText}
-                    </Text>
-                  </View>
-                  <View style={styles.statusHeadlineRow}>
-                    {showTripInHeader && (
-                      <Ionicons name="flag" size={15} color={textColor} />
-                    )}
-                    <Text
-                      style={[
-                        styles.statusText,
-                        {
-                          color: assistantStatus.isError
-                            ? colors.danger
-                            : textColor,
-                        },
-                      ]}
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.78}
-                    >
-                      {showTripInHeader ? tripSummary.destination : assistantStatus.headline}
-                    </Text>
-                  </View>
-                  <Text
-                    style={[styles.statusDetailText, { color: subtextColor }]}
-                    numberOfLines={2}
-                  >
-                    {showTripInHeader ? tripSummary.line : assistantStatus.detail}
-                  </Text>
+                {/* Stretched to the row even when empty: stays focusable for VoiceOver. */}
+                <View
+                  style={styles.statusTextStack}
+                  accessible
+                  accessibilityLabel={headerAccessibilityLabel}
+                >
+                  {tripSummary ? (
+                    <>
+                      <View style={styles.tripDestinationRow}>
+                        <Ionicons name="flag" size={15} color={textColor} />
+                        <Text
+                          style={[styles.tripDestination, { color: textColor }]}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.78}
+                        >
+                          {tripSummary.destination}
+                        </Text>
+                      </View>
+                      {statusLine ?? (
+                        <Text
+                          style={[styles.secondaryLineText, { color: subtextColor }]}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.85}
+                        >
+                          {tripSummary.line}
+                        </Text>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {statusLine}
+                      {headerStatus?.kind === "error" && (
+                        <Text
+                          style={[styles.secondaryLineText, { color: subtextColor }]}
+                          numberOfLines={1}
+                          adjustsFontSizeToFit
+                          minimumFontScale={0.85}
+                        >
+                          {headerStatus.detail}
+                        </Text>
+                      )}
+                      {headerStatus?.kind === "wake" && (
+                        <Text
+                          style={[styles.secondaryLineText, { color: subtextColor }]}
+                          numberOfLines={1}
+                        >
+                          {WAKE_WORD_CAPTION}
+                        </Text>
+                      )}
+                    </>
+                  )}
                 </View>
                 <TouchableOpacity
                   onPress={promptBatteryLevel}
@@ -1213,6 +1125,10 @@ export function CarModeView() {
           activeOpacity={0.9}
           onPress={() => !isVoiceTransportActive && startSession()}
           disabled={isVoiceTransportActive}
+          accessibilityRole="button"
+          accessibilityLabel={voiceStateLabel}
+          accessibilityHint={isVoiceTransportActive ? undefined : "Dokununca AKBA'ya bağlanır."}
+          accessibilityState={{ disabled: isVoiceTransportActive }}
           style={styles.orbTouchTarget}
         >
           {ORB_STYLE === "ribbon" ? (
@@ -1228,21 +1144,6 @@ export function CarModeView() {
             <AssistantOrb state={sessionState} audioLevel={audioLevel} />
           )}
         </TouchableOpacity>
-
-        {!assistantStatus.hideDetailPill && (
-          <Animated.View style={animatedDetailPillStyle} pointerEvents="none">
-            <BlurView
-              intensity={60}
-              tint={glassTint}
-              style={styles.assistantTextPill}
-              pointerEvents="none"
-            >
-              <Text style={[styles.assistantText, { color: textColor }]}>
-                {assistantStatus.detail}
-              </Text>
-            </BlurView>
-          </Animated.View>
-        )}
       </Animated.View>
 
       {/* End Drive Confirmation Modal */}
@@ -1336,12 +1237,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
+  /** As tall as the row (the battery pill sets it), so a line coming or going never moves it. */
   statusTextStack: {
     flex: 1,
     minWidth: 0,
+    alignSelf: "stretch",
+    justifyContent: "center",
     gap: 2,
   },
-  statusStateRow: {
+  statusLineRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
@@ -1351,23 +1255,25 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
   },
-  statusHeadlineRow: {
+  /** Same size as secondaryLineText, so it can take the trip line's place. */
+  statusLineText: {
+    flexShrink: 1,
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: "700",
+  },
+  tripDestinationRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
   },
-  statusEyebrow: {
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 0.3,
-  },
-  statusText: {
+  tripDestination: {
     flexShrink: 1,
     fontSize: 19,
     fontWeight: "800",
     letterSpacing: 0.1,
   },
-  statusDetailText: {
+  secondaryLineText: {
     fontSize: 13,
     lineHeight: 17,
     fontWeight: "600",
@@ -1468,7 +1374,6 @@ const styles = StyleSheet.create({
     right: 0,
     alignItems: "center",
     zIndex: 1001,
-    gap: 18,
   },
   orbTouchTarget: {
     width: 132,
@@ -1541,21 +1446,6 @@ const styles = StyleSheet.create({
     height: 16,
     borderRadius: 8,
     backgroundColor: "rgba(255,255,255,0.35)",
-  },
-  assistantTextPill: {
-    paddingHorizontal: 26,
-    paddingVertical: 14,
-    borderRadius: 36,
-    overflow: "hidden",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.15)",
-    backgroundColor: "rgba(18, 26, 32, 0.18)",
-    maxWidth: "88%",
-  },
-  assistantText: {
-    fontSize: 15,
-    fontWeight: "600",
-    textAlign: "center",
   },
   modalOverlay: {
     flex: 1,

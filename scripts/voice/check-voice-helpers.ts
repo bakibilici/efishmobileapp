@@ -27,6 +27,13 @@ import {
   templateKind,
   updateInterestChips,
 } from "../../services/routePersonalization";
+import {
+  describeUnusableLocales,
+  isLocaleRefusal,
+  matchInstalledLocale,
+  normalizeLocaleTag,
+  wakeWordLocaleCandidates,
+} from "../../services/voice/wakeWordLocales";
 import { foldTurkish, matchesWakeWord } from "../../services/voice/wakeWordMatcher";
 
 let passed = 0;
@@ -81,6 +88,128 @@ check("ignores words that only contain the sound", () => {
   ]) {
     assert.equal(matchesWakeWord(heard), false, heard);
   }
+});
+
+check("matches what an English recognizer writes for AKBA", () => {
+  for (const heard of [
+    "akbah",
+    "Akbah",
+    "acba",
+    "ACBA",
+    "aqba",
+    "Aqba?",
+    "ak ba",
+    "ack ba",
+    "Ack Ba",
+    "ak bah",
+    "hey Akbah find a charger",
+    "Acba, where is the next station",
+    "okay aqba",
+  ]) {
+    assert.equal(matchesWakeWord(heard), true, heard);
+  }
+});
+
+check("English words near the sound stay asleep", () => {
+  for (const heard of [
+    "akbar",
+    "Allahu Akbar",
+    "Ackbar",
+    "ack bar",
+    "ak bar",
+    "Akbank",
+    "akbaba",
+    "abba",
+    "ABBA is playing",
+    "acapella",
+    "a cappella",
+    "Aqaba",
+    "back bar",
+    "turn the AC back on",
+    "a cab a",
+  ]) {
+    assert.equal(matchesWakeWord(heard), false, heard);
+  }
+});
+
+// ── Wake-word locale ──────────────────────────────────────────────────────
+check("locale tags are normalised to language-REGION", () => {
+  assert.equal(normalizeLocaleTag("en-US"), "en-US");
+  assert.equal(normalizeLocaleTag("en_us"), "en-US");
+  assert.equal(normalizeLocaleTag("TR-tr"), "tr-TR");
+  assert.equal(normalizeLocaleTag("zh-Hans-CN"), "zh-CN");
+  assert.equal(normalizeLocaleTag("es-419"), "es-419");
+  assert.equal(normalizeLocaleTag("en-US-u-ca-gregory"), "en-US");
+  assert.equal(normalizeLocaleTag("en-u-ca-gregory"), null);
+  assert.equal(normalizeLocaleTag("en"), null);
+  assert.equal(normalizeLocaleTag(""), null);
+});
+
+check("candidates: tr-TR, then the phone's tr/en tags, then en-US, each once", () => {
+  assert.deepEqual(wakeWordLocaleCandidates([]), ["tr-TR", "en-US"]);
+  assert.deepEqual(wakeWordLocaleCandidates(["tr-TR"]), ["tr-TR", "en-US"]);
+  assert.deepEqual(wakeWordLocaleCandidates(["en-US", "tr-TR"]), ["tr-TR", "en-US"]);
+  // An English phone set to the Turkey region.
+  assert.deepEqual(wakeWordLocaleCandidates(["en-TR"]), ["tr-TR", "en-TR", "en-US"]);
+  assert.deepEqual(
+    wakeWordLocaleCandidates(["en-GB", "de_AT", "en", "zh-Hans-CN", "en-gb"]),
+    ["tr-TR", "en-GB", "en-US"],
+  );
+  // Another script's recognizer writes AKBA in that script: never tried.
+  assert.deepEqual(wakeWordLocaleCandidates(["ru-RU"]), ["tr-TR", "en-US"]);
+  assert.deepEqual(wakeWordLocaleCandidates(["ja-JP", "en-GB"]), ["tr-TR", "en-GB", "en-US"]);
+  assert.deepEqual(
+    wakeWordLocaleCandidates(["ar-SA", "el-GR", "he-IL", "uk-UA", "th-TH", "ko-KR", "zh-CN"]),
+    ["tr-TR", "en-US"],
+  );
+  // Turkish tags come before English ones.
+  assert.deepEqual(
+    wakeWordLocaleCandidates(["en-GB", "tr-CY"]),
+    ["tr-TR", "tr-CY", "en-GB", "en-US"],
+  );
+});
+
+check("Android picks an installed on-device model for a candidate", () => {
+  assert.equal(matchInstalledLocale("tr-TR", ["en-US", "tr-TR"]), "tr-TR");
+  assert.equal(matchInstalledLocale("tr-TR", ["tr_TR"]), "tr-TR");
+  assert.equal(matchInstalledLocale("tr-TR", ["tr"]), "tr-TR");
+  // Another region of the same language is the model the phone has.
+  assert.equal(matchInstalledLocale("en-GB", ["en-US"]), "en-US");
+  assert.equal(matchInstalledLocale("tr-TR", ["en-US", "de-DE"]), null);
+  assert.equal(matchInstalledLocale("en-US", []), null);
+});
+
+check("a language is ruled out only when its recognizer refused it", () => {
+  const firstQuickSilent = { first: true, quick: true, hadResult: false };
+  assert.equal(isLocaleRefusal("language-not-supported", firstQuickSilent), true);
+  assert.equal(
+    isLocaleRefusal("language-not-supported", { first: false, quick: false, hadResult: true }),
+    true,
+  );
+  // A missing iOS model: "Assets are not installed" (102) or 1101.
+  assert.equal(isLocaleRefusal("service-not-allowed", firstQuickSilent), true);
+  assert.equal(isLocaleRefusal("network", firstQuickSilent), true);
+  // Not the first run, not quick, or the recognizer produced a result: a real error.
+  for (const error of ["service-not-allowed", "network"]) {
+    assert.equal(isLocaleRefusal(error, { ...firstQuickSilent, first: false }), false, error);
+    assert.equal(isLocaleRefusal(error, { ...firstQuickSilent, quick: false }), false, error);
+    assert.equal(isLocaleRefusal(error, { ...firstQuickSilent, hadResult: true }), false, error);
+  }
+  // A permission denial is never a language problem.
+  assert.equal(isLocaleRefusal("not-allowed", firstQuickSilent), false);
+  assert.equal(isLocaleRefusal("no-speech", firstQuickSilent), false);
+  assert.equal(isLocaleRefusal("audio-capture", firstQuickSilent), false);
+});
+
+check("the reason names every locale that could not be used", () => {
+  assert.equal(
+    describeUnusableLocales(["tr-TR", "en-US"], []),
+    "no on-device recognizer for tr-TR, en-US",
+  );
+  assert.equal(
+    describeUnusableLocales(["tr-TR"], ["en-US"]),
+    "no on-device recognizer for tr-TR; speech recognizer unavailable for en-US",
+  );
 });
 
 // ── Break exclusions ──────────────────────────────────────────────────────

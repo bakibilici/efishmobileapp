@@ -119,11 +119,33 @@ function buildInterestsAttribute(interests: readonly string[]): string {
 /** Atlas tool names → the tool keys CarModeView's TOOL_STATUS_COPY expects. */
 const ATLAS_TOOL_NAME_MAP: Record<string, string> = {
   planEvRoute: "create_route_plan",
-  getCurrentLocation: "get_user_location",
   endConversation: "end_call",
 };
 
+/**
+ * A room that is up with no agent in it for this long (never dispatched, or
+ * left and not back) is a failed connection, not an endless "Bağlanıyor…".
+ */
+const AGENT_ABSENT_TIMEOUT_MS = 15000;
+
 type VoiceStatus = "disconnected" | "connecting" | "connected" | "error";
+
+/** What the Atlas agent reports in its `lk.agent.state` participant attribute. */
+export type AgentState = "initializing" | "idle" | "listening" | "thinking" | "speaking";
+
+const AGENT_STATES: ReadonlySet<string> = new Set<AgentState>([
+  "initializing",
+  "idle",
+  "listening",
+  "thinking",
+  "speaking",
+]);
+
+/** The agent's state, or null while it has not reported a known one. */
+function readAgentState(participant: RemoteParticipant): AgentState | null {
+  const value = participant.attributes["lk.agent.state"];
+  return value && AGENT_STATES.has(value) ? (value as AgentState) : null;
+}
 
 /** Represents a single tool call lifecycle (request → response). */
 export interface AgentToolCall {
@@ -176,9 +198,12 @@ export function useDrivingAgent() {
   const planWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Failsafe: if planEvRoute never returns a tool_end, unstick the UI. */
   const PLAN_WATCHDOG_MS = 45000;
+  const agentAbsentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const MAX_RECONNECT_ATTEMPTS = 3;
   const [status, setStatus] = useState<VoiceStatus>("disconnected");
-  const [isSpeaking, setIsSpeaking] = useState(false);
+  /** null while no agent is in the room. */
+  const [agentState, setAgentState] = useState<AgentState | null>(null);
+  const isSpeaking = agentState === "speaking";
   const [isMuted, setIsMuted] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
   // AKBA's audio track, for the orb's frame-accurate level meter.
@@ -301,6 +326,30 @@ export function useDrivingAgent() {
     }
   }, []);
 
+  const clearAgentAbsentTimer = useCallback(() => {
+    if (agentAbsentTimerRef.current) {
+      clearTimeout(agentAbsentTimerRef.current);
+      agentAbsentTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Resolves pending tool entries no tool_end will ever arrive for (those
+   * `match` selects) with `status`. Only the header reads these entries;
+   * route ingestion runs off the tool_end itself, never off them.
+   */
+  const settlePendingToolCalls = useCallback(
+    (status: "success" | "error", match: (call: AgentToolCall) => boolean = () => true) => {
+      const respondedAt = Date.now();
+      const settles = (call: AgentToolCall) => call.status === "pending" && match(call);
+      const settle = (call: AgentToolCall): AgentToolCall =>
+        settles(call) ? { ...call, status, respondedAt } : call;
+      setToolCalls((prev) => (prev.some(settles) ? prev.map(settle) : prev));
+      setLastToolEvent((prev) => (prev ? settle(prev) : prev));
+    },
+    [],
+  );
+
   const stopPlanningHoldSound = useCallback(async () => {
     try {
       if (planningFeedbackTimerRef.current) {
@@ -353,9 +402,11 @@ export function useDrivingAgent() {
     try {
       stopGpsWatch();
       clearPlanWatchdog();
+      clearAgentAbsentTimer();
       const room = roomRef.current;
       roomRef.current = null;
       agentParticipantRef.current = null;
+      setAgentState(null);
       setAgentAudioTrack(null);
       VoiceLevelBus.reset();
       // LiveKit and the recognizer share one audio session: the wake word
@@ -384,7 +435,14 @@ export function useDrivingAgent() {
       // Only now may the wake word take the microphone back.
       evaluateWakeWord();
     }
-  }, [stopGpsWatch, clearPlanWatchdog, disarmWakeWord, markVoicePassive, evaluateWakeWord]);
+  }, [
+    stopGpsWatch,
+    clearPlanWatchdog,
+    clearAgentAbsentTimer,
+    disarmWakeWord,
+    markVoicePassive,
+    evaluateWakeWord,
+  ]);
 
   // KVKK m.11/e: when the driver turns location sharing off, no position
   // leaves the phone (AKBA then plans from the İstanbul fallback).
@@ -763,6 +821,12 @@ export function useDrivingAgent() {
           clearPlanWatchdog();
           planWatchdogRef.current = setTimeout(() => {
             console.warn("[useDrivingAgent] planEvRoute watchdog fired — unsticking UI");
+            // Takes "Rota planlanıyor…" down. A tool_end that still comes
+            // later is ingested all the same.
+            settlePendingToolCalls(
+              "error",
+              (call) => call.toolName === ATLAS_TOOL_NAME_MAP.planEvRoute,
+            );
             void stopPlanningHoldSound();
             if (DriveSessionStore.getState() === DriveSessionState.PLANNING_ROUTE) {
               DriveSessionStore.setAiState(DriveSessionState.AI_LISTENING);
@@ -882,6 +946,7 @@ export function useDrivingAgent() {
       applyPreferenceUpdate,
       clearPlanWatchdog,
       ingestRoutePlanResult,
+      settlePendingToolCalls,
       startPlanningHoldSound,
       stopPlanningHoldSound,
       stopVoiceSessionPreservingDrive,
@@ -974,17 +1039,76 @@ export function useDrivingAgent() {
       agentParticipantRef.current = null;
       batteryResentRef.current = false;
 
+      /** The agent never came, or never came back: ended like a failed start. */
+      const failWithoutAgent = async () => {
+        if (connectingRef.current) return;
+        console.warn(
+          `[useDrivingAgent] No agent in the room for ${AGENT_ABSENT_TIMEOUT_MS} ms; treating it as a failed connection`,
+        );
+        const stopGeneration = startGenerationRef.current;
+        // Like a failing start, hold off another start and the reconnect
+        // ladder until the room is gone: its "disconnected" must not count
+        // as a second failure next to the "error" below.
+        connectingRef.current = true;
+        try {
+          sessionStartedRef.current = false;
+          await stopPlanningHoldSound();
+          await disconnectRoom();
+          // A stop pressed meanwhile wins.
+          if (stopGeneration !== startGenerationRef.current) return;
+          setStatus("error");
+          DriveSessionStore.setAiState(DriveSessionState.AI_ERROR);
+        } finally {
+          connectingRef.current = false;
+          evaluateWakeWord();
+        }
+      };
+
+      /**
+       * Runs the agent-absent timer while the session is live, the room is
+       * connected and no agent is in it, and cancels it otherwise. Called on
+       * every change to one of those.
+       */
+      const watchForAgent = () => {
+        if (roomRef.current !== room) return;
+        clearAgentAbsentTimer();
+        if (
+          !sessionStartedRef.current ||
+          agentParticipantRef.current ||
+          room.state !== ConnectionState.Connected
+        ) {
+          return;
+        }
+        agentAbsentTimerRef.current = setTimeout(() => {
+          agentAbsentTimerRef.current = null;
+          if (roomRef.current === room && !agentParticipantRef.current) {
+            void failWithoutAgent();
+          }
+        }, AGENT_ABSENT_TIMEOUT_MS);
+      };
+
       const captureAgent = (participant: RemoteParticipant) => {
         if (participant.identity.startsWith("agent-")) {
           const isFirstCapture = agentParticipantRef.current === null;
+          const isNewAgent = agentParticipantRef.current !== participant;
           agentParticipantRef.current = participant;
+          // Only an agent in the room makes the connection a working one
+          // (see watchForAgent): a room that connects without one must not
+          // reset the reconnect ladder, or it would retry forever.
+          reconnectAttemptsRef.current = 0;
+          watchForAgent();
           // Data published before the agent joined the room is dropped, so send
           // the battery snapshot once the agent is actually present to receive it.
           if (isFirstCapture) {
             publishBatterySnapshot();
           }
-          // An agent that was already listening fires no attribute change.
-          if (participant.attributes["lk.agent.state"] === "listening") {
+          // An agent already in a state fires no attribute change for it.
+          const state = readAgentState(participant);
+          if (state) setAgentState(state);
+          if (state === "listening") {
+            // A new agent that is already listening will not finish the
+            // tools of the one before it.
+            if (isNewAgent) settlePendingToolCalls("success");
             playStartCueOnce();
           }
         }
@@ -992,9 +1116,9 @@ export function useDrivingAgent() {
 
       room
         .on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
+          watchForAgent();
           if (state === ConnectionState.Connected) {
             setStatus("connected");
-            reconnectAttemptsRef.current = 0;
           } else if (state === ConnectionState.Disconnected) {
             setStatus("disconnected");
           } else {
@@ -1009,10 +1133,11 @@ export function useDrivingAgent() {
             // Drop the frozen speaking state so the UI doesn't look stuck.
             console.warn("[useDrivingAgent] Agent participant left the room");
             agentParticipantRef.current = null;
-            setIsSpeaking(false);
+            setAgentState(null);
             setAudioLevel(0);
             setAgentAudioTrack(null);
             VoiceLevelBus.reset();
+            watchForAgent();
           }
         })
         .on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
@@ -1033,22 +1158,25 @@ export function useDrivingAgent() {
           }
           VoiceLevelBus.publish({ mic, agent });
         })
-        .on(RoomEvent.ParticipantAttributesChanged, (_changed, participant) => {
+        .on(RoomEvent.ParticipantAttributesChanged, (changed, participant) => {
           if (participant !== agentParticipantRef.current) return;
-          const agentState = participant.attributes["lk.agent.state"];
-          if (agentState) {
-            setIsSpeaking(agentState === "speaking");
+          const state = readAgentState(participant);
+          if (state) setAgentState(state);
+          // Back to listening, the agent is running no tool: a call whose
+          // tool_end never came is over, whatever became of it.
+          if (state === "listening" && "lk.agent.state" in changed) {
+            settlePendingToolCalls("success");
           }
           // The room is up before the agent is: its first "listening" is the
           // moment the driver can actually be heard. Before the session is
           // live (mic published) this does nothing; the start's success
           // block cues an agent that was already listening by then.
-          if (agentState === "listening") {
+          if (state === "listening") {
             playStartCueOnce();
           }
           // The join-time snapshot can reach the agent before it listens for
           // data; by its first "listening" it does. Re-sending is idempotent.
-          if (agentState === "listening" && !batteryResentRef.current) {
+          if (state === "listening" && !batteryResentRef.current) {
             batteryResentRef.current = true;
             publishBatterySnapshot();
           }
@@ -1069,7 +1197,7 @@ export function useDrivingAgent() {
           clearPlanWatchdog();
           stopGpsWatch();
           sessionStartedRef.current = false;
-          setIsSpeaking(false);
+          setAgentState(null);
           setAgentAudioTrack(null);
           VoiceLevelBus.reset();
           // Still ours means the server or the network closed it; a local stop
@@ -1196,6 +1324,8 @@ export function useDrivingAgent() {
       if (agentNow?.attributes["lk.agent.state"] === "listening") {
         playStartCueOnce();
       }
+      // From now on a room without an agent counts as a failed connection.
+      watchForAgent();
       if (wakeWordEnabledRef.current !== false) {
         // The one moment the app asks: in car mode, with the microphone just
         // granted. Never from the wake-word listener itself.
@@ -1247,6 +1377,8 @@ export function useDrivingAgent() {
     stopGpsWatch,
     stopPlanningHoldSound,
     clearPlanWatchdog,
+    clearAgentAbsentTimer,
+    settlePendingToolCalls,
   ]);
   const startAgentSessionRef = useRef(startAgentSession);
   startAgentSessionRef.current = startAgentSession;
@@ -1497,6 +1629,8 @@ export function useDrivingAgent() {
   return {
     status,
     isSpeaking,
+    /** The agent's own state (null while it is not in the room): "thinking" is real work. */
+    agentState,
     isMuted,
     audioLevel,
     agentAudioTrack,
