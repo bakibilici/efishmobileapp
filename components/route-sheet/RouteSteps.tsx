@@ -3,6 +3,11 @@ import React, { Fragment, memo } from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
 
 import type { RoutePlanLocation } from "../../services/DriveSessionStore";
+import {
+  originTitle,
+  shortPlaceTitle,
+  type DestinationTitle,
+} from "../../services/placeTitle";
 import { Group, TABULAR } from "./Grouped";
 import {
   formatKm,
@@ -109,17 +114,42 @@ const LegRow = memo(function LegRow({
   );
 });
 
+/**
+ * The name a stop row shows, and its full address for VoiceOver: the same
+ * short titles as the sheet's title and the map ("Alemdağ Cd. No:940",
+ * "Konumunuz"); stations keep their own names.
+ */
+const stopNames = (
+  location: RoutePlanLocation,
+  destination: DestinationTitle | null | undefined,
+): { title: string; address: string | null } => {
+  if (location.type === "destination") {
+    return {
+      title: destination?.title || shortPlaceTitle(location.name ?? "").title || "Varış",
+      address: destination?.address ?? null,
+    };
+  }
+  if (location.type === "origin") {
+    const origin = originTitle(location.name);
+    return { title: origin?.title ?? "Başlangıç", address: origin?.address ?? null };
+  }
+  return { title: location.name, address: null };
+};
+
 const StopRow = memo(function StopRow({
   location,
+  destination,
   isFirst,
   isLast,
   palette,
 }: {
   location: RoutePlanLocation;
+  destination?: DestinationTitle | null;
   isFirst: boolean;
   isLast: boolean;
   palette: SheetPalette;
 }) {
+  const names = stopNames(location, destination);
   const level =
     location.type === "origin"
       ? location.battery_status?.from ?? location.battery_status?.to
@@ -140,7 +170,8 @@ const StopRow = memo(function StopRow({
     spokenMeta = [role.toLocaleLowerCase("tr-TR"), hasLevel ? `batarya yüzde ${Math.round(level)}` : null];
   }
   const accessibilityLabel = [
-    location.name,
+    names.title,
+    names.address,
     ...spokenMeta,
     temp != null ? `${temp} derece` : null,
   ]
@@ -153,7 +184,7 @@ const StopRow = memo(function StopRow({
       <View style={styles.copy}>
         <View style={styles.titleRow}>
           <Text style={[styles.name, { color: palette.label }]} numberOfLines={2}>
-            {location.name}
+            {names.title}
           </Text>
           {location.weather ? (
             <View style={styles.weather}>
@@ -181,10 +212,13 @@ const StopRow = memo(function StopRow({
 function RouteStepsComponent({
   locations,
   legs,
+  destination,
   palette,
 }: {
   locations: RoutePlanLocation[];
   legs: Leg[];
+  /** The route's destination title (destinationTitle), shared with the sheet's title. */
+  destination?: DestinationTitle | null;
   palette: SheetPalette;
 }) {
   return (
@@ -196,6 +230,7 @@ function RouteStepsComponent({
           ) : null}
           <StopRow
             location={location}
+            destination={destination}
             isFirst={index === 0}
             isLast={index === locations.length - 1}
             palette={palette}

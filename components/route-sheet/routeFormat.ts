@@ -1,4 +1,5 @@
 import type { RoutePlanLocation } from "../../services/DriveSessionStore";
+import { isGenericOrigin, shortPlaceTitle } from "../../services/placeTitle";
 import type { SheetPalette } from "./sheetPalette";
 
 const isNumber = (value: unknown): value is number =>
@@ -33,9 +34,85 @@ const FRONT_VOWELS = "eiöü";
 const HARD_CONSONANTS = "çfhkpsşt";
 
 /**
+ * Place words that end in the possessive of a compound ("Esenboğa
+ * Havalimanı", "Acıbadem Hastanesi"): the case ending needs the buffer n,
+ * "Havalimanı'ndan", "Hastanesi'nden".
+ */
+const POSSESSIVE_COMPOUND_HEADS = new Set([
+  "havalimanı",
+  "havaalanı",
+  "meydanı",
+  "hastanesi",
+  "terminali",
+  "garı",
+  "otogarı",
+  "istasyonu",
+  "iskelesi",
+  "limanı",
+  "müzesi",
+  "tesisleri",
+  "tesisi",
+  "kulesi",
+  "üniversitesi",
+  "kampüsü",
+  "fakültesi",
+  "stadyumu",
+  "stadı",
+  "parkı",
+  "camii",
+  "caddesi",
+  "sokağı",
+  "bulvarı",
+  "yolu",
+  "mahallesi",
+  "merkezi",
+  "köprüsü",
+  "çarşısı",
+  "pazarı",
+  "sarayı",
+  "kalesi",
+  "plajı",
+  "adası",
+  "köyü",
+  "belediyesi",
+  "sitesi",
+  "oteli",
+  "bölgesi",
+]);
+
+/**
+ * Loanwords whose Turkish reading, and so their vowel harmony, cannot be
+ * told from the spelling ("Center" is read "sentır"): the caller says
+ * "… çıkışlı" instead of guessing.
+ */
+const UNCLEAR_HARMONY_WORDS = new Set([
+  "center",
+  "centre",
+  "mall",
+  "park",
+  "outlet",
+  "tower",
+  "towers",
+  "hotel",
+  "square",
+  "city",
+  "garden",
+  "gardens",
+  "point",
+  "life",
+  "residence",
+  "residences",
+  "village",
+  "resort",
+  "suites",
+]);
+
+/**
  * "Kadıköy, İstanbul" → "Kadıköy, İstanbul'dan", "Beşiktaş" → "Beşiktaş'tan",
- * "Mevcut konum" → "Mevcut konumdan". Null when the last word does not end in
- * a letter or is all capitals, so the caller can phrase it another way.
+ * "Esenboğa Havalimanı" → "Esenboğa Havalimanı'ndan", "Mevcut konum" →
+ * "Mevcut konumdan". Null when the last word does not end in a letter, is
+ * all capitals, or is a loanword with unclear harmony ("Zorlu Center"), so
+ * the caller can phrase it another way.
  */
 export const withAblative = (name: string): string | null => {
   const trimmed = name.trim();
@@ -47,6 +124,8 @@ export const withAblative = (name: string): string | null => {
   const lower = lastWord.replace(/I/g, "ı").replace(/İ/g, "i").toLowerCase();
   const lastChar = lower.slice(-1);
   if (!lastChar || !/[a-zçğıöşü]/.test(lastChar)) return null;
+  // English spelling ("Mall", "Tower", w/q/x): no reliable harmony.
+  if (UNCLEAR_HARMONY_WORDS.has(lower) || /[wqx]/.test(lower)) return null;
 
   let vowel: "a" | "e" | null = null;
   for (let index = lower.length - 1; index >= 0; index -= 1) {
@@ -61,9 +140,28 @@ export const withAblative = (name: string): string | null => {
   }
   if (!vowel) return null;
 
-  const consonant = HARD_CONSONANTS.includes(lastChar) ? "t" : "d";
   const isProperNoun = lastWord[0] !== lastWord[0].toLowerCase();
-  return `${trimmed}${isProperNoun ? "'" : ""}${consonant}${vowel}n`;
+  const apostrophe = isProperNoun ? "'" : "";
+  // "Havalimanı'ndan": after a compound's possessive the ending takes an n.
+  if (POSSESSIVE_COMPOUND_HEADS.has(lower)) {
+    return `${trimmed}${apostrophe}nd${vowel}n`;
+  }
+  const consonant = HARD_CONSONANTS.includes(lastChar) ? "t" : "d";
+  return `${trimmed}${apostrophe}${consonant}${vowel}n`;
+};
+
+/**
+ * The origin as "from …": "Kadıköy, İstanbul'dan", a long address by its
+ * short title ("Alemdağ Cd. No:940 çıkışlı"), and the plan's generic
+ * "Konumunuz" as "Konumunuzdan" (it is no proper noun: "Konumunuz'dan" was
+ * wrong; and the app speaks to the driver as "siz"). Null without an origin.
+ */
+export const fromOrigin = (origin?: string | null): string | null => {
+  const name = origin?.trim();
+  if (!name) return null;
+  if (isGenericOrigin(name)) return "Konumunuzdan";
+  const { title } = shortPlaceTitle(name);
+  return withAblative(title) ?? `${title} çıkışlı`;
 };
 
 export type Leg = { duration: number; distance: number };

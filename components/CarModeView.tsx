@@ -1,20 +1,25 @@
 import { BlurView } from "expo-blur";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { LinearGradient } from "expo-linear-gradient";
+import { router } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   Modal,
   PixelRatio,
   Platform,
+  Pressable,
   SafeAreaView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
   Alert,
+  useWindowDimensions,
 } from "react-native";
 import Animated, {
   Easing,
+  FadeInDown,
+  FadeOut,
   cancelAnimation,
   useAnimatedStyle,
   useSharedValue,
@@ -29,9 +34,21 @@ import {
   DriveSessionState,
   DriveSessionStore,
 } from "../services/DriveSessionStore";
+import { destinationTitle } from "../services/placeTitle";
+import { formatMinutes } from "./route-sheet/routeFormat";
 
 import { useDrivingAgent } from "../hooks/useDrivingAgent";
 import { showMicModePicker } from "../modules/mic-mode";
+import { GlassNavButton } from "./ui/GlassNavButton";
+import {
+  CAPSULE_BOTTOM,
+  HEADER_TOP,
+  ORB_BOTTOM,
+  ORB_TARGET_SIZE,
+  STATUS_TEXT_STACK_GAP,
+  TRIP_LINES_HEIGHT,
+} from "./carModeLayout";
+import { IconSymbol } from "./ui/icon-symbol";
 import {
   HEADER_COPY,
   resolveHeaderLine,
@@ -48,13 +65,13 @@ import { AssistantOrbRibbon } from "./AssistantOrbRibbon";
  */
 const ORB_STYLE: "ribbon" | "aurora" | "classic" = "ribbon";
 
+/** The header's "Oturumlara dön" chevron: near the 40 pt battery pill beside it, under the floating button's 44. */
+const HEADER_BACK_BUTTON_SIZE = 38;
+
 /** A "thinking" shorter than this never reaches the screen, so it cannot flash. */
 const THINKING_LINE_DELAY_MS = 400;
 
-/** The trip's two header lines at text size 100%: destination 23 + trip line 17. */
-const TRIP_LINES_HEIGHT = 23 + 17;
-/** Between the header's text lines; does not grow with the text size. */
-const STATUS_TEXT_STACK_GAP = 2;
+const CAPSULE_SIDE_MARGIN = 20;
 
 /** True once `active` has held for `delayMs`; false again the moment it drops. */
 function useHeldFor(active: boolean, delayMs: number): boolean {
@@ -391,10 +408,10 @@ const AssistantOrb = ({
 const readTripSummary = () => {
   const plan = DriveSessionStore.getRoutePlanData();
   if (!plan) return null;
-  const destination =
-    plan.locations?.find((location) => location.type === "destination")?.name ||
-    plan.waypoints?.destination ||
-    "Hedef";
+  // The same short title as the sheet and Oturumlar: "Alemdağ Cd. No:940",
+  // not the geocoder's whole postal address.
+  const place = destinationTitle(plan);
+  const destination = place?.title ?? "Hedef";
   const parts: string[] = [];
   const km = plan.summary?.total_travel_length;
   if (typeof km === "number" && km > 0) parts.push(`${km.toFixed(km >= 100 ? 0 : 1)} km`);
@@ -402,7 +419,74 @@ const readTripSummary = () => {
   parts.push(stops > 0 ? `${stops} şarj durağı` : "şarj durağı yok");
   const chargeMin = plan.summary?.total_charge_duration ?? 0;
   if (stops > 0 && chargeMin > 0) parts.push(`${chargeMin} dk şarj`);
-  return { destination, line: parts.join(" · ") };
+  // The capsule's time: the whole trip, charging included.
+  const tripTime = formatMinutes(
+    (plan.summary?.total_travel_duration ?? 0) + (stops > 0 ? chargeMin : 0),
+  );
+  return { destination, detail: place?.detail ?? null, line: parts.join(" · "), tripTime };
+};
+
+/**
+ * Brings back a route sheet the driver put away ("Haritaya dön"): a frosted
+ * capsule just above the orb, "⌃ Metrogarden AVM · 47 dk".
+ */
+const RouteReopenCapsule = ({
+  title,
+  tripTime,
+  isDark,
+  maxWidth,
+  onPress,
+}: {
+  title: string;
+  tripTime: string | null;
+  isDark: boolean;
+  maxWidth: number;
+  onPress: () => void;
+}) => {
+  const textColor = isDark ? "#fff" : "#000";
+  const subtextColor = isDark ? "rgba(255,255,255,0.68)" : "rgba(0,0,0,0.62)";
+  return (
+    <Animated.View
+      entering={FadeInDown.duration(240)}
+      exiting={FadeOut.duration(140)}
+      style={styles.capsuleRow}
+      pointerEvents="box-none"
+    >
+      <Pressable
+        onPress={onPress}
+        hitSlop={6}
+        accessibilityRole="button"
+        accessibilityLabel={`Rota: ${title}${tripTime ? `, ${tripTime}` : ""}`}
+        accessibilityHint="Rota özetini açar."
+        style={({ pressed }) => [
+          styles.capsuleShadow,
+          { maxWidth, opacity: pressed ? 0.78 : 1 },
+        ]}
+      >
+        <BlurView
+          intensity={80}
+          tint={isDark ? "dark" : "light"}
+          style={[
+            styles.capsuleGlass,
+            {
+              backgroundColor: isDark ? "rgba(14,18,26,0.62)" : "rgba(255,255,255,0.78)",
+              borderColor: isDark ? "rgba(255,255,255,0.12)" : "rgba(15,23,42,0.1)",
+            },
+          ]}
+        >
+          <Ionicons name="chevron-up" size={16} color={textColor} />
+          <Text style={[styles.capsuleTitle, { color: textColor }]} numberOfLines={1}>
+            {title}
+          </Text>
+          {tripTime ? (
+            <Text style={[styles.capsuleTime, { color: subtextColor }]} numberOfLines={1}>
+              · {tripTime}
+            </Text>
+          ) : null}
+        </BlurView>
+      </Pressable>
+    </Animated.View>
+  );
 };
 
 export function CarModeView() {
@@ -414,13 +498,19 @@ export function CarModeView() {
     !!DriveSessionStore.getRoutePlanData(),
   );
   const [tripSummary, setTripSummary] = useState(readTripSummary);
-  const [routePlanSheetIndex, setRoutePlanSheetIndex] = useState(
-    DriveSessionStore.getRoutePlanSheetIndex() >= 0
-      ? DriveSessionStore.getRoutePlanSheetIndex()
-      : DriveSessionStore.getRoutePlanData()
-        ? 1
-        : -1,
+  // The route sheet's level: -1 closed, 0 peek (previews), 1 middle, 2+ higher.
+  const [routePlanSheetIndex, setRoutePlanSheetIndex] = useState(() => {
+    const level = DriveSessionStore.getRoutePlanSheetIndex();
+    if (level >= 0) return level;
+    return DriveSessionStore.getRoutePlanData() &&
+      !DriveSessionStore.isRouteSheetDismissed()
+      ? 1
+      : -1;
+  });
+  const [routeSheetDismissed, setRouteSheetDismissed] = useState(() =>
+    DriveSessionStore.isRouteSheetDismissed(),
   );
+  const { width: windowWidth } = useWindowDimensions();
   const [manualConfirmAction, setManualConfirmAction] = useState<
     "end_drive" | "connect_voice" | "stop_voice" | "start_drive" | null
   >(null);
@@ -488,6 +578,7 @@ export function CarModeView() {
       setHasRoutePlan(!!DriveSessionStore.getRoutePlanData());
       setTripSummary(readTripSummary());
       setRoutePlanSheetIndex(DriveSessionStore.getRoutePlanSheetIndex());
+      setRouteSheetDismissed(DriveSessionStore.isRouteSheetDismissed());
       setRouteDurationSeconds(getRouteDurationSeconds());
       setIsPreviewMode(!!DriveSessionStore.getContext()?.isPreviewMode);
     });
@@ -632,8 +723,12 @@ export function CarModeView() {
       sessionState !== DriveSessionState.IDLE &&
       sessionState !== DriveSessionState.PROMPTING;
     const shouldYieldToRoutePlanSheet = hasRoutePlan && routePlanSheetIndex > 0;
+    // A preview's low peek would sit on the orb unless AKBA is live; a sheet
+    // the driver put away leaves the orb its place.
+    const isRouteSheetOnScreen = hasRoutePlan && routePlanSheetIndex >= 0;
     const shouldHideAssistant =
-      shouldYieldToRoutePlanSheet || (isVisible && hasRoutePlan && !isAiActive);
+      shouldYieldToRoutePlanSheet ||
+      (isVisible && isRouteSheetOnScreen && !isAiActive);
 
     if (isVisible) {
       entranceAnim.value = withTiming(1, {
@@ -706,6 +801,15 @@ export function CarModeView() {
     sessionState !== DriveSessionState.PROMPTING;
   const shouldHideFloatingStats = hasRoutePlan && routePlanSheetIndex > 0;
   const shouldYieldToRoutePlanSheet = hasRoutePlan && routePlanSheetIndex > 0;
+  // A live route's sheet the driver put away: the capsule and the header's
+  // trip bring it back. It stays until the route goes or the drive ends.
+  const canReopenRouteSheet =
+    hasRoutePlan &&
+    !!tripSummary &&
+    !isPreviewMode &&
+    routeSheetDismissed &&
+    routePlanSheetIndex < 0;
+  const capsuleMaxWidth = windowWidth - 2 * CAPSULE_SIDE_MARGIN;
   // console.log("[CarModeView] 🎯 sessionState =", sessionState, "| isActive =", isActive, "| context =", !!DriveSessionStore.getContext());
 
   const arrivalTimeFormatted = useMemo(() => {
@@ -767,7 +871,8 @@ export function CarModeView() {
     // The news first, then what AKBA is doing.
     headerLine.kind === "failed" ? HEADER_COPY.routePlanFailed : null,
     voiceStateLabel,
-    tripSummary && `Hedef ${tripSummary.destination}, ${tripSummary.line}`,
+    tripSummary &&
+      `Hedef ${[tripSummary.destination, tripSummary.detail].filter(Boolean).join(", ")}, ${tripSummary.line}`,
     headerLine.kind === "offline" && !tripSummary ? HEADER_COPY.offlineDetail : null,
     // The wake caption says what voiceStateLabel already does.
     headerLine.kind === "prompt" && headerLine.prompt !== "wake"
@@ -799,6 +904,16 @@ export function CarModeView() {
   // applies while a call has the microphone: iOS, live session, long press.
   const canPickMicMode = Platform.OS === "ios" && status === "connected";
   const isDriveActionPreviewStart = isPreviewMode;
+  // The header's way back to Oturumlar, for a preview AKBA is not live in (the
+  // map screen's rule). The header shows while the route sheet is at its peek
+  // and leaves as it rises; the sheet's floating back button covers the
+  // heights above, so every height has one way back.
+  const canClosePreview =
+    isPreviewMode && sessionState === DriveSessionState.NAVIGATION_ONLY;
+  const handleClosePreview = () => {
+    DriveSessionStore.closePreview();
+    router.navigate("/(tabs)/sessions");
+  };
 
   const handleVoiceButtonPress = () => {
     if (canStopConversation) {
@@ -885,6 +1000,48 @@ export function CarModeView() {
             cancel: "Vazgeç",
           };
 
+  // The trip (or what AKBA is doing) in the header's left column.
+  const headerTripContent =
+    tripSummary ? (
+      <>
+        {/* One line, cut with "…": never shrunk to fit. */}
+        <View style={styles.tripDestinationRow}>
+          <Ionicons name="flag" size={15} color={textColor} />
+          <Text
+            style={[styles.tripDestination, { color: textColor }]}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+          >
+            {tripSummary.destination}
+          </Text>
+        </View>
+        {statusLine ?? (
+          <Text
+            style={[styles.secondaryLineText, { color: subtextColor }]}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+          >
+            {tripSummary.line}
+          </Text>
+        )}
+      </>
+    ) : (
+      <>
+        {statusLine}
+        {headerLine.kind === "offline" && (
+          <Text
+            style={[styles.secondaryLineText, { color: subtextColor }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.85}
+          >
+            {HEADER_COPY.offlineDetail}
+          </Text>
+        )}
+        {promptLine}
+      </>
+    );
+
   return (
     <View
       style={styles.container}
@@ -903,53 +1060,36 @@ export function CarModeView() {
           <SafeAreaView style={styles.headerSafeArea}>
             <View style={styles.headerContent}>
               <View style={styles.headerTopRow}>
-                {/* Stretched to the row and as tall as the trip's two lines, so no state moves the header. */}
-                <View
-                  style={[styles.statusTextStack, { minHeight: statusTextStackMinHeight }]}
-                  accessible
-                  accessibilityLabel={headerAccessibilityLabel}
-                >
-                  {tripSummary ? (
-                    <>
-                      <View style={styles.tripDestinationRow}>
-                        <Ionicons name="flag" size={15} color={textColor} />
-                        <Text
-                          style={[styles.tripDestination, { color: textColor }]}
-                          numberOfLines={1}
-                          adjustsFontSizeToFit
-                          minimumFontScale={0.78}
-                        >
-                          {tripSummary.destination}
-                        </Text>
-                      </View>
-                      {statusLine ?? (
-                        <Text
-                          style={[styles.secondaryLineText, { color: subtextColor }]}
-                          numberOfLines={1}
-                          adjustsFontSizeToFit
-                          minimumFontScale={0.85}
-                        >
-                          {tripSummary.line}
-                        </Text>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      {statusLine}
-                      {headerLine.kind === "offline" && (
-                        <Text
-                          style={[styles.secondaryLineText, { color: subtextColor }]}
-                          numberOfLines={1}
-                          adjustsFontSizeToFit
-                          minimumFontScale={0.85}
-                        >
-                          {HEADER_COPY.offlineDetail}
-                        </Text>
-                      )}
-                      {promptLine}
-                    </>
-                  )}
-                </View>
+                {canClosePreview ? (
+                  <GlassNavButton
+                    size={HEADER_BACK_BUTTON_SIZE}
+                    onPress={handleClosePreview}
+                    onAccessibilityEscape={handleClosePreview}
+                    accessibilityLabel="Oturumlara dön"
+                  />
+                ) : null}
+                {/* Stretched to the row and as tall as the trip's two lines, so no state moves the header.
+                    With the route sheet put away, a tap on the trip brings it back; otherwise it is
+                    plain text (a disabled button read as "dimmed" to VoiceOver). */}
+                {canReopenRouteSheet ? (
+                  <Pressable
+                    style={[styles.statusTextStack, { minHeight: statusTextStackMinHeight }]}
+                    onPress={() => DriveSessionStore.openRouteSheet()}
+                    accessibilityRole="button"
+                    accessibilityLabel={headerAccessibilityLabel}
+                    accessibilityHint="Rota özetini açar."
+                  >
+                    {headerTripContent}
+                  </Pressable>
+                ) : (
+                  <View
+                    style={[styles.statusTextStack, { minHeight: statusTextStackMinHeight }]}
+                    accessible
+                    accessibilityLabel={headerAccessibilityLabel}
+                  >
+                    {headerTripContent}
+                  </View>
+                )}
                 <TouchableOpacity
                   onPress={promptBatteryLevel}
                   activeOpacity={0.78}
@@ -966,7 +1106,9 @@ export function CarModeView() {
                     },
                   ]}
                 >
-                  <Ionicons name="battery-half" size={18} color={textColor} />
+                  {/* The car's charge, not the phone's: SF Symbols bolt.car on iOS,
+                      Material electric-car on Android. */}
+                  <IconSymbol name="bolt.car.fill" size={19} color={textColor} />
                   <Text style={[styles.secondaryHeaderActionText, { color: textColor }]}>
                     {batteryPrefs.updatedAt === null ? "%?" : `%${batteryStart}`}
                   </Text>
@@ -1118,6 +1260,16 @@ export function CarModeView() {
         </Animated.View>
       )}
 
+      {canReopenRouteSheet && tripSummary ? (
+        <RouteReopenCapsule
+          title={tripSummary.destination}
+          tripTime={tripSummary.tripTime}
+          isDark={isDark}
+          maxWidth={capsuleMaxWidth}
+          onPress={() => DriveSessionStore.openRouteSheet()}
+        />
+      ) : null}
+
       {/* Assistant Area (Bottom Center) */}
       <Animated.View
         style={[styles.assistantContainer, animatedAssistantStyle]}
@@ -1215,7 +1367,7 @@ const styles = StyleSheet.create({
   },
   floatingHeader: {
     position: "absolute",
-    top: Platform.OS === "ios" ? 60 : 30,
+    top: HEADER_TOP,
     left: 10,
     right: 10,
     zIndex: 1001,
@@ -1390,16 +1542,54 @@ const styles = StyleSheet.create({
   },
   assistantContainer: {
     position: "absolute",
-    bottom: 36,
+    bottom: ORB_BOTTOM,
     left: 0,
     right: 0,
     alignItems: "center",
     zIndex: 1001,
   },
+  /** Just above the orb and the locate button, centred. */
+  capsuleRow: {
+    position: "absolute",
+    bottom: CAPSULE_BOTTOM,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    zIndex: 1002,
+  },
+  capsuleShadow: {
+    borderRadius: 22,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  capsuleGlass: {
+    minHeight: 44,
+    borderRadius: 22,
+    borderWidth: 1,
+    overflow: "hidden",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingLeft: 12,
+    paddingRight: 16,
+    gap: 6,
+  },
+  capsuleTitle: {
+    flexShrink: 1,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  capsuleTime: {
+    flexShrink: 0,
+    fontSize: 15,
+    fontWeight: "600",
+  },
   orbTouchTarget: {
-    width: 132,
-    height: 132,
-    borderRadius: 66,
+    width: ORB_TARGET_SIZE,
+    height: ORB_TARGET_SIZE,
+    borderRadius: ORB_TARGET_SIZE / 2,
     alignItems: "center",
     justifyContent: "center",
     overflow: "visible",

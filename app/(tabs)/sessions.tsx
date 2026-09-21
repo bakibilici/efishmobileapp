@@ -21,8 +21,21 @@ import {
   DriveSessionHistoryStorage,
   StoredDriveSessionRecord,
 } from "@/services/driveSessionHistory";
+import {
+  destinationTitle,
+  isCoordinatePair,
+  originTitle,
+} from "@/services/placeTitle";
 import { useUser } from "@/context/UserContext";
 import { useTheme } from "@/context/ThemeContext";
+
+/**
+ * The same short destination title as the route sheet and the car-mode
+ * header ("Alemdağ Cd. No:940", or the agent's "Metrogarden AVM"), from the
+ * stored plan, else from the record's destination column.
+ */
+const sessionDestination = (session: StoredDriveSessionRecord) =>
+  destinationTitle(session.routeContext?.routePlanData, session.destinationName);
 
 const formatRelativeTime = (timestamp: number) => {
   const now = Date.now();
@@ -121,6 +134,7 @@ export default function SessionsScreen() {
         session.title,
         session.originName || "",
         session.destinationName || "",
+        sessionDestination(session)?.title || "",
       ]
         .join(" ")
         .toLowerCase();
@@ -152,10 +166,23 @@ export default function SessionsScreen() {
         : item.endedAt
           ? "#34C759"
           : "#0A84FF";
+      const destination = sessionDestination(item);
+      // Older records may hold a dropped pin's "lat,lng" as the name.
+      const storedDestination =
+        item.destinationName && !isCoordinatePair(item.destinationName)
+          ? item.destinationName
+          : null;
+      const cardTitle = destination?.title || storedDestination || item.title;
+      // "Konumunuz → Alemdağ Cd. No:940, Ümraniye, İstanbul": short titles
+      // and the destination's district, not the whole postal addresses.
+      const destinationLabel = destination
+        ? [destination.title, destination.detail].filter(Boolean).join(", ")
+        : storedDestination;
+      const origin = originTitle(item.originName)?.title;
       const routeLabel =
-        item.originName && item.destinationName
-          ? `${item.originName} → ${item.destinationName}`
-          : item.title;
+        origin && destinationLabel
+          ? `${origin} → ${destinationLabel}`
+          : destinationLabel || item.title;
 
       return (
         <View
@@ -187,7 +214,7 @@ export default function SessionsScreen() {
                 style={[styles.cardTitle, { color: colors.text }]}
                 numberOfLines={1}
               >
-                {item.destinationName || item.title}
+                {cardTitle}
               </Text>
               <Text
                 style={[styles.cardSubtitle, { color: colors.textSecondary }]}

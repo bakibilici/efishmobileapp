@@ -4,6 +4,7 @@ import type {
   RoutePlanInterestHighlight,
   RoutePlanLocation,
 } from "./DriveSessionStore";
+import { withoutProviderNamesInPlan } from "./providerNames";
 
 function isSnakeHighlight(
   h: Record<string, unknown>,
@@ -101,7 +102,9 @@ export function normalizeRoutePlanFromGateway(
     },
   );
 
-  return {
+  // Stop names and brands come from the route provider's data; the driver
+  // never reads the provider's own name (services/providerNames).
+  return withoutProviderNamesInPlan({
     ...data,
     locations,
     interest_highlights: highlights,
@@ -109,5 +112,5 @@ export function normalizeRoutePlanFromGateway(
       typeof raw.route_optimization_summary === "string"
         ? raw.route_optimization_summary
         : data.route_optimization_summary ?? "",
-  };
+  });
 }

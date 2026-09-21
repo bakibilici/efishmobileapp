@@ -6,6 +6,8 @@ import {
 } from "./driveSessionHistory";
 import { decodePolyline } from "./GoogleMapsService";
 import { LocalUserStorage } from "./localUserStorage";
+import { isCoordinatePair, type RouteDestinationDisplay } from "./placeTitle";
+import { withoutProviderNamesInPlan } from "./providerNames";
 
 export enum DriveSessionState {
   IDLE = "IDLE",
@@ -93,6 +95,12 @@ export interface RoutePlanData {
   };
   interest_highlights?: RoutePlanInterestHighlight[];
   route_optimization_summary?: string;
+  /**
+   * The agent's short name for the destination (planEvRoute tool_end), e.g.
+   * "Metrogarden AVM" where the location only carries the full address.
+   * Read through destinationTitle() in services/placeTitle.
+   */
+  destination_display?: RouteDestinationDisplay;
 }
 
 export interface DriveSessionContext {
@@ -132,7 +140,28 @@ const BATTERY_PREFS_KEY = "akba.battery_prefs";
 class DriveSessionStoreImpl {
   private currentState: DriveSessionState = DriveSessionState.IDLE;
   private context: DriveSessionContext | null = null;
+  /**
+   * Where the route sheet sits, as a level that means the same with every
+   * snap-point set: -1 closed, 0 the low peek (previews only), 1 the middle,
+   * 2 and up higher. Reported by RoutePlanSheet.
+   */
   private routePlanSheetIndex = -1;
+  /**
+   * The driver put the route sheet away (the back button or a swipe down). It
+   * stays away, with the reopen capsule on screen, until they open it again
+   * or a new route arrives.
+   */
+  private routeSheetDismissed = false;
+  /**
+   * The route the driver took off this drive ("Rotayı kaldır"), kept only so
+   * the drive's history record still has one: without it the record could no
+   * longer be written, and "Sürüşü Bitir" would leave it without an endedAt.
+   */
+  private removedRoute: {
+    sessionId: string;
+    route: DriveSessionContext["route"];
+    routePlanData: RoutePlanData | undefined;
+  } | null = null;
   /** Survives endSession(null context); kept in sync with AsyncStorage + context */
   private persistedBatteryPrefs: { start: number; arrival: number } | null =
     null;
@@ -140,6 +169,9 @@ class DriveSessionStoreImpl {
   private batteryUpdatedAt: number | null = null;
   private listeners: Set<(state: DriveSessionState) => void> = new Set();
   private batteryListeners: Set<() => void> = new Set();
+  private routeClearedListeners: Set<() => void> = new Set();
+  /** Keeps route ids unique even for two routes set within one millisecond. */
+  private routeSeq = 0;
   private pendingVoiceReconnect = false;
   /**
    * True while a stored drive is only being looked at ("Rotayı Aç"). Such a
@@ -209,6 +241,24 @@ class DriveSessionStoreImpl {
     this.notifyListeners();
   }
 
+  public isRouteSheetDismissed(): boolean {
+    return this.routeSheetDismissed;
+  }
+
+  /** The driver closed the route sheet; the car-mode view offers it back. */
+  public dismissRouteSheet() {
+    if (this.routeSheetDismissed || !this.context?.routePlanData) return;
+    this.routeSheetDismissed = true;
+    this.notifyListeners();
+  }
+
+  /** Brings a closed route sheet back (the capsule, the header's trip). */
+  public openRouteSheet() {
+    if (!this.routeSheetDismissed) return;
+    this.routeSheetDismissed = false;
+    this.notifyListeners();
+  }
+
   public onStateChange(
     listener: (state: DriveSessionState) => void,
   ): () => void {
@@ -247,6 +297,8 @@ class DriveSessionStoreImpl {
     };
     this.pendingVoiceReconnect = false;
     this.previewIsReadOnly = false;
+    this.routeSheetDismissed = false;
+    this.removedRoute = null;
     this.setState(DriveSessionState.CAR_SESSION_ACTIVE);
     this.clearEndDriveTimer();
     this.persistCurrentSession();
@@ -338,34 +390,61 @@ class DriveSessionStoreImpl {
         } as any,
       };
       this.previewIsReadOnly = false;
+      // A new route opens the sheet again.
+      this.routeSheetDismissed = false;
       this.persistCurrentSession();
       this.notifyListeners();
     }
   }
 
+  /** Sets a new route and returns its id (null without a drive). */
   public setRouteFromFrontend(data: {
     origin: { latitude: number; longitude: number };
     destination: { latitude: number; longitude: number };
     stops: { latitude: number; longitude: number }[];
     polyline: { latitude: number; longitude: number }[];
     summary: { duration: number; distance: number };
-  }) {
-    if (this.context) {
-      this.context = {
-        ...this.context,
-        route: {
-          routeId: `frontend-${Date.now()}`,
-          origin: data.origin,
-          destination: data.destination,
-          stops: data.stops,
-          polyline: data.polyline,
-          summary: data.summary,
-        },
-      };
-      this.previewIsReadOnly = false;
-      this.persistCurrentSession();
-      this.notifyListeners();
-    }
+  }): string | null {
+    if (!this.context) return null;
+    this.routeSeq += 1;
+    const routeId = `frontend-${Date.now()}-${this.routeSeq}`;
+    this.context = {
+      ...this.context,
+      route: {
+        routeId,
+        origin: data.origin,
+        destination: data.destination,
+        stops: data.stops,
+        polyline: data.polyline,
+        summary: data.summary,
+      },
+    };
+    this.previewIsReadOnly = false;
+    // A new route opens the sheet again.
+    this.routeSheetDismissed = false;
+    this.persistCurrentSession();
+    this.notifyListeners();
+    return routeId;
+  }
+
+  /**
+   * The road shape (Google Directions) for a route already on screen. It
+   * lands only on the route it was fetched for: a newer route, or none
+   * ("Rotayı kaldır"), leaves it unused. Neither the route's id nor a sheet
+   * the driver put away changes, so the sheet stays where the driver left it.
+   */
+  public updateRouteGeometry(
+    routeId: string | null | undefined,
+    polyline: { latitude: number; longitude: number }[],
+    summary: { duration: number; distance: number },
+  ): boolean {
+    const context = this.context;
+    const route = context?.route;
+    if (!context || !route || !routeId || route.routeId !== routeId) return false;
+    this.context = { ...context, route: { ...route, polyline, summary } };
+    this.persistCurrentSession();
+    this.notifyListeners();
+    return true;
   }
 
   public setRoutePlanData(data: RoutePlanData) {
@@ -383,6 +462,60 @@ class DriveSessionStoreImpl {
 
   public getRoutePlanData(): RoutePlanData | undefined {
     return this.context?.routePlanData;
+  }
+
+  /**
+   * "Rotayı kaldır": takes the planned route off the drive (map line and
+   * markers, the header's trip, the sheet and its capsule). The drive and the
+   * voice session go on, and nothing is ended: no endedAt is written. A drive
+   * that was only following the route (NAVIGATION_ONLY) becomes an ordinary
+   * drive without one; the AI states are left to the voice session. A
+   * preview only looks at a stored route and cannot remove it.
+   */
+  public clearRoute() {
+    const context = this.context;
+    if (!context || context.isPreviewMode) return;
+    if (!context.route && !context.routePlanData) return;
+
+    this.removedRoute = {
+      sessionId: context.sessionId,
+      route: context.route,
+      routePlanData: context.routePlanData,
+    };
+    this.context = {
+      ...context,
+      route: undefined,
+      routePlanData: undefined,
+      isNavigationActive: false,
+    };
+    this.routePlanSheetIndex = -1;
+    this.routeSheetDismissed = false;
+    if (this.currentState === DriveSessionState.NAVIGATION_ONLY) {
+      this.currentState = DriveSessionState.CAR_SESSION_ACTIVE;
+    }
+    this.persistCurrentSession();
+    this.notifyListeners();
+    // The voice session tells AKBA (useDrivingAgent: route_cleared).
+    this.routeClearedListeners.forEach((listener) => listener());
+  }
+
+  /** The driver removed this drive's route; the drive and AKBA go on. */
+  public onRouteCleared(listener: () => void): () => void {
+    this.routeClearedListeners.add(listener);
+    return () => this.routeClearedListeners.delete(listener);
+  }
+
+  /**
+   * This drive had a route and the driver removed it ("Rotayı kaldır"). Such
+   * a drive stays on screen when AKBA goes quiet, like one with a route, so
+   * it can still be ended ("Sürüşü Bitir") and recorded with its endedAt.
+   */
+  public hasRemovedRoute(): boolean {
+    return (
+      !!this.removedRoute &&
+      !!this.context &&
+      this.removedRoute.sessionId === this.context.sessionId
+    );
   }
 
   public startNavigation() {
@@ -425,6 +558,8 @@ class DriveSessionStoreImpl {
     this.currentState = DriveSessionState.IDLE;
     this.context = null;
     this.routePlanSheetIndex = -1;
+    this.routeSheetDismissed = false;
+    this.removedRoute = null;
     this.pendingVoiceReconnect = false;
     this.previewIsReadOnly = false;
     this.clearEndDriveTimer();
@@ -436,6 +571,8 @@ class DriveSessionStoreImpl {
     this.currentState = DriveSessionState.IDLE;
     this.context = null;
     this.routePlanSheetIndex = -1;
+    this.routeSheetDismissed = false;
+    this.removedRoute = null;
     this.pendingVoiceReconnect = false;
     this.previewIsReadOnly = false;
     this.clearEndDriveTimer();
@@ -449,6 +586,8 @@ class DriveSessionStoreImpl {
     const restoredContext = this.buildRestoredContext(record);
     this.context = restoredContext;
     this.routePlanSheetIndex = -1;
+    this.routeSheetDismissed = false;
+    this.removedRoute = null;
     this.pendingVoiceReconnect = !!options.reconnectVoice;
     // Resuming with AKBA continues the drive; opening the route only looks at it.
     this.previewIsReadOnly = !options.reconnectVoice;
@@ -561,7 +700,10 @@ class DriveSessionStoreImpl {
       history: Array.isArray(rawContext.history) ? rawContext.history : [],
       isPreviewMode: true,
       route: restoredRoute,
-      routePlanData: rawContext.routePlanData,
+      // A drive stored before stop names were cleaned shows them clean too.
+      routePlanData: rawContext.routePlanData
+        ? withoutProviderNamesInPlan(rawContext.routePlanData)
+        : undefined,
       isNavigationActive:
         rawContext.isNavigationActive ??
         !!(rawContext.routePlanData || rawContext.route),
@@ -572,37 +714,48 @@ class DriveSessionStoreImpl {
   }
 
   private getSessionSnapshot(options: PersistSessionOptions = {}) {
-    if (!this.context || (!this.context.route && !this.context.routePlanData)) {
+    if (!this.context) return null;
+    // A drive whose route was removed is still recorded with that route.
+    const removed =
+      this.removedRoute?.sessionId === this.context.sessionId ? this.removedRoute : null;
+    const context: DriveSessionContext =
+      !this.context.route && !this.context.routePlanData && removed
+        ? { ...this.context, route: removed.route, routePlanData: removed.routePlanData }
+        : this.context;
+    if (!context.route && !context.routePlanData) {
       return null;
     }
 
-    const locations = this.context.routePlanData?.locations ?? [];
+    const locations = context.routePlanData?.locations ?? [];
+    // A dropped pin's waypoint is "lat,lng": never a name to store or show.
+    const named = (text?: string | null) =>
+      text?.trim() && !isCoordinatePair(text) ? text.trim() : null;
     const originName =
-      locations.find((location) => location.type === "origin")?.name ||
-      this.context.routePlanData?.waypoints.origin ||
+      named(locations.find((location) => location.type === "origin")?.name) ||
+      named(context.routePlanData?.waypoints?.origin) ||
       "Başlangıç";
     const destinationName =
-      locations.find((location) => location.type === "destination")?.name ||
-      this.context.routePlanData?.waypoints.destination ||
+      named(locations.find((location) => location.type === "destination")?.name) ||
+      named(context.routePlanData?.waypoints?.destination) ||
       "Hedef";
     const durationSeconds =
-      this.context.route?.summary?.duration ??
-      (this.context.routePlanData?.summary?.total_travel_duration != null
-        ? this.context.routePlanData.summary.total_travel_duration * 60
+      context.route?.summary?.duration ??
+      (context.routePlanData?.summary?.total_travel_duration != null
+        ? context.routePlanData.summary.total_travel_duration * 60
         : null);
     // Google Directions reports metres; Electrip reports kilometres.
-    const routeDistanceM = this.context.route?.summary?.distance;
+    const routeDistanceM = context.route?.summary?.distance;
     const distanceKm =
       routeDistanceM != null
         ? Math.round(routeDistanceM / 100) / 10
-        : this.context.routePlanData?.summary?.total_travel_length ?? null;
+        : context.routePlanData?.summary?.total_travel_length ?? null;
     const stationCount =
-      this.context.routePlanData?.summary?.total_station_count ??
-      this.context.route?.stops?.length ??
+      context.routePlanData?.summary?.total_station_count ??
+      context.route?.stops?.length ??
       0;
 
     return {
-      sessionId: this.context.sessionId,
+      sessionId: context.sessionId,
       title:
         originName && destinationName
           ? `${originName} → ${destinationName}`
@@ -610,13 +763,13 @@ class DriveSessionStoreImpl {
       originName,
       destinationName,
       state: options.stateOverride ?? this.currentState,
-      startedAt: this.context.startTime,
+      startedAt: context.startTime,
       updatedAt: Date.now(),
       endedAt: options.endedAt ?? null,
       durationSeconds,
       distanceKm,
       stationCount,
-      routeContext: this.context,
+      routeContext: context,
     };
   }
 

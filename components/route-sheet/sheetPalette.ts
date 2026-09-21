@@ -1,23 +1,15 @@
 import { Platform } from "react-native";
 
-import { Colors } from "../../constants/theme";
-
 /**
- * Colours for the frosted route sheet. The chrome (glass, handle, preview
- * bar) keeps the app theme; the content uses iOS semantic colours so it reads
- * like a grouped inset list. Both palettes are module constants, so memoised
- * rows receive the same object on every render.
+ * Colours for the frosted route sheet. The chrome (glass, handle) keeps the
+ * app's look; the content uses iOS semantic colours so it reads like a
+ * grouped inset list. Both palettes are module constants, so memoised rows
+ * receive the same object on every render.
  */
 export type SheetPalette = {
   isDark: boolean;
 
-  // Chrome: the preview bar, the handle and the one blur behind everything.
-  text: string;
-  textSecondary: string;
-  textTertiary: string;
-  /** The back pills' surface. */
-  surface: string;
-  hairline: string;
+  // Chrome: the handle and the one blur behind everything.
   handle: string;
   blurTint: "light" | "dark";
   blurIntensity: number;
@@ -55,11 +47,6 @@ const isAndroid = Platform.OS === "android";
 
 const LIGHT: SheetPalette = {
   isDark: false,
-  text: Colors.light.text,
-  textSecondary: Colors.light.textSecondary,
-  textTertiary: Colors.light.textTertiary,
-  surface: isAndroid ? "rgba(255,255,255,0.78)" : "rgba(255,255,255,0.62)",
-  hairline: "rgba(0,35,49,0.08)",
   handle: "rgba(0,35,49,0.18)",
   blurTint: "light",
   blurIntensity: 80,
@@ -89,11 +76,6 @@ const LIGHT: SheetPalette = {
 
 const DARK: SheetPalette = {
   isDark: true,
-  text: Colors.dark.text,
-  textSecondary: Colors.dark.textSecondary,
-  textTertiary: Colors.dark.textTertiary,
-  surface: isAndroid ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.06)",
-  hairline: "rgba(255,255,255,0.09)",
   handle: "rgba(255,255,255,0.24)",
   blurTint: "dark",
   blurIntensity: 70,

@@ -64,6 +64,7 @@ import {
   View,
 } from "react-native";
 import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import MapView, {
   Marker,
   PROVIDER_GOOGLE,
@@ -75,11 +76,17 @@ import MapView, {
 
 import { ActivityContextBar } from "@/components/ActivityContextBar";
 import { ActivityNotice } from "@/components/ActivityNotice";
-import { RoutePlanSheet } from "@/components/RoutePlanSheet";
+import { CAR_MODE_MAP_CLEAR_INSETS } from "@/components/carModeLayout";
+import {
+  hasRouteSheet,
+  RoutePlanSheet,
+  routeSheetMiddleHeight,
+} from "@/components/RoutePlanSheet";
 import {
   breakIconName,
   formatPlaceLine,
 } from "@/components/route-sheet/breakSuggestion";
+import { stationHardware } from "@/components/route-sheet/routeFormat";
 import { Station, StationType } from "@/constants/stations";
 import { Colors } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
@@ -88,8 +95,24 @@ import { useHeaderAutoCollapse } from "@/hooks/useHeaderAutoCollapse";
 import {
   DriveSessionState,
   DriveSessionStore,
+  type RoutePlanLocation,
 } from "@/services/DriveSessionStore";
 import { decodePolyline } from "@/services/GoogleMapsService";
+import { destinationTitle, originTitle } from "@/services/placeTitle";
+import {
+  availableSockets,
+  matchRouteStop,
+  metersBetween,
+  routeStopStation,
+  SAME_PLACE_METERS,
+} from "@/services/routeStopStations";
+import {
+  focusFitCoordinates,
+  STATION_FOCUS_HIGHLIGHT_MS,
+  StationFocusBus,
+  stationFromFocus,
+  type StationFocusEvent,
+} from "@/services/stationFocus";
 import Voice from "@react-native-voice/voice";
 
 import {
@@ -112,17 +135,20 @@ const getStationColor = (type: string | null | undefined) => {
   return color || "#000000";
 };
 
-const pinImagesSelected: Record<string, any> = {
-  HPC: require("../../assets/images/hpcstationmappin.png"),
-  DC: require("../../assets/images/dcstationmappin.png"),
-  AC: require("../../assets/images/acstationmappin.png"),
-};
-
-const pinImagesUnselected: Record<string, any> = {
+// One pin per tier (bolts: AC one, DC two, HPC three). The old "selected"
+// images carried another company's logo mark; a selected or highlighted pin
+// now keeps its bolts and gets a ring instead (StationPinView).
+const pinImages: Record<string, any> = {
   HPC: require("../../assets/images/hpcmappinunselected.png"),
   DC: require("../../assets/images/dcmappinunselected.png"),
   AC: require("../../assets/images/acmappinunselected.png"),
 };
+
+/** The camera follows AKBA's found pins this much later, once they are on the map. */
+const FOCUS_FIT_DELAY_MS = 150;
+
+/** Stable while there is no route, so nothing keyed on the stops recomputes. */
+const NO_ROUTE_LOCATIONS: RoutePlanLocation[] = [];
 
 const typeLightningCount: Record<StationType, number> = {
   AC: 1,
@@ -227,44 +253,141 @@ const buildElectripDetails = (station: Station) => ({
 const PIN_W = Math.round(SCREEN_W * 0.08); // 8% of screen width
 const PIN_H = Math.round(PIN_W * 1.78); // maintain pin aspect ratio
 const PIN_SIZE = { w: PIN_W, h: PIN_H };
+/**
+ * Clear room around the pin for its ring and its 1.08x scale. Even on all
+ * sides, so the pin's centre (where iOS puts the coordinate) does not move;
+ * Android's anchor below is recomputed for the taller box.
+ */
+const PIN_PAD = Math.round(PIN_W * 0.28);
+const PIN_BOX = { w: PIN_W + PIN_PAD * 2, h: PIN_H + PIN_PAD * 2 };
+/** The pin's tip, 87% down the image, as a fraction of the box. */
+const PIN_TIP_Y = PIN_PAD + PIN_H * 0.87;
+/** The ring around the pin's round head (the head is as wide as the pin). */
+const PIN_RING = PIN_W + PIN_PAD * 2 - 2;
+/** A route stop's break chip: its height and the gap to the pin's box. */
+const ROUTE_CHIP_H = 30;
+const ROUTE_CHIP_GAP = 0;
 
 // Marker component — fixed size, only image source changes on selection.
 const isAndroid = Platform.OS === "android";
+
+/**
+ * Android draws a marker as a bitmap: it re-captures the view for 1.5 s after
+ * `visualKey` changes, then stops. iOS draws the live view and never tracks.
+ */
+const useAndroidMarkerTracking = (visualKey: string) => {
+  const [tracking, setTracking] = React.useState(isAndroid);
+  React.useEffect(() => {
+    if (!isAndroid) return; // iOS needs NO tracking — fully static
+    setTracking(true);
+    const timer = setTimeout(() => setTracking(false), 1500);
+    return () => clearTimeout(timer);
+  }, [visualKey]);
+  return isAndroid ? tracking : false;
+};
+
+/**
+ * The map's station pin: the tier's image with its bolts and the free-plug
+ * count, and, when `emphasized` (the open station, or one AKBA just found), a
+ * glass ring around the head and a slightly larger pin. The main map and a
+ * route's charging stops both draw this, so a stop looks exactly like the
+ * station. `availableCount` null leaves the count empty (unknown, not 0).
+ */
+const StationPinView = ({
+  type,
+  availableCount,
+  emphasized,
+}: {
+  type: string | null | undefined;
+  availableCount: number | null;
+  emphasized: boolean;
+}) => {
+  const typeKey = String(type || "DC").toUpperCase();
+  const stationColor = getStationColor(typeKey);
+  return (
+    <View
+      collapsable={false}
+      style={{
+        width: PIN_BOX.w,
+        height: PIN_BOX.h,
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      {emphasized ? (
+        <View
+          style={[
+            styles.stationPinRing,
+            {
+              width: PIN_RING,
+              height: PIN_RING,
+              borderRadius: PIN_RING / 2,
+              top: 1,
+              left: (PIN_BOX.w - PIN_RING) / 2,
+              borderColor: stationColor,
+              shadowColor: stationColor,
+            },
+          ]}
+        />
+      ) : null}
+      <View
+        style={{
+          width: PIN_SIZE.w,
+          height: PIN_SIZE.h,
+          // Always a transform: going from one to none hands RN a null transform.
+          transform: [{ scale: emphasized ? 1.08 : 1 }],
+        }}
+      >
+        <Image
+          source={pinImages[typeKey] || pinImages.DC}
+          style={{ width: PIN_SIZE.w, height: PIN_SIZE.h }}
+          resizeMode="stretch"
+          fadeDuration={0}
+        />
+        <Text
+          style={{
+            position: "absolute",
+            bottom: "13%",
+            width: "100%",
+            textAlign: "center",
+            color: stationColor,
+            fontSize: 11,
+            fontWeight: "800",
+            includeFontPadding: false,
+          }}
+        >
+          {availableCount ?? ""}
+        </Text>
+      </View>
+    </View>
+  );
+};
 
 const MapPinMarker = React.memo(
   ({
     station,
     isSelected,
+    isHighlighted = false,
+    availabilityUnknown = false,
     onPress,
   }: {
     station: Station;
     isSelected: boolean;
+    /** One of the stations AKBA just found (stations_focus). */
+    isHighlighted?: boolean;
+    /** Built from AKBA's list before the feed had it: no plug counts yet. */
+    availabilityUnknown?: boolean;
     onPress: (station: Station) => void;
   }) => {
     const typeKey = String(station.type || "DC").toUpperCase();
-    const imgSource = isSelected
-      ? pinImagesSelected[typeKey] || pinImagesSelected.DC
-      : pinImagesUnselected[typeKey] || pinImagesUnselected.DC;
-
-    const stationColor = getStationColor(station.type);
-
-    const availableCount = station.socket_stats
-      ? Object.values(station.socket_stats).reduce(
-          (acc: number, curr: any) => acc + (curr.available || 0),
-          0,
-        )
-      : 0;
+    const emphasized = isSelected || isHighlighted;
+    // A station without socket counts has always shown 0 here.
+    const availableCount = availabilityUnknown ? null : (availableSockets(station) ?? 0);
 
     // Android-only: bitmap tracking for 1.5s after visual changes
-    const [tracking, setTracking] = React.useState(isAndroid);
-    const visKey = `${isSelected} -${availableCount} -${typeKey} `;
-
-    React.useEffect(() => {
-      if (!isAndroid) return; // iOS needs NO tracking — fully static
-      setTracking(true);
-      const timer = setTimeout(() => setTracking(false), 1500);
-      return () => clearTimeout(timer);
-    }, [visKey]);
+    const tracksViewChanges = useAndroidMarkerTracking(
+      `${emphasized} -${availableCount} -${typeKey} `,
+    );
 
     return (
       <Marker
@@ -273,8 +396,8 @@ const MapPinMarker = React.memo(
           longitude: station.longitude,
         }}
         onPress={() => onPress(station)}
-        anchor={isAndroid ? { x: 0.5, y: 0.87 } : undefined}
-        tracksViewChanges={isAndroid ? tracking : false}
+        anchor={isAndroid ? { x: 0.5, y: PIN_TIP_Y / PIN_BOX.h } : undefined}
+        tracksViewChanges={tracksViewChanges}
         // Deliberately constant. Changing a marker's zIndex makes AIRMap pull the
         // child out and re-insert it at another index, and under the New
         // Architecture's legacy-interop path that index goes out of range and
@@ -283,41 +406,108 @@ const MapPinMarker = React.memo(
         // little here. Revisit if react-native-maps gains a native Fabric view.
         zIndex={0}
       >
-        {/* @ts-ignore */}
-        <View
-          collapsable={false}
-          style={{
-            width: PIN_SIZE.w,
-            height: PIN_SIZE.h,
-          }}
-        >
-          <Image
-            source={imgSource}
-            style={{ width: PIN_SIZE.w, height: PIN_SIZE.h }}
-            resizeMode="stretch"
-            fadeDuration={0}
-          />
-          <Text
-            style={{
-              position: "absolute",
-              bottom: "13%",
-              width: "100%",
-              textAlign: "center",
-              color: stationColor,
-              fontSize: 11,
-              fontWeight: "800",
-              includeFontPadding: false,
-            }}
-          >
-            {availableCount}
-          </Text>
-        </View>
+        <StationPinView
+          type={typeKey}
+          availableCount={availableCount}
+          emphasized={emphasized}
+        />
       </Marker>
     );
   },
 );
 
 MapPinMarker.displayName = "MapPinMarker";
+
+/**
+ * A route's charging stop: the station's own pin (StationPinView, the same
+ * tier, colours and count as on the main map), with the break chip
+ * ("Kahve", "Yürüyüş") above it when the stop has a suggestion. The pin sits
+ * where a MapPinMarker for the station would: iOS centres the whole view on
+ * the coordinate, so the view is shifted up by half the chip block; Android
+ * anchors at the pin's tip.
+ */
+const RouteStationMarker = React.memo(
+  ({
+    station,
+    availabilityUnknown,
+    highlighted,
+    title,
+    description,
+    chip,
+  }: {
+    station: Station;
+    availabilityUnknown: boolean;
+    highlighted: boolean;
+    title: string;
+    description?: string;
+    chip: {
+      icon: React.ComponentProps<typeof Ionicons>["name"];
+      label: string;
+      isDark: boolean;
+      iconColor: string;
+      textColor: string;
+    } | null;
+  }) => {
+    const typeKey = String(station.type || "DC").toUpperCase();
+    const availableCount = availabilityUnknown ? null : (availableSockets(station) ?? 0);
+    const chipBlock = chip ? ROUTE_CHIP_H + ROUTE_CHIP_GAP : 0;
+    const tracksViewChanges = useAndroidMarkerTracking(
+      `${highlighted} -${availableCount} -${typeKey} -${chip?.label} -${chip?.isDark}`,
+    );
+
+    return (
+      <Marker
+        coordinate={{ latitude: station.latitude, longitude: station.longitude }}
+        title={title}
+        description={description}
+        centerOffset={isAndroid ? undefined : { x: 0, y: -chipBlock / 2 }}
+        anchor={
+          isAndroid
+            ? { x: 0.5, y: (chipBlock + PIN_TIP_Y) / (chipBlock + PIN_BOX.h) }
+            : undefined
+        }
+        tracksViewChanges={tracksViewChanges}
+        // Constant for the same reason as MapPinMarker's.
+        zIndex={500}
+      >
+        <View collapsable={false} style={styles.routeStationMarkerWrap}>
+          {chip ? (
+            <View
+              style={[
+                styles.routeInterestChip,
+                {
+                  backgroundColor: chip.isDark
+                    ? "rgba(15, 23, 42, 0.92)"
+                    : "rgba(255, 255, 255, 0.96)",
+                  borderColor: chip.isDark
+                    ? "rgba(148, 163, 184, 0.24)"
+                    : "rgba(15, 23, 42, 0.08)",
+                },
+              ]}
+            >
+              <Ionicons name={chip.icon} size={12} color={chip.iconColor} />
+              <Text
+                style={[styles.routeInterestChipText, { color: chip.textColor }]}
+                numberOfLines={1}
+                // The chip's height places the pin (centerOffset/anchor above).
+                allowFontScaling={false}
+              >
+                {chip.label}
+              </Text>
+            </View>
+          ) : null}
+          <StationPinView
+            type={typeKey}
+            availableCount={availableCount}
+            emphasized={highlighted}
+          />
+        </View>
+      </Marker>
+    );
+  },
+);
+
+RouteStationMarker.displayName = "RouteStationMarker";
 
 export default function MapScreen() {
   const router = useRouter();
@@ -339,7 +529,15 @@ export default function MapScreen() {
   const [myVehicles, setMyVehicles] = useState<any[]>([]);
   const [isLoadingVehicles, setIsLoadingVehicles] = useState(false);
   const [measuredFilterHeight, setMeasuredFilterHeight] = useState(160); // Much smaller now
-  const [routePlanSheetIndex, setRoutePlanSheetIndex] = useState(1);
+  // The route sheet's level: -1 closed, 0 peek (previews), 1 middle, 2+ higher.
+  const [routePlanSheetIndex, setRoutePlanSheetIndex] = useState(() =>
+    DriveSessionStore.getRoutePlanSheetIndex(),
+  );
+  // The route sheet's stops count from under the safe area; the map fit
+  // (a store listener) reads it from here.
+  const { top: safeTop } = useSafeAreaInsets();
+  const safeTopRef = useRef(safeTop);
+  safeTopRef.current = safeTop;
   const isSwitchingMode = useRef(false);
 
   // Meter values WebSocket
@@ -371,11 +569,37 @@ export default function MapScreen() {
     driveState !== DriveSessionState.IDLE &&
     driveState !== DriveSessionState.PROMPTING;
   const routePlanData = DriveSessionStore.getRoutePlanData();
-  const routeLocations = routePlanData?.locations ?? [];
+  const routeLocations = routePlanData?.locations ?? NO_ROUTE_LOCATIONS;
+  // AKBA's latest station search on the map, while it is highlighted.
+  const [stationFocus, setStationFocus] = useState<StationFocusEvent | null>(() =>
+    StationFocusBus.get(),
+  );
+  const stationFocusRef = useRef(stationFocus);
+  stationFocusRef.current = stationFocus;
+  /** The driver moved the map during a highlight: end it once the map is at rest. */
+  const releaseFocusOnSettleRef = useRef(false);
+  const lastMapGestureAtRef = useRef(0);
+  // The route pins' callouts: the same short titles as the route sheet
+  // ("Alemdağ Cd. No:940", "Konumunuz"), with the full address under them.
+  const routePinNames = useMemo(() => {
+    const destination = destinationTitle(routePlanData);
+    const originLocation = routePlanData?.locations?.find(
+      (location) => location.type === "origin",
+    );
+    const origin = originTitle(originLocation?.name);
+    return {
+      destination: destination
+        ? { title: destination.title, address: destination.address }
+        : null,
+      origin: { title: origin?.title ?? "Başlangıç", address: origin?.address ?? null },
+    };
+  }, [routePlanData]);
   const shouldShowOnlyRouteMarkers =
     isDriveModeActive && routeLocations.length > 0;
+  // The sheet's own check: the back key below takes over exactly when there
+  // is no sheet to take it.
   const hasActiveRoutePlanSheet =
-    isDriveModeActive && routeLocations.length > 0;
+    isDriveModeActive && hasRouteSheet(routePlanData);
   const shouldHideMapActionButtons =
     hasActiveRoutePlanSheet && routePlanSheetIndex > 0;
   const mapActionButtonBottom = isDriveModeActive ? 132 : 120;
@@ -397,9 +621,13 @@ export default function MapScreen() {
     router.navigate("/(tabs)/sessions");
   }, [router]);
 
+  // Android's back key: with a route sheet on screen RoutePlanSheet takes it
+  // one level up (stations → overview → Oturumlar or the map). This covers
+  // only a preview without a sheet to show.
+  const shouldHandleBackForPreview = canClosePreview && !hasActiveRoutePlanSheet;
   useFocusEffect(
     useCallback(() => {
-      if (!canClosePreview) return undefined;
+      if (!shouldHandleBackForPreview) return undefined;
       const subscription = BackHandler.addEventListener(
         "hardwareBackPress",
         () => {
@@ -408,7 +636,7 @@ export default function MapScreen() {
         },
       );
       return () => subscription.remove();
-    }, [canClosePreview, handleClosePreview]),
+    }, [shouldHandleBackForPreview, handleClosePreview]),
   );
 
   useEffect(() => {
@@ -418,13 +646,11 @@ export default function MapScreen() {
     return unsub;
   }, []);
 
+  // The sheet reports where it is (it may have been put away with the back button);
+  // only a drive without a route is settled here.
   useEffect(() => {
-    if (!hasActiveRoutePlanSheet) {
-      handleRoutePlanSheetIndexChange(-1);
-      return;
-    }
-    handleRoutePlanSheetIndexChange(1);
-  }, [handleRoutePlanSheetIndexChange, hasActiveRoutePlanSheet, routePlanData]);
+    if (!hasActiveRoutePlanSheet) handleRoutePlanSheetIndexChange(-1);
+  }, [handleRoutePlanSheetIndexChange, hasActiveRoutePlanSheet]);
 
   // Fit map to route when route plan data arrives
   useEffect(() => {
@@ -457,7 +683,11 @@ export default function MapScreen() {
                 edgePadding: {
                   top: 120,
                   right: 60,
-                  bottom: Dimensions.get("window").height * 0.55,
+                  // Above the sheet at its middle stop, where a new route opens it.
+                  bottom: routeSheetMiddleHeight(
+                    Dimensions.get("window").height,
+                    safeTopRef.current,
+                  ),
                   left: 60,
                 },
                 animated: true,
@@ -1378,6 +1608,10 @@ export default function MapScreen() {
           prev.latitudeDelta * 0.2;
         return moved || zoomed ? region : prev;
       });
+      if (releaseFocusOnSettleRef.current) {
+        releaseFocusOnSettleRef.current = false;
+        StationFocusBus.clear();
+      }
     }, 450);
 
     if (userLocation) {
@@ -1428,6 +1662,68 @@ export default function MapScreen() {
 
   const { stations: electripStations } = useElectripStations(electripAnchor);
 
+  // Every loaded station by id: a route stop or a station AKBA found is looked
+  // up here, whatever part of the map is on screen.
+  const stationIndex = useMemo(() => {
+    const byId = new Map<string, Station>();
+    for (const station of stationsList) byId.set(station.id, station);
+    for (const station of electripStations) byId.set(station.id, station);
+    return byId;
+  }, [stationsList, electripStations]);
+  const loadedStations = useMemo(
+    () => [...stationsList, ...electripStations],
+    [stationsList, electripStations],
+  );
+
+  // The route's charging stops as map stations: the loaded station when the
+  // stop is one (same id nearby, within 30 m, or the same name nearby), so its
+  // pin and free-plug count match the main map; otherwise one built from the
+  // route's own fields with the same tier rule.
+  const routeStops = useMemo(
+    () =>
+      routeLocations.flatMap((location, index) => {
+        if (location.type !== "station") return [];
+        const matched = matchRouteStop(location, loadedStations, stationIndex);
+        const station = matched ?? routeStopStation(location, index);
+        return station ? [{ index, location, station, matched: !!matched }] : [];
+      }),
+    [routeLocations, loadedStations, stationIndex],
+  );
+  // Drawn by their route marker, so never a second time as a plain pin.
+  const routeStopStationIds = useMemo(
+    () => new Set(routeStops.map((stop) => stop.station.id)),
+    [routeStops],
+  );
+
+  // AKBA's station search (stations_focus): which pins to highlight. A found
+  // station that is a route stop highlights the stop's marker; any other is
+  // drawn highlighted on top of the map's own pins (the loaded station, or
+  // one built from AKBA's list until the feed has it).
+  const focus = useMemo(() => {
+    const onRoute = new Set<string>();
+    const pins: Station[] = [];
+    const unknownAvailability = new Set<string>();
+    for (const entry of stationFocus?.stations ?? []) {
+      const stop = routeStops.find(
+        ({ station }) =>
+          station.id === entry.id || metersBetween(station, entry) <= SAME_PLACE_METERS,
+      );
+      if (stop) {
+        onRoute.add(stop.station.id);
+        continue;
+      }
+      const loaded = stationIndex.get(entry.id);
+      if (loaded) {
+        pins.push(loaded);
+      } else {
+        const built = stationFromFocus(entry);
+        pins.push(built);
+        unknownAvailability.add(built.id);
+      }
+    }
+    return { onRoute, pins, unknownAvailability };
+  }, [stationFocus, routeStops, stationIndex]);
+
   // efish stations stream in over the socket already scoped to the map's bounding
   // box, so they are all drawn. The Electrip feed is the whole country in one
   // response, so it is cut down to what is actually on screen.
@@ -1454,6 +1750,8 @@ export default function MapScreen() {
   const filteredStations = useMemo(
     () =>
       allStations.filter((station) => {
+        // A route's stop has its own marker (RouteStationMarker).
+        if (routeStopStationIds.has(station.id)) return false;
         // The API already filters by Type (AC/DC/HPC).
         // We might still filter by name (search) or other client-side toggles here.
         const matchesQuery = station.name
@@ -1466,7 +1764,7 @@ export default function MapScreen() {
         const matchesType = typeFilters.length === 0 || typeFilters.includes(station.type);
         return matchesQuery && matchesNetwork && matchesType;
       }),
-    [allStations, search, onlyEfish, showPublic, typeFilters],
+    [allStations, search, onlyEfish, showPublic, typeFilters, routeStopStationIds],
   );
 
   // Grid-clustered view of whatever passed the filters. Markers on the map are
@@ -1476,6 +1774,99 @@ export default function MapScreen() {
     () => clusterStations(filteredStations, viewport, selectedStation?.id),
     [filteredStations, viewport, selectedStation],
   );
+
+  /**
+   * Frames AKBA's found stations and their search center in the part of the
+   * map the driver can see. An open route sheet is left where it is (the
+   * calmer choice: no panel moves that the driver did not move): the camera
+   * fits above its middle stop, with room for the floating back button. With
+   * the sheet away, car mode's header, capsule, orb and speed column are
+   * kept clear.
+   */
+  const fitStationFocus = useCallback((focusEvent: StationFocusEvent) => {
+    const map = mapRef.current;
+    if (!map) return;
+    const plan = DriveSessionStore.getRoutePlanData();
+    const sheetCoversMap =
+      hasRouteSheet(plan) &&
+      !DriveSessionStore.isRouteSheetDismissed() &&
+      DriveSessionStore.getRoutePlanSheetIndex() > 0;
+    const safeTopNow = safeTopRef.current;
+    const edgePadding = sheetCoversMap
+      ? {
+          // The sheet's floating back button: 8 under the safe area, 44 tall.
+          top: safeTopNow + 8 + 44 + 16,
+          bottom:
+            routeSheetMiddleHeight(Dimensions.get("window").height, safeTopNow) + 24,
+          left: 36,
+          right: 36,
+        }
+      : {
+          top: CAR_MODE_MAP_CLEAR_INSETS.top + 16,
+          bottom: CAR_MODE_MAP_CLEAR_INSETS.bottom + 16,
+          left: 36,
+          right: CAR_MODE_MAP_CLEAR_INSETS.right + 12,
+        };
+    map.fitToCoordinates(focusFitCoordinates(focusEvent), {
+      edgePadding,
+      animated: true,
+    });
+  }, []);
+
+  // AKBA's station search: the found pins go on the map first and the camera
+  // follows FOCUS_FIT_DELAY_MS later, so no marker is added while the map is
+  // moving. A focus published while this screen was not mounted is framed on
+  // mount if it is still within its highlight time.
+  useEffect(() => {
+    let fitTimer: ReturnType<typeof setTimeout> | null = null;
+    const frame = (focusEvent: StationFocusEvent) => {
+      if (fitTimer) clearTimeout(fitTimer);
+      fitTimer = setTimeout(() => fitStationFocus(focusEvent), FOCUS_FIT_DELAY_MS);
+    };
+    const pending = StationFocusBus.get();
+    if (pending && Date.now() - pending.receivedAt < STATION_FOCUS_HIGHLIGHT_MS) {
+      frame(pending);
+    }
+    const unsubscribe = StationFocusBus.subscribe((focusEvent) => {
+      setStationFocus(focusEvent);
+      if (!focusEvent) return;
+      // A pan before this search does not end it.
+      releaseFocusOnSettleRef.current = false;
+      frame(focusEvent);
+    });
+    return () => {
+      unsubscribe();
+      if (fitTimer) clearTimeout(fitTimer);
+    };
+  }, [fitStationFocus]);
+
+  // The highlight ends after STATION_FOCUS_HIGHLIGHT_MS or once the driver
+  // moves the map, and a new search starts the time again. The pins leave
+  // with the map at rest: removing markers mid-gesture is what destabilises
+  // the map's child list, so a pan (onPanDrag) only asks for the release and
+  // onRegionChangeComplete carries it out.
+  useEffect(() => {
+    if (!stationFocus) return;
+    const release = () => {
+      if (Date.now() - lastMapGestureAtRef.current < 1000) {
+        releaseFocusOnSettleRef.current = true;
+      } else {
+        StationFocusBus.clear();
+      }
+    };
+    const remaining = STATION_FOCUS_HIGHLIGHT_MS - (Date.now() - stationFocus.receivedAt);
+    if (remaining <= 0) {
+      release();
+      return;
+    }
+    const timer = setTimeout(release, remaining);
+    return () => clearTimeout(timer);
+  }, [stationFocus]);
+
+  // A highlight belongs to the drive it was asked in.
+  useEffect(() => {
+    if (!isDriveModeActive) StationFocusBus.clear();
+  }, [isDriveModeActive]);
 
   const typeSheetStations = useMemo(() => {
     if (clusterList) return clusterList;
@@ -1650,7 +2041,8 @@ export default function MapScreen() {
     const toggleDefs = [
       {
         key: "onlyEfish",
-        label: "Only efish",
+        // The app's own network is shown under the app's name.
+        label: "Only AKBA",
         color: "#0093C9",
         icon: "flash",
         active: onlyEfish,
@@ -1699,6 +2091,10 @@ export default function MapScreen() {
             onPanDrag={() => {
               Keyboard.dismiss();
               reportInteraction();
+              // The driver took the map over: AKBA's highlight steps aside
+              // once the map is at rest (onRegionChangeComplete).
+              lastMapGestureAtRef.current = Date.now();
+              if (stationFocusRef.current) releaseFocusOnSettleRef.current = true;
             }}
             onPress={() => {
               Keyboard.dismiss();
@@ -1840,90 +2236,60 @@ export default function MapScreen() {
             })()}
 
             {/* Route Plan Markers: origin, stations, destination */}
-            {routeLocations.map((loc: any, idx: number) => {
+            {routeLocations.map((loc, idx) => {
+              if (loc.type === "station") return null;
               if (!loc.coordinates) return null;
               const lat = parseFloat(loc.coordinates.lat);
               const lon = parseFloat(loc.coordinates.lon);
               if (isNaN(lat) || isNaN(lon)) return null;
 
-              const pinColor =
-                loc.type === "origin"
-                  ? "#22C55E"
-                  : loc.type === "station"
-                    ? "#FF6B35"
-                    : "#EF4444";
-
-              if (loc.type === "station" && loc.interest_highlight) {
-                // Only a real Places result is named; a generic suggestion shows its reason alone.
-                const placeLine = formatPlaceLine(loc.interest_highlight);
-                return (
-                  <Marker
-                    key={`route-loc-${idx}`}
-                    coordinate={{ latitude: lat, longitude: lon }}
-                    title={loc.name}
-                    description={
-                      placeLine
-                        ? `${placeLine} · ${loc.interest_highlight.message}`
-                        : loc.interest_highlight.message
-                    }
-                    anchor={{ x: 0.5, y: 1 }}
-                    zIndex={520}
-                  >
-                    <View style={styles.routeInterestMarkerWrap}>
-                      <View
-                        style={[
-                          styles.routeInterestChip,
-                          {
-                            backgroundColor:
-                              themeScheme === "dark"
-                                ? "rgba(15, 23, 42, 0.92)"
-                                : "rgba(255, 255, 255, 0.96)",
-                            borderColor:
-                              themeScheme === "dark"
-                                ? "rgba(148, 163, 184, 0.24)"
-                                : "rgba(15, 23, 42, 0.08)",
-                          },
-                        ]}
-                      >
-                        <Ionicons
-                          name={breakIconName(loc.interest_highlight.icon)}
-                          size={12}
-                          color={colors.primary}
-                        />
-                        <Text
-                          style={[
-                            styles.routeInterestChipText,
-                            { color: colors.text },
-                          ]}
-                          numberOfLines={1}
-                        >
-                          {loc.interest_highlight.shortLabel ||
-                            loc.interest_highlight.title}
-                        </Text>
-                      </View>
-
-                      <View style={styles.routeInterestPinShadow}>
-                        <View style={styles.routeInterestPin}>
-                          <Ionicons name="flash" size={16} color="#FFFFFF" />
-                        </View>
-                      </View>
-                    </View>
-                  </Marker>
-                );
-              }
-
+              const pinName =
+                loc.type === "destination"
+                  ? routePinNames.destination
+                  : routePinNames.origin;
               return (
                 <Marker
                   key={`route-loc-${idx}`}
                   coordinate={{ latitude: lat, longitude: lon }}
-                  title={loc.name}
-                  description={
-                    loc.type === "station"
-                      ? `${loc.brand || ""} • ${loc.dc_count || 0} DC`
-                      : undefined
-                  }
-                  pinColor={pinColor}
+                  title={pinName?.title || loc.name}
+                  description={pinName?.address ?? undefined}
+                  pinColor={loc.type === "origin" ? "#22C55E" : "#EF4444"}
                   zIndex={500}
+                />
+              );
+            })}
+
+            {/* The route's charging stops: the station's own pin, the break chip above it. */}
+            {routeStops.map(({ index, location, station, matched }) => {
+              const highlight = location.interest_highlight;
+              // Only a real Places result is named; a generic suggestion shows its reason alone.
+              const placeLine = highlight ? formatPlaceLine(highlight) : null;
+              const description = highlight
+                ? placeLine
+                  ? `${placeLine} · ${highlight.message}`
+                  : highlight.message
+                : (stationHardware(location) ?? undefined);
+              return (
+                <RouteStationMarker
+                  // Keyed by the chip too: a stop gaining or losing its chip
+                  // mounts a new marker instead of reshaping this one.
+                  key={`route-stop-${index}-${highlight ? "chip" : "pin"}`}
+                  station={station}
+                  availabilityUnknown={!matched}
+                  highlighted={focus.onRoute.has(station.id)}
+                  title={location.name || station.name}
+                  description={description}
+                  chip={
+                    highlight
+                      ? {
+                          icon: breakIconName(highlight.icon),
+                          label: highlight.shortLabel || highlight.title,
+                          isDark: themeScheme === "dark",
+                          iconColor: colors.primary,
+                          textColor: colors.text,
+                        }
+                      : null
+                  }
                 />
               );
             })}
@@ -1945,6 +2311,25 @@ export default function MapScreen() {
                   onPress={handleClusterPress}
                 />
               ))}
+
+            {/* The stations AKBA found, highlighted, last and on top. The list
+                above stays exactly as it was: pinning them there would move
+                existing markers, and moving children is what destabilises
+                AIRMap's native child list (-[AIRMap insertReactSubview:atIndex:]).
+                Appending and removing at the end is the safe change. A found
+                station the map already shows sits under its highlighted copy,
+                at the same point and size, so it is not seen twice; a
+                clustered or filtered one shows here all the same. */}
+            {focus.pins.map((station) => (
+              <MapPinMarker
+                key={`focus-${station.id}`}
+                station={station}
+                isSelected={selectedStation?.id === station.id}
+                isHighlighted
+                availabilityUnknown={focus.unknownAvailability.has(station.id)}
+                onPress={handleMarkerPress}
+              />
+            ))}
           </MapView>
 
           <View style={[styles.overlay, { paddingTop: topInset }]}>
@@ -4112,16 +4497,17 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 8,
   },
-  routeInterestMarkerWrap: {
+  /** A route stop: the break chip (if any) over the station's pin. */
+  routeStationMarkerWrap: {
     alignItems: "center",
-    gap: 8,
+    gap: ROUTE_CHIP_GAP,
   },
+  /** Exactly ROUTE_CHIP_H tall: RouteStationMarker places the pin by it. */
   routeInterestChip: {
     maxWidth: 152,
-    minHeight: 30,
+    height: ROUTE_CHIP_H,
     borderRadius: 999,
     paddingHorizontal: 10,
-    paddingVertical: 7,
     borderWidth: 1,
     flexDirection: "row",
     alignItems: "center",
@@ -4131,22 +4517,14 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "700",
   },
-  routeInterestPinShadow: {
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    elevation: 6,
-  },
-  routeInterestPin: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: "#FF6B35",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 3,
-    borderColor: "#FFFFFF",
+  /** The glass ring around a selected or highlighted pin's head, behind the pin. */
+  stationPinRing: {
+    position: "absolute",
+    borderWidth: 1.5,
+    backgroundColor: "rgba(255, 255, 255, 0.72)",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.55,
+    shadowRadius: 8,
   },
   recenterText: {
     fontWeight: "700",

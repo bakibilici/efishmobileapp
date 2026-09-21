@@ -1,5 +1,16 @@
 export type StationType = "HPC" | "DC" | "AC";
 
+/**
+ * The map's tier rule, shared by the station feed and the route's charging
+ * stops so a stop is drawn with the same pin as the station itself. The list
+ * is unordered: membership decides, by priority (HPC, then DC, else AC).
+ */
+export function stationTierOf(cpType?: readonly string[] | null): StationType {
+  if (cpType?.includes("HPC")) return "HPC";
+  if (cpType?.includes("DC")) return "DC";
+  return "AC";
+}
+
 export type ConnectorStatus = "available" | "busy" | "charging" | "offline";
 
 export type Station = {

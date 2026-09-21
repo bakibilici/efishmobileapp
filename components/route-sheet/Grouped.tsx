@@ -97,46 +97,51 @@ export const IconTile = memo(function IconTile({
   );
 });
 
-/** The sheet's back control: "‹ Oturumlar" in the preview bar, "‹ Rota" in the stations panel. */
-export const BackPill = memo(function BackPill({
+/** A grouped cell of its own holding one red action, as iOS lists end with "Delete …". */
+export const DestructiveRow = memo(function DestructiveRow({
   label,
-  accessibilityLabel,
+  accessibilityHint,
   onPress,
   palette,
 }: {
   label: string;
-  accessibilityLabel: string;
+  accessibilityHint?: string;
   onPress: () => void;
   palette: SheetPalette;
 }) {
   return (
-    <Pressable
-      onPress={onPress}
-      hitSlop={8}
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
-      style={({ pressed }) => [
-        styles.backPill,
-        {
-          backgroundColor: palette.surface,
-          borderColor: palette.hairline,
-          opacity: pressed ? 0.7 : 1,
-        },
-      ]}
-    >
-      <Ionicons name="chevron-back" size={16} color={palette.text} />
-      <Text style={[styles.backPillText, { color: palette.text }]}>{label}</Text>
-    </Pressable>
+    <View style={[styles.group, styles.destructiveGroup, { backgroundColor: palette.cell }]}>
+      <Pressable
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityHint={accessibilityHint}
+        style={({ pressed }) => [
+          styles.destructiveRow,
+          pressed && { backgroundColor: palette.cellPressed },
+        ]}
+      >
+        <Text style={[styles.destructiveText, { color: palette.red }]} numberOfLines={1}>
+          {label}
+        </Text>
+      </Pressable>
+    </View>
   );
 });
 
-/** Large title with one secondary line, above the groups. */
+/**
+ * Large title (at most two lines, cut with "…", never shrunk) above the
+ * groups, then an optional address line and one secondary line.
+ */
 export const TitleBlock = memo(function TitleBlock({
   title,
+  address,
   subtitle,
   palette,
 }: {
   title: string;
+  /** The full address when the title is only part of it. */
+  address?: string | null;
   subtitle?: string | null;
   palette: SheetPalette;
 }) {
@@ -146,9 +151,19 @@ export const TitleBlock = memo(function TitleBlock({
         accessibilityRole="header"
         style={[styles.title, { color: palette.label }]}
         numberOfLines={2}
+        ellipsizeMode="tail"
       >
         {title}
       </Text>
+      {address ? (
+        <Text
+          style={[styles.subtitle, { color: palette.secondaryLabel }]}
+          numberOfLines={2}
+          ellipsizeMode="tail"
+        >
+          {address}
+        </Text>
+      ) : null}
       {subtitle ? (
         <Text
           style={[styles.subtitle, { color: palette.secondaryLabel }]}
@@ -187,20 +202,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  backPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    alignSelf: "flex-start",
-    gap: 2,
-    height: 36,
-    paddingLeft: 8,
-    paddingRight: 14,
-    borderRadius: 18,
-    borderWidth: StyleSheet.hairlineWidth,
+  destructiveGroup: {
+    marginTop: 28,
   },
-  backPillText: {
-    fontSize: 14,
-    fontWeight: "600",
+  destructiveRow: {
+    minHeight: 44,
+    justifyContent: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+  },
+  destructiveText: {
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: "400",
+    letterSpacing: -0.4,
   },
   titleBlock: {
     marginHorizontal: SIDE_MARGIN,

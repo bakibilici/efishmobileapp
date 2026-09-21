@@ -33,7 +33,7 @@ export default function NavigationModal() {
   };
 
   const openAppleMaps = () => {
-    const url = `http://maps.apple.com/?daddr=${latitude},${longitude}&q=${encodeURIComponent(name || "efish station")}`;
+    const url = `http://maps.apple.com/?daddr=${latitude},${longitude}&q=${encodeURIComponent(name || "Şarj istasyonu")}`;
     openUrl(url);
   };
 

@@ -4,6 +4,15 @@
 const MIC_PERMISSION = "AKBA ile sesli konuşabilmen için mikrofon erişimi gerekiyor.";
 const SPEECH_PERMISSION =
   "“AKBA” diye seslendiğinde seni duyabilmek (bu dinleme telefonunda yapılır) ve aramaya sesle yazabilmek için konuşma tanıma izni gerekiyor.";
+// The packages' own defaults read "Allow $(PRODUCT_NAME) to …", which names
+// the Xcode target (TubitakAppDemo in an older local ios/ folder) instead of
+// the app. Written out here so every dialog says AKBA, in Turkish.
+const LOCATION_PERMISSION =
+  "AKBA, çevrendeki şarj istasyonlarını gösterebilmek, rotanı bulunduğun yerden planlayabilmek ve sürüşte olduğunu anlayabilmek için konumunu kullanır.";
+const MOTION_PERMISSION =
+  "AKBA, yürüdüğünü ya da araçta olduğunu anlayabilmek için hareket verisini kullanır.";
+const FACE_ID_PERMISSION =
+  "AKBA, telefonunda sakladığı giriş bilgilerini Face ID ile koruyabilir.";
 
 export default ({ config }) => ({
   ...config,
@@ -30,6 +39,11 @@ export default ({ config }) => ({
         "Profil fotoğrafı ve araç fotoğrafı ekleyebilmeniz için galeriye erişim izni gereklidir.",
       NSCameraUsageDescription:
         "Profil fotoğrafı ve araç fotoğrafı çekebilmeniz için kameraya erişim izni gereklidir.",
+      NSLocationWhenInUseUsageDescription: LOCATION_PERMISSION,
+      NSLocationAlwaysAndWhenInUseUsageDescription: LOCATION_PERMISSION,
+      NSLocationAlwaysUsageDescription: LOCATION_PERMISSION,
+      NSMotionUsageDescription: MOTION_PERMISSION,
+      NSFaceIDUsageDescription: FACE_ID_PERMISSION,
       // Keep the Atlas voice session alive while the screen is locked in the car
       UIBackgroundModes: ["audio"],
     },

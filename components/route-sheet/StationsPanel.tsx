@@ -4,14 +4,7 @@ import { StyleSheet, Text, View } from "react-native";
 import type { RoutePlanLocation } from "../../services/DriveSessionStore";
 import { placeName } from "./breakSuggestion";
 import { BreakSuggestionInline } from "./BreakSuggestionRow";
-import {
-  BackPill,
-  Group,
-  IconTile,
-  SIDE_MARGIN,
-  TABULAR,
-  TitleBlock,
-} from "./Grouped";
+import { Group, IconTile, TABULAR, TitleBlock } from "./Grouped";
 import {
   formatMinutes,
   spoken,
@@ -91,18 +84,14 @@ const StationRow = memo(function StationRow({
   );
 });
 
+/** The stops in full. The screen's back button ("Rota özetine dön") leads back. */
 function StationsPanelComponent({
   stations,
   totalChargeMinutes,
-  onBack,
-  showBack,
   palette,
 }: {
   stations: RoutePlanLocation[];
   totalChargeMinutes: number;
-  onBack: () => void;
-  /** False when the sheet's fixed bar already shows "‹ Rota" (a preview). */
-  showBack: boolean;
   palette: SheetPalette;
 }) {
   const totalCharge = formatMinutes(totalChargeMinutes);
@@ -114,16 +103,6 @@ function StationsPanelComponent({
 
   return (
     <>
-      {showBack ? (
-        <View style={styles.backRow}>
-          <BackPill
-            label="Rota"
-            accessibilityLabel="Rota özetine dön"
-            onPress={onBack}
-            palette={palette}
-          />
-        </View>
-      ) : null}
       <TitleBlock title="Şarj durakları" subtitle={subtitle} palette={palette} />
 
       {stations.length ? (
@@ -154,10 +133,6 @@ function StationsPanelComponent({
 export const StationsPanel = memo(StationsPanelComponent);
 
 const styles = StyleSheet.create({
-  backRow: {
-    marginHorizontal: SIDE_MARGIN,
-    marginBottom: 12,
-  },
   row: {
     flexDirection: "row",
     alignItems: "flex-start",

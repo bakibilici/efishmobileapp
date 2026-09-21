@@ -15,7 +15,13 @@
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-import type { ConnectorStatus, Station, StationType } from "@/constants/stations";
+import {
+  stationTierOf,
+  type ConnectorStatus,
+  type Station,
+  type StationType,
+} from "@/constants/stations";
+import { withoutProviderNames } from "@/services/providerNames";
 
 const BASE = "https://electrip-backend.electripglobal.com/v1.0";
 const SERVICE = "ZES";
@@ -87,13 +93,6 @@ function cleanLegacyCache(): void {
       return stale.length ? AsyncStorage.multiRemove(stale) : undefined;
     })
     .catch(() => {});
-}
-
-/** cpType is an unordered array — check membership by priority, not position. */
-function tierOf(cpType?: string[]): StationType {
-  if (cpType?.includes("HPC")) return "HPC";
-  if (cpType?.includes("DC")) return "DC";
-  return "AC";
 }
 
 function connectorTier(c: ElectripConnector): StationType {
@@ -172,14 +171,18 @@ function toStation(s: ElectripStation): Station | null {
     id: `electrip-${s.id}`,
     uuid: s.csID || `electrip-${s.id}`,
     source: "electrip",
-    name: s.name || "Şarj İstasyonu",
+    // The feed's own names can carry its operator's brand; the app never shows it.
+    name: withoutProviderNames(s.name || "") || "Şarj İstasyonu",
     latitude,
     longitude,
-    type: tierOf(s.cpType),
+    // The same rule draws a route's charging stops (services/routeStopStations).
+    type: stationTierOf(s.cpType),
     powerKw: s.maxPower || 0,
     status: statusOf(socket_stats),
     isEfish: false,
-    address: [s.address, s.provinceName, s.cityName].filter(Boolean).join(", "),
+    address: withoutProviderNames(
+      [s.address, s.provinceName, s.cityName].filter(Boolean).join(", "),
+    ),
     socket_stats,
     // The list response already carries per-connector status, so the detail sheet
     // needs no second request.
@@ -199,7 +202,18 @@ async function readPersistedCache(key: string): Promise<CacheEntry | null> {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as CacheEntry;
     if (!parsed?.at || !Array.isArray(parsed.stations)) return null;
-    return parsed;
+    // A copy saved before toStation cleaned names is served until the next
+    // refresh: it gets the same cleaning here (a no-op for clean names).
+    return {
+      ...parsed,
+      stations: parsed.stations.map((station) => {
+        const name = withoutProviderNames(station.name || "") || "Şarj İstasyonu";
+        const address = station.address && withoutProviderNames(station.address);
+        return name === station.name && address === station.address
+          ? station
+          : { ...station, name, address };
+      }),
+    };
   } catch {
     return null;
   }

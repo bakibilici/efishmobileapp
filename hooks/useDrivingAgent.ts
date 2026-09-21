@@ -25,6 +25,12 @@ import {
 } from "../services/DriveSessionStore";
 import { fetchDirections } from "../services/GoogleMapsService";
 import {
+  geocodeMatchesDestination,
+  parseDestinationDisplay,
+  spokenDestinationTitle,
+  type GeocodedDestination,
+} from "../services/placeTitle";
+import {
   normalizeBreakKinds,
   personalizeRoutePlan,
   updateInterestChips,
@@ -32,6 +38,7 @@ import {
 } from "../services/routePersonalization";
 import { normalizeRoutePlanFromGateway } from "../services/routePlanGateway";
 import { SpeedStore } from "../services/sensors/SpeedStore";
+import { parseStationsFocus, StationFocusBus } from "../services/stationFocus";
 import {
   playListenEnd,
   playListenStart,
@@ -152,6 +159,20 @@ function readAgentState(participant: RemoteParticipant): AgentState | null {
   return value && AGENT_STATES.has(value) ? (value as AgentState) : null;
 }
 
+/**
+ * Where a drive rests while AKBA is not live: following its route
+ * (NAVIGATION_ONLY); a drive whose route the driver removed ("Rotayı
+ * kaldır") stays an ordinary drive (CAR_SESSION_ACTIVE, as clearRoute leaves
+ * it), so car mode keeps "Sürüşü Bitir" and the record gets its endedAt.
+ * Only a drive that never had a route goes back to IDLE.
+ */
+const passiveDriveState = (): DriveSessionState =>
+  DriveSessionStore.getRoutePlanData()
+    ? DriveSessionState.NAVIGATION_ONLY
+    : DriveSessionStore.hasRemovedRoute()
+      ? DriveSessionState.CAR_SESSION_ACTIVE
+      : DriveSessionState.IDLE;
+
 /** Represents a single tool call lifecycle (request → response). */
 export interface AgentToolCall {
   toolName: string;
@@ -234,6 +255,12 @@ export function useDrivingAgent() {
   userInterestsRef.current = user?.interests ?? [];
   /** Break kinds the driver told AKBA never to suggest (preference_update). */
   const excludedBreakKindsRef = useRef<BreakKind[]>([]);
+  /**
+   * The last destination geocodeDestination looked up: the driver's words
+   * (tool_start) and the address found (tool_end). A plan to that place
+   * without a destination_display is titled with the driver's words.
+   */
+  const lastGeocodeRef = useRef<GeocodedDestination | null>(null);
   const statusRef = useRef<VoiceStatus>(status);
   statusRef.current = status;
 
@@ -330,10 +357,7 @@ export function useDrivingAgent() {
   }, [disarmWakeWord, shouldArmWakeWord]);
 
   const setPassiveDriveState = useCallback(() => {
-    const hasRoute = !!DriveSessionStore.getRoutePlanData();
-    DriveSessionStore.setAiState(
-      hasRoute ? DriveSessionState.NAVIGATION_ONLY : DriveSessionState.IDLE,
-    );
+    DriveSessionStore.setAiState(passiveDriveState());
   }, []);
 
   const clearPlanWatchdog = useCallback(() => {
@@ -630,6 +654,8 @@ export function useDrivingAgent() {
     manuallyEndedRef.current = true;
     // The drive is over; the next explicit start should be a fresh session.
     forceFreshSessionRef.current = true;
+    // Nor may this drive's destination title the next drive's route.
+    lastGeocodeRef.current = null;
     try {
       void stopPlanningHoldSound();
       await disconnectRoom();
@@ -690,56 +716,10 @@ export function useDrivingAgent() {
         }
       }
 
-      // 1. Initial synchronous session start (no road-snapped polyline yet).
-      // Ensures DriveSessionStore.context exists for setRoutePlanData and map fitting.
-      const initialRoutePayload = {
-        origin: routeOrigin,
-        destination: routeDestination,
-        stops,
-        polyline: [routeOrigin, ...stops, routeDestination],
-        summary: { duration: 0, distance: 0 },
-      };
-      if (!DriveSessionStore.getContext()) {
-        DriveSessionStore.startSession(initialRoutePayload);
-      } else {
-        DriveSessionStore.setRouteFromFrontend(initialRoutePayload);
-      }
-
-      // 2. Background high-fidelity polyline fetch (Google Directions).
-      fetchDirections(
-        routeOrigin,
-        routeDestination,
-        stops,
-        GOOGLE_MAPS_API_KEY || "",
-      )
-        .then((snapped) => {
-          if (snapped && snapped.points.length > 0) {
-            DriveSessionStore.setRouteFromFrontend({
-              origin: routeOrigin,
-              destination: routeDestination,
-              stops,
-              polyline: snapped.points,
-              summary: {
-                duration: snapped.duration,
-                distance: snapped.distance,
-              },
-            });
-            console.log(
-              "[useDrivingAgent] ✅ Route snapped to road via Google Directions.",
-            );
-          } else {
-            console.warn("[useDrivingAgent] ⚠️ fetchDirections returned no points.");
-          }
-        })
-        .catch((err) => {
-          // Handled: the map keeps the straight-line route from step 1.
-          console.warn("[useDrivingAgent] fetchDirections background error:", err);
-        });
-
-      // 3. Store the route plan for the RoutePlanSheet UI. The gateway now
-      // receives the driver's interests (published as a participant attribute
-      // above) and returns its own highlights; personalizeRoutePlan only fills
-      // in locally when that server pass produced nothing.
+      // 1. The route plan for the RoutePlanSheet UI. The gateway now receives
+      // the driver's interests (published as a participant attribute above)
+      // and returns its own highlights; personalizeRoutePlan only fills in
+      // locally when that server pass produced nothing.
       const normalized = normalizeRoutePlanFromGateway(data as RoutePlanData);
       // The agent's list is the newest truth; the stored one covers an agent
       // that does not send it.
@@ -753,9 +733,82 @@ export function useDrivingAgent() {
         userInterestsRef.current,
         excludedKinds,
       );
-      if (personalized.locations && personalized.summary) {
-        DriveSessionStore.setRoutePlanData(personalized);
+      // The agent's short name for the destination ("Metrogarden AVM"); the
+      // plan's own destination is often only the geocoder's full address.
+      // Without one, the place as the driver named it when it was looked up,
+      // if this route goes there.
+      const planDestination =
+        personalized.locations?.find((location) => location.type === "destination") ??
+        personalized.locations?.[personalized.locations.length - 1];
+      const geocode = lastGeocodeRef.current;
+      const spokenTitle =
+        geocode &&
+        geocodeMatchesDestination(geocode, {
+          name: planDestination?.name,
+          lat: routeDestination.latitude,
+          lng: routeDestination.longitude,
+        })
+          ? spokenDestinationTitle(geocode.query)
+          : null;
+      const destinationDisplay =
+        parseDestinationDisplay(result?.destination_display ?? data?.destination_display) ??
+        (spokenTitle ? { title: spokenTitle } : undefined);
+      // Stored before the new route (step 2), so the route's new id reaches
+      // the sheet and the map fit together with this plan, not the previous one.
+      if (!DriveSessionStore.getContext()) {
+        DriveSessionStore.startSession();
       }
+      if (personalized.locations && personalized.summary) {
+        DriveSessionStore.setRoutePlanData(
+          destinationDisplay
+            ? { ...personalized, destination_display: destinationDisplay }
+            : personalized,
+        );
+      }
+
+      // 2. The route, drawn straight between the stops until the road shape
+      // comes back. Its new id opens the sheet and fits the map.
+      const initialRoutePayload = {
+        origin: routeOrigin,
+        destination: routeDestination,
+        stops,
+        polyline: [routeOrigin, ...stops, routeDestination],
+        summary: { duration: 0, distance: 0 },
+      };
+      // The id of the route this plan put on screen: the road shape below
+      // belongs to it and to nothing newer.
+      const plannedRouteId = DriveSessionStore.setRouteFromFrontend(initialRoutePayload);
+
+      // 3. Background high-fidelity polyline fetch (Google Directions). Only
+      // the geometry changes: the route keeps its id, so a sheet the driver
+      // closed meanwhile stays closed, and a shape that comes back after a
+      // newer route (or after "Rotayı kaldır") is dropped.
+      fetchDirections(
+        routeOrigin,
+        routeDestination,
+        stops,
+        GOOGLE_MAPS_API_KEY || "",
+      )
+        .then((snapped) => {
+          if (snapped && snapped.points.length > 0) {
+            const applied = DriveSessionStore.updateRouteGeometry(
+              plannedRouteId,
+              snapped.points,
+              { duration: snapped.duration, distance: snapped.distance },
+            );
+            if (applied) {
+              console.log(
+                "[useDrivingAgent] Route snapped to road via Google Directions.",
+              );
+            }
+          } else {
+            console.warn("[useDrivingAgent] ⚠️ fetchDirections returned no points.");
+          }
+        })
+        .catch((err) => {
+          // Handled: the map keeps the straight-line route from step 2.
+          console.warn("[useDrivingAgent] fetchDirections background error:", err);
+        });
 
       DriveSessionStore.setAiState(DriveSessionState.CAR_SESSION_ACTIVE);
       return true;
@@ -884,6 +937,11 @@ export function useDrivingAgent() {
           );
         }
 
+        if (event.name === "geocodeDestination") {
+          const query = typeof event.input?.query === "string" ? event.input.query : "";
+          lastGeocodeRef.current = query.trim() ? { query } : null;
+        }
+
         if (event.name === "planEvRoute") {
           pendingPlanStartsRef.current += 1;
           setRoutePlanFailedAt(null);
@@ -929,6 +987,21 @@ export function useDrivingAgent() {
         }
         const isError = event.result?.success === false;
         console.log("[Atlas Tool Response]", event.name, "error:", isError);
+
+        if (event.name === "geocodeDestination") {
+          const found = event.result;
+          const pending = lastGeocodeRef.current;
+          if (isError || !pending || typeof found?.formattedAddress !== "string") {
+            lastGeocodeRef.current = null;
+          } else {
+            lastGeocodeRef.current = {
+              query: pending.query,
+              formattedAddress: found.formattedAddress,
+              lat: typeof found.lat === "number" ? found.lat : undefined,
+              lng: typeof found.lng === "number" ? found.lng : undefined,
+            };
+          }
+        }
 
         let resolvedId: string | null = null;
         setToolCalls((prev) => {
@@ -998,6 +1071,19 @@ export function useDrivingAgent() {
           .catch((error) => {
             console.error("[useDrivingAgent] Failed to apply preference update:", error);
           });
+        return;
+      }
+
+      if (eventType === "stations_focus") {
+        // AKBA found stations the driver asked about (findChargingStations):
+        // the map frames and highlights them. A payload of another shape is
+        // dropped here; an older build never reaches this branch at all.
+        const focus = parseStationsFocus(event);
+        if (focus) {
+          StationFocusBus.publish(focus);
+        } else {
+          console.warn("[useDrivingAgent] Ignored a malformed stations_focus event.");
+        }
         return;
       }
 
@@ -1274,7 +1360,11 @@ export function useDrivingAgent() {
         })
         .on(RoomEvent.Disconnected, () => {
           console.log("[useDrivingAgent] ❌ Disconnected from LiveKit room");
-          const hasRoute = !!DriveSessionStore.getRoutePlanData();
+          // A drive whose route the driver removed ("Rotayı kaldır") counts as
+          // one with a route: it stays on screen passive, never reconnecting
+          // by itself.
+          const hasRoute =
+            !!DriveSessionStore.getRoutePlanData() || DriveSessionStore.hasRemovedRoute();
           void stopPlanningHoldSound();
           clearPlanWatchdog();
           stopGpsWatch();
@@ -1298,11 +1388,7 @@ export function useDrivingAgent() {
             blockAutoVoiceRestartRef.current = true;
           }
 
-          DriveSessionStore.setAiState(
-            hasRoute
-              ? DriveSessionState.NAVIGATION_ONLY
-              : DriveSessionState.IDLE,
-          );
+          DriveSessionStore.setAiState(passiveDriveState());
           console.log("[useDrivingAgent] AI is now PASSIVE.");
         });
 
@@ -1508,13 +1594,24 @@ export function useDrivingAgent() {
   // drive (e.g. AI_ERROR after a non-retryable token error) keeps the block.
   useEffect(() => {
     let hadDrive = DriveSessionStore.getContext() !== null;
+    let sessionId = DriveSessionStore.getContext()?.sessionId ?? null;
     return DriveSessionStore.onStateChange(() => {
-      const hasDrive = DriveSessionStore.getContext() !== null;
+      const context = DriveSessionStore.getContext();
+      const hasDrive = context !== null;
       if (hadDrive && !hasDrive) {
         blockAutoVoiceRestartRef.current = false;
         reconnectAttemptsRef.current = 0;
       }
       hadDrive = hasDrive;
+      // A drive that ends or gives way to another (a new drive, a stored one
+      // opened) takes the destination it looked up with it: the next drive's
+      // route is not titled with this one's words. A lookup made while there
+      // was no drive belongs to the drive it starts, and is kept.
+      const nextSessionId = context?.sessionId ?? null;
+      if (sessionId !== null && nextSessionId !== sessionId) {
+        lastGeocodeRef.current = null;
+      }
+      sessionId = nextSessionId;
     });
   }, []);
 
@@ -1579,7 +1676,9 @@ export function useDrivingAgent() {
 
   // Auto-reconnect when the transport drops unexpectedly while still in CAR mode
   useEffect(() => {
-    const hasRoute = !!DriveSessionStore.getRoutePlanData();
+    // As in the Disconnected handler: a removed route still counts.
+    const hasRoute =
+      !!DriveSessionStore.getRoutePlanData() || DriveSessionStore.hasRemovedRoute();
 
     if (hasRoute) {
       reconnectAttemptsRef.current = 0;
@@ -1680,6 +1779,14 @@ export function useDrivingAgent() {
 
   // Re-send the battery level whenever the driver changes it in car mode.
   useEffect(() => DriveSessionStore.onBatteryPreferencesChange(() => publishBatterySnapshot()), [publishBatterySnapshot]);
+
+  // "Rotayı kaldır": AKBA should stop talking about a route that is gone. An
+  // agent that predates route_cleared drops it (its schema rejects unknown
+  // types without error). Nothing is sent without a live room.
+  useEffect(
+    () => DriveSessionStore.onRouteCleared(() => publishClientMessage({ type: "route_cleared" })),
+    [publishClientMessage],
+  );
 
   useEffect(() => {
     if (
