@@ -32,9 +32,14 @@ import {
 
 import { useDrivingAgent } from "../hooks/useDrivingAgent";
 import { AssistantOrbAurora } from "./AssistantOrbAurora";
+import { AssistantOrbRibbon } from "./AssistantOrbRibbon";
 
-/** "aurora": the glass sphere with moving light. "classic": the original ring-and-core orb below. */
-const ORB_STYLE: "aurora" | "classic" = "aurora";
+/**
+ * "ribbon": dark glass with a band of light that waves with the voice.
+ * "aurora": the glass sphere with moving coloured light.
+ * "classic": the original ring-and-core orb below.
+ */
+const ORB_STYLE: "ribbon" | "aurora" | "classic" = "ribbon";
 
 const TOOL_STATUS_COPY: Record<string, { headline: string; detail: string }> = {
   create_route_plan: {
@@ -447,6 +452,7 @@ export function CarModeView() {
   // Hook into the ElevenLabs agent lifecycle
   const {
     audioLevel,
+    agentAudioTrack,
     stopSession,
     stopConversation,
     startSession,
@@ -1169,7 +1175,9 @@ export function CarModeView() {
           disabled={isVoiceTransportActive}
           style={styles.orbTouchTarget}
         >
-          {ORB_STYLE === "aurora" ? (
+          {ORB_STYLE === "ribbon" ? (
+            <AssistantOrbRibbon state={sessionState} audioLevel={audioLevel} agentTrack={agentAudioTrack} />
+          ) : ORB_STYLE === "aurora" ? (
             <AssistantOrbAurora state={sessionState} audioLevel={audioLevel} />
           ) : (
             <AssistantOrb state={sessionState} audioLevel={audioLevel} />

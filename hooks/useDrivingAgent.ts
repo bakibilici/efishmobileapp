@@ -3,14 +3,15 @@ import * as Sentry from "@sentry/react-native";
 import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from "expo-av";
 import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
-import type { RemoteParticipant } from "livekit-client";
-import { ConnectionState, Room, RoomEvent } from "livekit-client";
+import type { RemoteAudioTrack, RemoteParticipant } from "livekit-client";
+import { ConnectionState, Room, RoomEvent, Track } from "livekit-client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PermissionsAndroid, Platform } from "react-native";
 import { useUser } from "../context/UserContext";
 import { LocalUserStorage } from "../services/localUserStorage";
 import { ActivityState } from "../services/ActivityStateMachine";
 import { AtlasTokenError, fetchAtlasToken } from "../services/AtlasTokenService";
+import { VoiceLevelBus } from "../services/VoiceLevelBus";
 import type { RoutePlanData } from "../services/DriveSessionStore";
 import {
   DriveSessionState,
@@ -86,6 +87,8 @@ export function useDrivingAgent() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
+  // AKBA's audio track, for the orb's frame-accurate level meter.
+  const [agentAudioTrack, setAgentAudioTrack] = useState<RemoteAudioTrack | null>(null);
   const [toolCalls, setToolCalls] = useState<AgentToolCall[]>([]);
   const [lastToolEvent, setLastToolEvent] = useState<AgentToolCall | null>(
     null,
@@ -174,6 +177,8 @@ export function useDrivingAgent() {
     const room = roomRef.current;
     roomRef.current = null;
     agentParticipantRef.current = null;
+    setAgentAudioTrack(null);
+    VoiceLevelBus.reset();
     if (room) {
       try {
         await room.disconnect();
@@ -603,7 +608,27 @@ export function useDrivingAgent() {
             agentParticipantRef.current = null;
             setIsSpeaking(false);
             setAudioLevel(0);
+            setAgentAudioTrack(null);
+            VoiceLevelBus.reset();
           }
+        })
+        .on(RoomEvent.TrackSubscribed, (track, _publication, participant) => {
+          if (track.kind !== Track.Kind.Audio) return;
+          if (!participant.identity.startsWith("agent-")) return;
+          setAgentAudioTrack(track as RemoteAudioTrack);
+        })
+        .on(RoomEvent.TrackUnsubscribed, (track) => {
+          setAgentAudioTrack((current) => (current === track ? null : current));
+        })
+        .on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+          // Whoever is missing from the list is silent.
+          let mic = 0;
+          let agent = 0;
+          for (const speaker of speakers) {
+            if (speaker === room.localParticipant) mic = speaker.audioLevel;
+            else if (speaker === agentParticipantRef.current) agent = speaker.audioLevel;
+          }
+          VoiceLevelBus.publish({ mic, agent });
         })
         .on(RoomEvent.ParticipantAttributesChanged, (_changed, participant) => {
           if (participant !== agentParticipantRef.current) return;
@@ -635,6 +660,8 @@ export function useDrivingAgent() {
           stopGpsWatch();
           sessionStartedRef.current = false;
           setIsSpeaking(false);
+          setAgentAudioTrack(null);
+          VoiceLevelBus.reset();
           void AudioSession.stopAudioSession().catch(() => {});
 
           // Once a route exists, Atlas voice should stay passive until the user
@@ -957,6 +984,7 @@ export function useDrivingAgent() {
     isSpeaking,
     isMuted,
     audioLevel,
+    agentAudioTrack,
     toolCalls,
     lastToolEvent,
     startSession: startAgentSession,
