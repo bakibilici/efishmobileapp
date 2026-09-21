@@ -30,6 +30,7 @@ import {
 } from "../services/DriveSessionStore";
 
 import { useDrivingAgent } from "../hooks/useDrivingAgent";
+import { showMicModePicker } from "../modules/mic-mode";
 import { AssistantOrbAurora } from "./AssistantOrbAurora";
 import { AssistantOrbRibbon } from "./AssistantOrbRibbon";
 
@@ -60,6 +61,9 @@ const TOOL_STATUS_COPY: Record<string, { headline: string; detail: string }> = {
 };
 
 type StatusTone = "listening" | "speaking" | "busy" | "idle" | "warn" | "error";
+
+/** Shown in the passive states while the on-device wake word is listening. */
+const WAKE_WORD_HINT = "“AKBA” diye seslenmen yeterli";
 
 const STATUS_TONE_COLOR: Record<StatusTone, string> = {
   listening: "#22C55E",
@@ -434,6 +438,7 @@ export function CarModeView() {
     status,
     isMuted,
     setMuted,
+    wakeWordArmed,
   } = useDrivingAgent();
 
   const isDark = themeScheme === "dark";
@@ -606,12 +611,30 @@ export function CarModeView() {
     if (hasRoutePlan && !isVoiceTransportActive) {
       return {
         headline: "AKBA PASİF",
-        detail: "Yeniden bağlanıp AKBA ile konuşmaya devam edebilirsiniz.",
+        detail: wakeWordArmed
+          ? WAKE_WORD_HINT
+          : "Yeniden bağlanıp AKBA ile konuşmaya devam edebilirsiniz.",
         stateLabel: "Konuşma kapalı",
         tone: "idle" as StatusTone,
         animate: false,
         hideDetailPill: false,
         isError: false,
+        wakeHint: wakeWordArmed,
+      };
+    }
+
+    // No route yet, AKBA not live, but the phone is listening for "AKBA":
+    // an ordinary passive state, neither "starting" nor a broken connection.
+    if (wakeWordArmed && !isVoiceTransportActive) {
+      return {
+        headline: "AKBA PASİF",
+        detail: WAKE_WORD_HINT,
+        stateLabel: "Konuşma kapalı",
+        tone: "idle" as StatusTone,
+        animate: false,
+        hideDetailPill: false,
+        isError: false,
+        wakeHint: true,
       };
     }
 
@@ -696,12 +719,15 @@ export function CarModeView() {
       case DriveSessionState.NAVIGATION_ONLY:
         return {
           headline: "AKBA PASİF",
-          detail: "Konuşmayı yeniden başlatmak için orb'a veya üstteki düğmeye dokunun.",
+          detail: wakeWordArmed
+            ? WAKE_WORD_HINT
+            : "Konuşmayı yeniden başlatmak için orb'a veya üstteki düğmeye dokunun.",
           stateLabel: "Konuşma kapalı",
           tone: "idle" as StatusTone,
           animate: false,
           hideDetailPill: false,
           isError: false,
+          wakeHint: wakeWordArmed,
         };
       default:
         return {
@@ -715,6 +741,7 @@ export function CarModeView() {
         };
     }
   }, [
+    hasEverConnected,
     hasRoutePlan,
     isPreviewMode,
     isMuted,
@@ -722,6 +749,7 @@ export function CarModeView() {
     sessionState,
     status,
     toolCalls,
+    wakeWordArmed,
   ]);
 
   useEffect(() => {
@@ -838,6 +866,12 @@ export function CarModeView() {
   // to the status line. Work in progress and errors still take the headline.
   const showTripInHeader =
     tripSummary !== null && !assistantStatus.animate && !assistantStatus.isError;
+  // With the trip in the header its detail line is taken by the trip facts,
+  // so the wake-word hint takes the status line's place instead.
+  const statusLineText =
+    showTripInHeader && "wakeHint" in assistantStatus && assistantStatus.wakeHint
+      ? WAKE_WORD_HINT
+      : assistantStatus.stateLabel;
 
   const handleConfirmEndDrive = () => {
     setManualConfirmAction(null);
@@ -857,6 +891,9 @@ export function CarModeView() {
   const canReconnectVoice = !isVoiceTransportActive;
   const canStopConversation = isVoiceTransportActive;
   const canToggleMic = isVoiceTransportActive;
+  // Voice Isolation lives in the system's microphone-mode picker, which only
+  // applies while a call has the microphone: iOS, live session, long press.
+  const canPickMicMode = Platform.OS === "ios" && status === "connected";
   const isDriveActionPreviewStart = isPreviewMode;
 
   const handleVoiceButtonPress = () => {
@@ -969,7 +1006,7 @@ export function CarModeView() {
                       style={[styles.statusEyebrow, { color: subtextColor }]}
                       numberOfLines={1}
                     >
-                      {assistantStatus.stateLabel}
+                      {statusLineText}
                     </Text>
                   </View>
                   <View style={styles.statusHeadlineRow}>
@@ -1057,6 +1094,16 @@ export function CarModeView() {
 
                 <TouchableOpacity
                   onPress={() => setMuted(!isMuted)}
+                  onLongPress={
+                    canPickMicMode ? () => void showMicModePicker() : undefined
+                  }
+                  accessibilityRole="button"
+                  accessibilityLabel={isMuted ? "Mikrofonu aç" : "Mikrofonu kapat"}
+                  accessibilityHint={
+                    canPickMicMode
+                      ? "Uzun basınca mikrofon modunu (Ses Yalıtımı) seçebilirsin."
+                      : undefined
+                  }
                   activeOpacity={0.78}
                   disabled={!canToggleMic}
                   style={[

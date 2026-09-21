@@ -48,6 +48,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  BackHandler,
   DeviceEventEmitter,
   Dimensions,
   Image,
@@ -75,6 +76,10 @@ import MapView, {
 import { ActivityContextBar } from "@/components/ActivityContextBar";
 import { ActivityNotice } from "@/components/ActivityNotice";
 import { RoutePlanSheet } from "@/components/RoutePlanSheet";
+import {
+  breakIconName,
+  formatPlaceLine,
+} from "@/components/route-sheet/breakSuggestion";
 import { Station, StationType } from "@/constants/stations";
 import { Colors } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
@@ -379,6 +384,32 @@ export default function MapScreen() {
     setRoutePlanSheetIndex(index);
     DriveSessionStore.setRoutePlanSheetIndex(index);
   }, []);
+
+  // A drive opened from Oturumlar ("Rotayı Aç") can be closed again while
+  // AKBA is not live in it. With the voice session up, going back would leave
+  // the microphone running behind an idle screen, so the way back waits until
+  // the conversation ends (the state then returns to NAVIGATION_ONLY).
+  const canClosePreview =
+    driveState === DriveSessionState.NAVIGATION_ONLY &&
+    !!DriveSessionStore.getContext()?.isPreviewMode;
+  const handleClosePreview = useCallback(() => {
+    DriveSessionStore.closePreview();
+    router.navigate("/(tabs)/sessions");
+  }, [router]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!canClosePreview) return undefined;
+      const subscription = BackHandler.addEventListener(
+        "hardwareBackPress",
+        () => {
+          handleClosePreview();
+          return true;
+        },
+      );
+      return () => subscription.remove();
+    }, [canClosePreview, handleClosePreview]),
+  );
 
   useEffect(() => {
     const unsub = DriveSessionStore.onStateChange((s) =>
@@ -1823,14 +1854,16 @@ export default function MapScreen() {
                     : "#EF4444";
 
               if (loc.type === "station" && loc.interest_highlight) {
+                // Only a real Places result is named; a generic suggestion shows its reason alone.
+                const placeLine = formatPlaceLine(loc.interest_highlight);
                 return (
                   <Marker
                     key={`route-loc-${idx}`}
                     coordinate={{ latitude: lat, longitude: lon }}
                     title={loc.name}
                     description={
-                      loc.interest_highlight.poiName
-                        ? `${loc.interest_highlight.poiName} · ${loc.interest_highlight.message}`
+                      placeLine
+                        ? `${placeLine} · ${loc.interest_highlight.message}`
                         : loc.interest_highlight.message
                     }
                     anchor={{ x: 0.5, y: 1 }}
@@ -1853,12 +1886,7 @@ export default function MapScreen() {
                         ]}
                       >
                         <Ionicons
-                          name="sparkles-outline"
-                          size={11}
-                          color={colors.primary}
-                        />
-                        <Ionicons
-                          name={loc.interest_highlight.icon as any}
+                          name={breakIconName(loc.interest_highlight.icon)}
                           size={12}
                           color={colors.primary}
                         />
@@ -1869,7 +1897,8 @@ export default function MapScreen() {
                           ]}
                           numberOfLines={1}
                         >
-                          AI {loc.interest_highlight.shortLabel}
+                          {loc.interest_highlight.shortLabel ||
+                            loc.interest_highlight.title}
                         </Text>
                       </View>
 
@@ -3562,6 +3591,7 @@ export default function MapScreen() {
           {isDriveModeActive && (
             <RoutePlanSheet
               onSheetIndexChange={handleRoutePlanSheetIndexChange}
+              onClosePreview={canClosePreview ? handleClosePreview : undefined}
             />
           )}
         </View>

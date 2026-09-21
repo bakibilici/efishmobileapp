@@ -1,3 +1,10 @@
+// Permission copy shared by the Info.plist keys and the speech plugin, so the
+// two can never disagree. The wake-word listener only runs on-device (see
+// patches/expo-speech-recognition+3.1.3.patch); search dictation does not.
+const MIC_PERMISSION = "AKBA ile sesli konuşabilmen için mikrofon erişimi gerekiyor.";
+const SPEECH_PERMISSION =
+  "“AKBA” diye seslendiğinde seni duyabilmek (bu dinleme telefonunda yapılır) ve aramaya sesle yazabilmek için konuşma tanıma izni gerekiyor.";
+
 export default ({ config }) => ({
   ...config,
   name: "AKBA",
@@ -16,9 +23,9 @@ export default ({ config }) => ({
     infoPlist: {
       ITSAppUsesNonExemptEncryption: false,
       NSMicrophoneUsageDescription:
-        "Ses kaydı için mikrofon erişimi gerekiyor.",
+        MIC_PERMISSION,
       NSSpeechRecognitionUsageDescription:
-        "Konuşmayı yazıya çevirmek için izin gerekiyor.",
+        SPEECH_PERMISSION,
       NSPhotoLibraryUsageDescription:
         "Profil fotoğrafı ve araç fotoğrafı ekleyebilmeniz için galeriye erişim izni gereklidir.",
       NSCameraUsageDescription:
@@ -81,6 +88,20 @@ export default ({ config }) => ({
     ],
     "expo-secure-store",
     "@react-native-voice/voice",
+    [
+      // On-device "AKBA" wake word. Same permission strings as above, so the
+      // two plugins cannot overwrite each other with different copy.
+      "expo-speech-recognition",
+      {
+        microphonePermission: MIC_PERMISSION,
+        speechRecognitionPermission:
+          SPEECH_PERMISSION,
+        androidSpeechServicePackages: [
+          "com.google.android.as",
+          "com.google.android.googlequicksearchbox",
+        ],
+      },
+    ],
     "expo-localization",
     [
       "expo-build-properties",

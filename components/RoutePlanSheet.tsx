@@ -1,6 +1,13 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Animated,
   Dimensions,
@@ -10,32 +17,24 @@ import {
   Text,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { useTheme } from "../context/ThemeContext";
-import { DriveSessionStore, RoutePlanLocation } from "../services/DriveSessionStore";
-
-const COLORS = {
-  primary: "#0093C9",
-  origin: "#0093C9",
-  station: "#FF6B35",
-  destination: "#0093C9",
-  batteryFrom: "#22C55E",
-  batteryTo: "#F97316",
-  batteryCharge: "#0EA5E9",
-  timeline: "#CBD5E1",
-  cardBg: "#FFFFFF",
-  cardBgDark: "#1E293B",
-  surfaceBg: "#F8FAFC",
-  surfaceBgDark: "#0F172A",
-  textPrimary: "#0F172A",
-  textPrimaryDark: "#F1F5F9",
-  textSecondary: "#64748B",
-  textSecondaryDark: "#94A3B8",
-  border: "#E2E8F0",
-  borderDark: "#334155",
-};
+import {
+  DriveSessionStore,
+  RoutePlanInterestHighlight,
+  RoutePlanLocation,
+} from "../services/DriveSessionStore";
+import { BreakSuggestionRow } from "./route-sheet/BreakSuggestionRow";
+import { SheetGlassBackground } from "./route-sheet/SheetGlassBackground";
+import { getSheetPalette, SheetPalette } from "./route-sheet/sheetPalette";
 
 const PANEL_WIDTH = Dimensions.get("window").width - 24;
+const CARD_RADIUS = 20;
+const HAIRLINE = StyleSheet.hairlineWidth;
+
+type IoniconName = keyof typeof Ionicons.glyphMap;
+type Tone = "accent" | "warm" | "cool";
 
 const getSegmentDuration = (
   currentLocation: RoutePlanLocation,
@@ -94,13 +93,25 @@ const getSegmentBatteryTo = (
 const formatDistanceLabel = (distance: number) =>
   `${distance.toFixed(distance >= 100 ? 0 : 1)} km`;
 
-const BatteryHero = ({
+const toneColors = (tone: Tone, palette: SheetPalette) =>
+  tone === "warm"
+    ? { fg: palette.warm, bg: palette.warmSoft }
+    : tone === "cool"
+      ? { fg: palette.cool, bg: palette.coolSoft }
+      : { fg: palette.accent, bg: palette.accentSoft };
+
+const cardSurface = (palette: SheetPalette) => ({
+  backgroundColor: palette.surface,
+  borderColor: palette.hairline,
+});
+
+const EnergyOverview = memo(function EnergyOverview({
   locations,
-  isDark,
+  palette,
 }: {
   locations: RoutePlanLocation[];
-  isDark: boolean;
-}) => {
+  palette: SheetPalette;
+}) {
   if (!locations || locations.length < 2) return null;
 
   const firstLoc = locations[0];
@@ -111,352 +122,222 @@ const BatteryHero = ({
   const stationCount = locations.filter(
     (location) => location.type === "station",
   ).length;
+  const arrivalColor =
+    destinationBattery < 20 ? palette.energyLow : palette.energyHigh;
 
   return (
-    <View
-      style={[
-        styles.energyHero,
-        {
-          backgroundColor: isDark ? COLORS.cardBgDark : COLORS.cardBg,
-          borderColor: isDark ? COLORS.borderDark : COLORS.border,
-        },
-      ]}
-    >
-      <View style={styles.energyHeroHeader}>
-        <View>
-          <Text
-            style={[
-              styles.energyHeroEyebrow,
-              { color: isDark ? COLORS.textSecondaryDark : COLORS.textSecondary },
-            ]}
-          >
+    <View style={[styles.card, styles.energyCard, cardSurface(palette)]}>
+      <View style={styles.energyHeader}>
+        <View style={styles.energyEyebrowRow}>
+          <Text style={[styles.eyebrow, { color: palette.textSecondary }]}>
             Enerji Planı
           </Text>
-          <Text
-            style={[
-              styles.energyHeroTitle,
-              { color: isDark ? COLORS.textPrimaryDark : COLORS.textPrimary },
-            ]}
-          >
-            Rota batarya görünümü
-          </Text>
+          <View style={[styles.softPill, { backgroundColor: palette.coolSoft }]}>
+            <Ionicons name="flash-outline" size={13} color={palette.cool} />
+            <Text style={[styles.softPillText, { color: palette.cool }]}>
+              {stationCount} şarj durağı
+            </Text>
+          </View>
         </View>
-
-        <View
-          style={[
-            styles.energyHeroPill,
-            {
-              backgroundColor: isDark
-                ? "rgba(14,165,233,0.18)"
-                : "rgba(14,165,233,0.08)",
-            },
-          ]}
-        >
-          <Ionicons name="flash-outline" size={14} color="#0EA5E9" />
-          <Text style={styles.energyHeroPillText}>
-            {stationCount} şarj durağı
-          </Text>
-        </View>
+        <Text style={[styles.energyTitle, { color: palette.text }]}>
+          Rota batarya görünümü
+        </Text>
       </View>
 
-      <View style={styles.energyHeroStats}>
-        <View
-          style={[
-            styles.energyHeroStatCard,
-            {
-              backgroundColor: isDark
-                ? "rgba(148,163,184,0.08)"
-                : "rgba(248,250,252,0.96)",
-              borderColor: isDark ? COLORS.borderDark : COLORS.border,
-            },
-          ]}
-        >
-          <Text
-            style={[
-              styles.energyHeroStatLabel,
-              { color: isDark ? COLORS.textSecondaryDark : COLORS.textSecondary },
-            ]}
-          >
+      <View style={styles.energyStats}>
+        <View style={[styles.energyTile, { backgroundColor: palette.surfaceMuted }]}>
+          <Text style={[styles.energyTileLabel, { color: palette.textSecondary }]}>
             Başlangıç
           </Text>
-          <Text
-            style={[
-              styles.energyHeroStatValue,
-              { color: isDark ? COLORS.textPrimaryDark : COLORS.textPrimary },
-            ]}
-          >
+          <Text style={[styles.energyTileValue, { color: palette.text }]}>
             %{originBattery}
           </Text>
         </View>
-
-        <View style={styles.energyHeroArrowWrap}>
-          <Ionicons
-            name="arrow-forward"
-            size={16}
-            color={isDark ? COLORS.textSecondaryDark : COLORS.textSecondary}
-          />
-        </View>
-
-        <View
-          style={[
-            styles.energyHeroStatCard,
-            {
-              backgroundColor: isDark
-                ? "rgba(148,163,184,0.08)"
-                : "rgba(248,250,252,0.96)",
-              borderColor: isDark ? COLORS.borderDark : COLORS.border,
-            },
-          ]}
-        >
-          <Text
-            style={[
-              styles.energyHeroStatLabel,
-              { color: isDark ? COLORS.textSecondaryDark : COLORS.textSecondary },
-            ]}
-          >
+        <Ionicons name="arrow-forward" size={16} color={palette.textSecondary} />
+        <View style={[styles.energyTile, { backgroundColor: palette.surfaceMuted }]}>
+          <Text style={[styles.energyTileLabel, { color: palette.textSecondary }]}>
             Varış
           </Text>
-          <Text
-            style={[
-              styles.energyHeroStatValue,
-              { color: isDark ? COLORS.textPrimaryDark : COLORS.textPrimary },
-            ]}
-          >
+          <Text style={[styles.energyTileValue, { color: palette.text }]}>
             %{destinationBattery}
           </Text>
         </View>
       </View>
 
       <View style={styles.energyTrackBlock}>
-        <View
-          style={[
-            styles.energyTrackBackground,
-            {
-              backgroundColor: isDark
-                ? "rgba(148,163,184,0.16)"
-                : "rgba(226,232,240,0.9)",
-            },
-          ]}
-        >
+        <View style={[styles.energyTrack, { backgroundColor: palette.track }]}>
           <View
             style={[
               styles.energyTrackFill,
-              { width: `${Math.max(0, Math.min(destinationBattery, 100))}%` },
+              {
+                backgroundColor: arrivalColor,
+                width: `${Math.max(0, Math.min(destinationBattery, 100))}%`,
+              },
             ]}
           />
         </View>
         <View style={styles.energyTrackMeta}>
-          <Text
-            style={[
-              styles.energyTrackLabel,
-              { color: isDark ? COLORS.textSecondaryDark : COLORS.textSecondary },
-            ]}
-          >
+          <Text style={[styles.energyTrackLabel, { color: palette.textSecondary }]}>
             Rota sonunda kalan tahmini seviye
           </Text>
-          <Text style={styles.energyTrackPercent}>%{destinationBattery}</Text>
+          <Text style={[styles.energyTrackPercent, { color: arrivalColor }]}>
+            %{destinationBattery}
+          </Text>
         </View>
       </View>
     </View>
   );
-};
+});
 
-const SummaryCard = ({
+const SummaryCard = memo(function SummaryCard({
   icon,
   label,
   value,
-  isDark,
-  iconColor = COLORS.primary,
+  tone,
+  palette,
   onPress,
   disabled = false,
   showChevron = false,
 }: {
-  icon: keyof typeof Ionicons.glyphMap;
+  icon: IoniconName;
   label: string;
   value: string;
-  isDark: boolean;
-  iconColor?: string;
+  tone: Tone;
+  palette: SheetPalette;
   onPress?: () => void;
   disabled?: boolean;
   showChevron?: boolean;
-}) => (
-  <Pressable
-    onPress={onPress}
-    disabled={!onPress || disabled}
-    style={({ pressed }) => [
-      styles.summaryCard,
-      {
-        backgroundColor: isDark ? COLORS.cardBgDark : COLORS.cardBg,
-        borderColor: isDark ? COLORS.borderDark : COLORS.border,
-        opacity: disabled ? 0.5 : pressed ? 0.92 : 1,
-      },
-    ]}
-  >
-    <View
-      style={[
-        styles.summaryIconContainer,
-        { backgroundColor: `${iconColor}15` },
+}) {
+  const { fg, bg } = toneColors(tone, palette);
+
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={!onPress || disabled}
+      style={({ pressed }) => [
+        styles.card,
+        styles.summaryCard,
+        cardSurface(palette),
+        { opacity: disabled ? 0.5 : pressed ? 0.8 : 1 },
       ]}
     >
-      <Ionicons name={icon} size={20} color={iconColor} />
-    </View>
-    <View style={styles.summaryTextContainer}>
-      <Text
-        style={[
-          styles.summaryLabel,
-          { color: isDark ? COLORS.textSecondaryDark : COLORS.textSecondary },
-        ]}
-      >
-        {label}
-      </Text>
-      <Text
-        style={[
-          styles.summaryValue,
-          { color: isDark ? COLORS.textPrimaryDark : COLORS.textPrimary },
-        ]}
-      >
-        {value}
-      </Text>
-    </View>
-    {showChevron ? (
-      <Ionicons
-        name="chevron-forward"
-        size={18}
-        color={isDark ? COLORS.textSecondaryDark : COLORS.textSecondary}
-      />
-    ) : null}
-  </Pressable>
-);
+      <View style={[styles.summaryIcon, { backgroundColor: bg }]}>
+        <Ionicons name={icon} size={18} color={fg} />
+      </View>
+      <View style={styles.summaryCopy}>
+        <Text style={[styles.summaryLabel, { color: palette.textSecondary }]}>
+          {label}
+        </Text>
+        <Text style={[styles.summaryValue, { color: palette.text }]}>
+          {value}
+        </Text>
+      </View>
+      {showChevron ? (
+        <Ionicons name="chevron-forward" size={16} color={palette.textSecondary} />
+      ) : null}
+    </Pressable>
+  );
+});
 
-const TimelineDot = ({
+const TimelineDot = memo(function TimelineDot({
   type,
+  palette,
 }: {
-  type: "origin" | "station" | "destination";
-}) => {
-  const color = type === "station" ? COLORS.station : COLORS.origin;
-  const iconName =
+  type: RoutePlanLocation["type"];
+  palette: SheetPalette;
+}) {
+  const color = type === "station" ? palette.stationDot : palette.accent;
+  const iconName: IoniconName =
     type === "origin" ? "navigate" : type === "station" ? "flash" : "flag";
 
   return (
     <View style={[styles.timelineDot, { backgroundColor: color }]}>
-      <Ionicons name={iconName} size={13} color="#FFFFFF" />
+      <Ionicons name={iconName} size={12} color="#FFFFFF" />
     </View>
   );
-};
+});
 
-const TimelineSegment = ({
+const TimelineSegment = memo(function TimelineSegment({
   duration,
   distance,
   weather,
   batteryFrom,
   batteryTo,
-  isDark,
+  palette,
 }: {
   duration: number;
   distance: number;
   weather?: { icon: string; temp: number; text: string };
   batteryFrom: number;
   batteryTo: number;
-  isDark: boolean;
-}) => {
-  const textColor = isDark ? COLORS.textPrimaryDark : COLORS.textPrimary;
-  const subtextColor = isDark ? COLORS.textSecondaryDark : COLORS.textSecondary;
-
+  palette: SheetPalette;
+}) {
   return (
-    <View style={styles.segmentContainer}>
-      <View style={styles.segmentLineContainer}>
-        <View
-          style={[styles.segmentVerticalLine, { borderColor: COLORS.timeline }]}
-        />
+    <View style={styles.segment}>
+      <View style={styles.segmentRail}>
+        <View style={[styles.segmentLine, { borderColor: palette.timeline }]} />
       </View>
 
-      <View style={styles.segmentInfoContainer}>
+      <View style={styles.segmentInfo}>
         <View style={styles.segmentMainRow}>
-          <Text style={[styles.segmentTravelText, { color: textColor }]}>
+          <Text style={[styles.segmentTravelText, { color: palette.text }]}>
             {duration} dk · {distance} km
           </Text>
           {weather ? (
-            <View style={styles.segmentWeatherRow}>
-              <Image
-                source={{ uri: weather.icon }}
-                style={styles.segmentWeatherIcon}
-              />
-              <Text
-                style={[styles.segmentWeatherText, { color: subtextColor }]}
-              >
+            <View style={styles.segmentWeather}>
+              <Image source={{ uri: weather.icon }} style={styles.segmentWeatherIcon} />
+              <Text style={[styles.segmentWeatherText, { color: palette.textSecondary }]}>
                 {weather.temp}°
               </Text>
             </View>
           ) : null}
         </View>
 
-        <View style={styles.segmentBatteryRow}>
-          <Text style={[styles.segmentBatteryText, { color: COLORS.batteryFrom }]}>
+        <View style={styles.inlineRow}>
+          <Text style={[styles.segmentBatteryText, { color: palette.energyHigh }]}>
             {batteryFrom}%
           </Text>
           <Ionicons
             name="arrow-forward"
-            size={14}
-            color={subtextColor}
-            style={styles.segmentArrowIcon}
+            size={13}
+            color={palette.textSecondary}
+            style={styles.mutedIcon}
           />
-          <Text style={[styles.segmentBatteryText, { color: COLORS.batteryTo }]}>
+          <Text style={[styles.segmentBatteryText, { color: palette.energyLow }]}>
             {batteryTo}%
           </Text>
         </View>
       </View>
     </View>
   );
-};
+});
 
-const StationCard = ({
+const StationCard = memo(function StationCard({
   location,
-  isDark,
+  palette,
 }: {
   location: RoutePlanLocation;
-  isDark: boolean;
-}) => {
-  const textColor = isDark ? COLORS.textPrimaryDark : COLORS.textPrimary;
-  const subtextColor = isDark ? COLORS.textSecondaryDark : COLORS.textSecondary;
+  palette: SheetPalette;
+}) {
   const highlight = location.interest_highlight;
 
   return (
-    <View
-      style={[
-        styles.stationCard,
-        {
-          backgroundColor: isDark ? COLORS.cardBgDark : COLORS.cardBg,
-          borderColor: isDark ? COLORS.borderDark : COLORS.border,
-        },
-      ]}
-    >
+    <View style={[styles.card, styles.stationCard, cardSurface(palette)]}>
       <View style={styles.stationHeader}>
-        <View style={styles.stationNameContainer}>
-          <Text
-            style={[styles.stationName, { color: textColor }]}
-            numberOfLines={2}
-          >
+        <View style={styles.stationNameBlock}>
+          <Text style={[styles.stationName, { color: palette.text }]} numberOfLines={2}>
             {location.name}
           </Text>
           <View style={styles.stationBadgeRow}>
             {location.cp_type ? (
-              <View
-                style={[
-                  styles.stationTypeBadge,
-                  {
-                    backgroundColor: isDark
-                      ? "rgba(14,165,233,0.16)"
-                      : "rgba(14,165,233,0.08)",
-                  },
-                ]}
-              >
-                <Text style={styles.stationTypeBadgeText}>
+              <View style={[styles.smallPill, { backgroundColor: palette.accentSoft }]}>
+                <Text style={[styles.smallPillText, { color: palette.accent }]}>
                   {location.cp_type}
                 </Text>
               </View>
             ) : null}
             {location.brand ? (
-              <Text style={[styles.stationBrandText, { color: subtextColor }]}>
+              <Text style={[styles.stationBrand, { color: palette.textSecondary }]}>
                 {location.brand}
               </Text>
             ) : null}
@@ -464,43 +345,34 @@ const StationCard = ({
         </View>
 
         {location.max_power ? (
-          <View
-            style={[
-              styles.stationPowerPill,
-              {
-                backgroundColor: isDark
-                  ? "rgba(245,158,11,0.18)"
-                  : "rgba(245,158,11,0.1)",
-              },
-            ]}
-          >
-            <Ionicons name="flash-outline" size={12} color="#F59E0B" />
-            <Text style={styles.stationPowerText}>{location.max_power} kW</Text>
+          <View style={[styles.softPill, { backgroundColor: palette.warmSoft }]}>
+            <Ionicons name="flash-outline" size={12} color={palette.warm} />
+            <Text style={[styles.softPillText, { color: palette.warm }]}>
+              {location.max_power} kW
+            </Text>
           </View>
         ) : null}
       </View>
 
       <View style={styles.stationFooter}>
-        <View style={styles.stationBatteryInfo}>
-          <Text style={[styles.stationBatteryText, { color: COLORS.batteryTo }]}>
+        <View style={styles.inlineRow}>
+          <Text style={[styles.stationBatteryText, { color: palette.energyLow }]}>
             {location.battery_status?.from}%
           </Text>
           <Ionicons
             name="arrow-forward"
-            size={14}
-            color={subtextColor}
-            style={styles.stationArrowIcon}
+            size={13}
+            color={palette.textSecondary}
+            style={styles.mutedIcon}
           />
-          <Text
-            style={[styles.stationBatteryText, { color: COLORS.batteryCharge }]}
-          >
+          <Text style={[styles.stationBatteryText, { color: palette.energyCharge }]}>
             {location.battery_status?.to}%
           </Text>
         </View>
         {location.charge_duration ? (
           <View style={styles.stationChargeTime}>
-            <Ionicons name="time-outline" size={13} color={subtextColor} />
-            <Text style={[styles.stationChargeText, { color: textColor }]}>
+            <Ionicons name="time-outline" size={13} color={palette.textSecondary} />
+            <Text style={[styles.stationChargeText, { color: palette.text }]}>
               {location.charge_duration} dk
             </Text>
           </View>
@@ -508,243 +380,260 @@ const StationCard = ({
       </View>
 
       {highlight ? (
-        <View
-          style={[
-            styles.highlightCard,
-            {
-              backgroundColor: isDark
-                ? "rgba(15,118,110,0.16)"
-                : "rgba(20,184,166,0.08)",
-              borderColor: isDark
-                ? "rgba(94,234,212,0.18)"
-                : "rgba(13,148,136,0.12)",
-            },
-          ]}
-        >
-          <View
-            style={[
-              styles.highlightIconWrap,
-              {
-                backgroundColor: isDark
-                  ? "rgba(94,234,212,0.14)"
-                  : "rgba(13,148,136,0.1)",
-              },
-            ]}
-          >
-            <Ionicons
-              name={highlight.icon as keyof typeof Ionicons.glyphMap}
-              size={16}
-              color={isDark ? "#5EEAD4" : "#0F766E"}
-            />
-          </View>
-          <View style={styles.highlightTextWrap}>
-            <View style={styles.highlightMetaRow}>
-              <View
-                style={[
-                  styles.highlightPremiumBadge,
-                  {
-                    backgroundColor: isDark
-                      ? "rgba(94,234,212,0.14)"
-                      : "rgba(13,148,136,0.1)",
-                    borderColor: isDark
-                      ? "rgba(94,234,212,0.18)"
-                      : "rgba(13,148,136,0.14)",
-                  },
-                ]}
-              >
-                <Ionicons
-                  name="sparkles-outline"
-                  size={10}
-                  color={isDark ? "#99F6E4" : "#0F766E"}
-                />
-                <Text
-                  style={[
-                    styles.highlightPremiumText,
-                    { color: isDark ? "#99F6E4" : "#0F766E" },
-                  ]}
-                >
-                  AI ÖNERİSİ
-                </Text>
-              </View>
-            </View>
-            <Text style={[styles.highlightTitle, { color: textColor }]}>
-              {highlight.title}
-            </Text>
-            {highlight.poiName ? (
-              <Text style={[styles.highlightPoi, { color: subtextColor }]}>
-                {highlight.poiName}
-                {highlight.distanceM != null
-                  ? ` · ~${Math.round(highlight.distanceM)} m`
-                  : ""}
-              </Text>
-            ) : null}
-            <Text style={[styles.highlightMessage, { color: subtextColor }]}>
-              {highlight.message}
-            </Text>
-          </View>
+        <View style={[styles.cardDivided, { borderTopColor: palette.hairline }]}>
+          <BreakSuggestionRow highlight={highlight} palette={palette} caption="Mola önerisi" />
         </View>
       ) : null}
     </View>
   );
-};
+});
 
-const StationDetailCard = ({
+const TimelineStop = memo(function TimelineStop({
   location,
-  isDark,
+  nextLocation,
+  palette,
 }: {
   location: RoutePlanLocation;
-  isDark: boolean;
-}) => {
-  const textColor = isDark ? COLORS.textPrimaryDark : COLORS.textPrimary;
-  const subtextColor = isDark ? COLORS.textSecondaryDark : COLORS.textSecondary;
+  nextLocation: RoutePlanLocation | null;
+  palette: SheetPalette;
+}) {
+  return (
+    <>
+      <View style={styles.timelineRow}>
+        <TimelineDot type={location.type} palette={palette} />
+        <Text
+          style={[
+            styles.locationName,
+            { color: palette.text },
+            location.type === "destination" && styles.locationNameStrong,
+          ]}
+          numberOfLines={2}
+        >
+          {location.name}
+        </Text>
+      </View>
+
+      {location.type === "station" ? (
+        <StationCard location={location} palette={palette} />
+      ) : null}
+
+      {nextLocation ? (
+        <TimelineSegment
+          duration={getSegmentDuration(location, nextLocation)}
+          distance={getSegmentDistance(location, nextLocation)}
+          weather={location.weather}
+          batteryFrom={getSegmentBatteryFrom(location)}
+          batteryTo={getSegmentBatteryTo(location, nextLocation)}
+          palette={palette}
+        />
+      ) : null}
+    </>
+  );
+});
+
+const BreakSuggestionsSection = memo(function BreakSuggestionsSection({
+  highlights,
+  summary,
+  palette,
+}: {
+  highlights: RoutePlanInterestHighlight[];
+  summary: string;
+  palette: SheetPalette;
+}) {
+  // The on-device fallback joins its stops with " | "; read as a sentence here.
+  const subtitle = summary
+    ? summary.split(" | ").join(" · ")
+    : "İlgi alanlarınıza göre, şarj beklerken";
+
+  return (
+    <>
+      <View style={styles.sectionHeader}>
+        <Text style={[styles.sectionTitle, { color: palette.text }]}>
+          Mola önerileri
+        </Text>
+        <Text
+          style={[styles.sectionSubtitle, { color: palette.textSecondary }]}
+          numberOfLines={2}
+        >
+          {subtitle}
+        </Text>
+      </View>
+      <View style={[styles.card, styles.listCard, cardSurface(palette)]}>
+        {highlights.map((highlight, index) => (
+          <View
+            key={highlight.id || `${highlight.stationName}-${index}`}
+            style={
+              index > 0
+                ? [styles.listItemDivided, { borderTopColor: palette.hairline }]
+                : undefined
+            }
+          >
+            <BreakSuggestionRow
+              highlight={highlight}
+              palette={palette}
+              caption={highlight.stationName || undefined}
+            />
+          </View>
+        ))}
+      </View>
+    </>
+  );
+});
+
+const StationDetailCard = memo(function StationDetailCard({
+  location,
+  palette,
+}: {
+  location: RoutePlanLocation;
+  palette: SheetPalette;
+}) {
   const chargeFrom = location.battery_status?.from ?? 0;
   const chargeTo = location.battery_status?.to ?? 0;
   const chargeAdded = Math.max(0, chargeTo - chargeFrom);
   const totalConnectors =
-    (location.ac_count ?? 0) +
-    (location.dc_count ?? 0) +
-    (location.hpc_count ?? 0);
+    (location.ac_count ?? 0) + (location.dc_count ?? 0) + (location.hpc_count ?? 0);
 
   return (
-    <View
-      style={[
-        styles.detailCard,
-        {
-          backgroundColor: isDark ? COLORS.cardBgDark : COLORS.cardBg,
-          borderColor: isDark ? COLORS.borderDark : COLORS.border,
-        },
-      ]}
-    >
+    <View style={[styles.card, styles.detailCard, cardSurface(palette)]}>
       <View style={styles.detailTopRow}>
-        <View style={styles.detailTitleWrap}>
-          <Text style={[styles.detailTitle, { color: textColor }]}>
+        <View style={styles.detailTitleBlock}>
+          <Text style={[styles.detailTitle, { color: palette.text }]}>
             {location.name}
           </Text>
           {location.address ? (
             <Text
-              style={[styles.detailAddress, { color: subtextColor }]}
+              style={[styles.detailAddress, { color: palette.textSecondary }]}
               numberOfLines={2}
             >
               {location.address}
             </Text>
           ) : null}
         </View>
-        <View
-          style={[
-            styles.detailTypePill,
-            {
-              backgroundColor: isDark
-                ? "rgba(59,130,246,0.16)"
-                : "rgba(59,130,246,0.08)",
-            },
-          ]}
-        >
-          <Text style={styles.detailTypeText}>{location.cp_type || "Şarj"}</Text>
+        <View style={[styles.softPill, { backgroundColor: palette.accentSoft }]}>
+          <Text style={[styles.softPillText, { color: palette.accent }]}>
+            {location.cp_type || "Şarj"}
+          </Text>
         </View>
       </View>
 
       <View style={styles.detailMetaRow}>
         {location.brand ? (
-          <View style={styles.detailMetaPill}>
-            <Ionicons name="business-outline" size={14} color={subtextColor} />
-            <Text style={[styles.detailMetaText, { color: subtextColor }]}>
+          <View style={[styles.metaPill, { backgroundColor: palette.surfaceMuted }]}>
+            <Ionicons name="business-outline" size={13} color={palette.textSecondary} />
+            <Text style={[styles.metaPillText, { color: palette.textSecondary }]}>
               {location.brand}
             </Text>
           </View>
         ) : null}
         {location.max_power ? (
-          <View style={styles.detailMetaPill}>
-            <Ionicons name="flash-outline" size={14} color="#F59E0B" />
-            <Text style={[styles.detailMetaText, { color: subtextColor }]}>
+          <View style={[styles.metaPill, { backgroundColor: palette.surfaceMuted }]}>
+            <Ionicons name="flash-outline" size={13} color={palette.warm} />
+            <Text style={[styles.metaPillText, { color: palette.textSecondary }]}>
               {location.max_power} kW
             </Text>
           </View>
         ) : null}
-        <View style={styles.detailMetaPill}>
-          <Ionicons name="hardware-chip-outline" size={14} color={subtextColor} />
-          <Text style={[styles.detailMetaText, { color: subtextColor }]}>
+        <View style={[styles.metaPill, { backgroundColor: palette.surfaceMuted }]}>
+          <Ionicons name="hardware-chip-outline" size={13} color={palette.textSecondary} />
+          <Text style={[styles.metaPillText, { color: palette.textSecondary }]}>
             {totalConnectors} soket
           </Text>
         </View>
       </View>
 
       <View style={styles.detailEnergyGrid}>
-        <View style={styles.detailEnergyMetric}>
-          <Text style={[styles.detailEnergyLabel, { color: subtextColor }]}>
+        <View style={[styles.detailMetric, { backgroundColor: palette.surfaceMuted }]}>
+          <Text style={[styles.detailMetricLabel, { color: palette.textSecondary }]}>
             Geliş
           </Text>
-          <Text style={[styles.detailEnergyValue, { color: textColor }]}>
+          <Text style={[styles.detailMetricValue, { color: palette.text }]}>
             %{chargeFrom}
           </Text>
         </View>
-        <View style={styles.detailEnergyMetric}>
-          <Text style={[styles.detailEnergyLabel, { color: subtextColor }]}>
+        <View style={[styles.detailMetric, { backgroundColor: palette.surfaceMuted }]}>
+          <Text style={[styles.detailMetricLabel, { color: palette.textSecondary }]}>
             Ayrılış
           </Text>
-          <Text style={[styles.detailEnergyValue, { color: textColor }]}>
+          <Text style={[styles.detailMetricValue, { color: palette.text }]}>
             %{chargeTo}
           </Text>
         </View>
-        <View style={styles.detailEnergyMetric}>
-          <Text style={[styles.detailEnergyLabel, { color: subtextColor }]}>
+        <View style={[styles.detailMetric, { backgroundColor: palette.surfaceMuted }]}>
+          <Text style={[styles.detailMetricLabel, { color: palette.textSecondary }]}>
             Dolum
           </Text>
-          <Text style={[styles.detailEnergyValue, { color: "#0EA5E9" }]}>
+          <Text style={[styles.detailMetricValue, { color: palette.energyCharge }]}>
             +%{chargeAdded}
           </Text>
         </View>
-        <View style={styles.detailEnergyMetric}>
-          <Text style={[styles.detailEnergyLabel, { color: subtextColor }]}>
+        <View style={[styles.detailMetric, { backgroundColor: palette.surfaceMuted }]}>
+          <Text style={[styles.detailMetricLabel, { color: palette.textSecondary }]}>
             Süre
           </Text>
-          <Text style={[styles.detailEnergyValue, { color: textColor }]}>
+          <Text style={[styles.detailMetricValue, { color: palette.text }]}>
             {location.charge_duration ? `${location.charge_duration} dk` : "—"}
           </Text>
         </View>
       </View>
 
       {location.interest_highlight ? (
-        <View
-          style={[
-            styles.detailAiCard,
-            {
-              backgroundColor: isDark
-                ? "rgba(15,118,110,0.16)"
-                : "rgba(20,184,166,0.08)",
-              borderColor: isDark
-                ? "rgba(94,234,212,0.18)"
-                : "rgba(13,148,136,0.12)",
-            },
-          ]}
-        >
-          <Ionicons
-            name={
-              location.interest_highlight.icon as keyof typeof Ionicons.glyphMap
-            }
-            size={18}
-            color={isDark ? "#5EEAD4" : "#0F766E"}
+        <View style={[styles.cardDivided, { borderTopColor: palette.hairline }]}>
+          <BreakSuggestionRow
+            highlight={location.interest_highlight}
+            palette={palette}
+            caption="Mola önerisi"
           />
-          <View style={styles.detailAiCopy}>
-            <Text style={[styles.detailAiTitle, { color: textColor }]}>
-              {location.interest_highlight.title}
-            </Text>
-            <Text style={[styles.detailAiBody, { color: subtextColor }]}>
-              {location.interest_highlight.message}
-            </Text>
-          </View>
         </View>
       ) : null}
     </View>
   );
-};
+});
+
+/** Shown only for a preview opened from Oturumlar; sits above the scroll view so every snap point reaches it. */
+const PreviewBar = memo(function PreviewBar({
+  onClose,
+  palette,
+}: {
+  onClose: () => void;
+  palette: SheetPalette;
+}) {
+  return (
+    <View style={styles.previewBar}>
+      <Pressable
+        onPress={onClose}
+        hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel="Oturumlara dön"
+        style={({ pressed }) => [
+          styles.backPill,
+          cardSurface(palette),
+          { opacity: pressed ? 0.7 : 1 },
+        ]}
+      >
+        <Ionicons name="chevron-back" size={16} color={palette.text} />
+        <Text style={[styles.backPillText, { color: palette.text }]}>Oturumlar</Text>
+      </Pressable>
+      <View style={styles.previewTag}>
+        <Ionicons name="eye-outline" size={13} color={palette.textSecondary} />
+        <Text style={[styles.previewTagText, { color: palette.textSecondary }]}>
+          Önizleme
+        </Text>
+      </View>
+    </View>
+  );
+});
 
 export function RoutePlanSheet({
   onSheetIndexChange,
+  onClosePreview,
 }: {
   onSheetIndexChange?: (index: number) => void;
+  /** Set while a stored session is only previewed; renders the "‹ Oturumlar" control. */
+  onClosePreview?: () => void;
 }) {
   const { themeScheme } = useTheme();
-  const isDark = themeScheme === "dark";
+  const palette = getSheetPalette(themeScheme === "dark");
+  const { top: topInset } = useSafeAreaInsets();
   const bottomSheetRef = useRef<BottomSheet>(null);
   const lastHandledRouteIdRef = useRef<string | null>(null);
   const contentOpacity = useRef(new Animated.Value(1)).current;
@@ -828,20 +717,33 @@ export function RoutePlanSheet({
     [activePanel, contentOpacity, contentTranslate],
   );
 
-  if (!routePlanData) return null;
-
-  const { locations, summary } = routePlanData;
-  if (!locations || locations.length < 2) return null;
-
-  const textColor = isDark ? COLORS.textPrimaryDark : COLORS.textPrimary;
-  const subtextColor = isDark ? COLORS.textSecondaryDark : COLORS.textSecondary;
-  const surfaceBg = isDark ? COLORS.surfaceBgDark : COLORS.surfaceBg;
-  const highlights = routePlanData.interest_highlights ?? [];
-  const optimizationSummary = routePlanData.route_optimization_summary ?? "";
-  const hasPremiumInsights = highlights.length > 0;
-  const stationLocations = locations.filter(
-    (location): location is RoutePlanLocation => location.type === "station",
+  const openStations = useCallback(
+    () => animatePanelChange("stations", "forward"),
+    [animatePanelChange],
   );
+  const openOverview = useCallback(
+    () => animatePanelChange("overview", "backward"),
+    [animatePanelChange],
+  );
+
+  const locations = routePlanData?.locations;
+  const stationLocations = useMemo(
+    () => (locations ?? []).filter((location) => location.type === "station"),
+    [locations],
+  );
+  // Server highlights first; a plan that only embeds them in its stops still shows them.
+  const highlights = useMemo(() => {
+    const listed = routePlanData?.interest_highlights ?? [];
+    if (listed.length) return listed;
+    return stationLocations
+      .map((location) => location.interest_highlight)
+      .filter((highlight): highlight is RoutePlanInterestHighlight => !!highlight);
+  }, [routePlanData?.interest_highlights, stationLocations]);
+
+  if (!routePlanData || !locations || locations.length < 2) return null;
+
+  const { summary } = routePlanData;
+  const optimizationSummary = routePlanData.route_optimization_summary ?? "";
   const hasStations = stationLocations.length > 0;
 
   return (
@@ -849,48 +751,48 @@ export function RoutePlanSheet({
       ref={bottomSheetRef}
       index={1}
       snapPoints={snapPoints}
+      // Dynamic sizing (the library default) adds a full-height stop; keep it
+      // below the status bar so the preview bar never sits under the clock.
+      topInset={topInset}
       onChange={handleSheetChange}
       enablePanDownToClose={false}
-      backgroundStyle={[
-        styles.sheetBackground,
-        { backgroundColor: surfaceBg },
-      ]}
-      handleIndicatorStyle={[
-        styles.handleIndicator,
-        { backgroundColor: isDark ? "#475569" : "#CBD5E1" },
-      ]}
+      backgroundComponent={SheetGlassBackground}
+      handleIndicatorStyle={[styles.handleIndicator, { backgroundColor: palette.handle }]}
       style={styles.sheet}
     >
+      {onClosePreview ? <PreviewBar onClose={onClosePreview} palette={palette} /> : null}
+
       <BottomSheetScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
         <Animated.View
-          style={{
-            opacity: contentOpacity,
-            transform: [{ translateX: contentTranslate }],
-            width: PANEL_WIDTH,
-            alignSelf: "center",
-          }}
+          style={[
+            styles.panel,
+            {
+              opacity: contentOpacity,
+              transform: [{ translateX: contentTranslate }],
+            },
+          ]}
         >
           {activePanel === "overview" ? (
             <>
-              <BatteryHero locations={locations} isDark={isDark} />
+              <EnergyOverview locations={locations} palette={palette} />
 
               <View style={styles.summaryRow}>
                 <SummaryCard
                   icon="time-outline"
                   label="Sürüş süresi"
                   value={`${summary.total_travel_duration} dk`}
-                  isDark={isDark}
-                  iconColor="#06B6D4"
+                  tone="cool"
+                  palette={palette}
                 />
                 <SummaryCard
                   icon="resize-outline"
                   label="Toplam mesafe"
                   value={formatDistanceLabel(summary.total_travel_length)}
-                  isDark={isDark}
-                  iconColor="#3B82F6"
+                  tone="cool"
+                  palette={palette}
                 />
               </View>
 
@@ -903,245 +805,71 @@ export function RoutePlanSheet({
                       ? `${summary.total_charge_duration} dk`
                       : "—"
                   }
-                  isDark={isDark}
-                  iconColor="#F59E0B"
+                  tone="warm"
+                  palette={palette}
                 />
                 <SummaryCard
                   icon="battery-charging-outline"
                   label="Şarj durakları"
                   value={`${summary.total_station_count}`}
-                  isDark={isDark}
-                  iconColor="#6366F1"
-                  onPress={() => animatePanelChange("stations", "forward")}
+                  tone="accent"
+                  palette={palette}
+                  onPress={openStations}
                   disabled={!hasStations}
                   showChevron
                 />
               </View>
 
-              {hasPremiumInsights ? (
-                <View
-                  style={[
-                    styles.personalizationPanel,
-                    {
-                      backgroundColor: isDark
-                        ? "rgba(15, 23, 42, 0.72)"
-                        : "#FFFFFF",
-                      borderColor: isDark ? COLORS.borderDark : COLORS.border,
-                    },
-                  ]}
-                >
-                  <View style={styles.personalizationHeader}>
-                    <View
-                      style={[
-                        styles.personalizationIcon,
-                        {
-                          backgroundColor: isDark
-                            ? "rgba(16, 185, 129, 0.16)"
-                            : "rgba(16, 185, 129, 0.1)",
-                        },
-                      ]}
-                    >
-                      <Ionicons
-                        name="sparkles-outline"
-                        size={16}
-                        color={isDark ? "#6EE7B7" : "#059669"}
-                      />
-                    </View>
-                    <View style={styles.personalizationCopy}>
-                      <Text
-                        style={[
-                          styles.personalizationTitle,
-                          { color: textColor },
-                        ]}
-                      >
-                        AKBA AI Plus
-                      </Text>
-                      <Text
-                        style={[
-                          styles.personalizationSubtitle,
-                          { color: subtextColor },
-                        ]}
-                      >
-                        İlgi alanlarınıza göre seçilen akıllı mola önerileri.
-                      </Text>
-                    </View>
-                    <View
-                      style={[
-                        styles.personalizationBadge,
-                        {
-                          backgroundColor: isDark
-                            ? "rgba(94, 234, 212, 0.12)"
-                            : "rgba(15, 118, 110, 0.08)",
-                          borderColor: isDark
-                            ? "rgba(94, 234, 212, 0.18)"
-                            : "rgba(13, 148, 136, 0.12)",
-                        },
-                      ]}
-                    >
-                      <Text
-                        style={[
-                          styles.personalizationBadgeText,
-                          { color: isDark ? "#99F6E4" : "#0F766E" },
-                        ]}
-                      >
-                        PREMIUM
-                      </Text>
-                    </View>
-                  </View>
-
-                  {optimizationSummary ? (
-                    <View
-                      style={[
-                        styles.personalizationSummaryCard,
-                        {
-                          backgroundColor: isDark
-                            ? "rgba(8, 47, 73, 0.58)"
-                            : "rgba(236, 253, 245, 0.9)",
-                          borderColor: isDark
-                            ? "rgba(34, 211, 238, 0.16)"
-                            : "rgba(16, 185, 129, 0.12)",
-                        },
-                      ]}
-                    >
-                      <Ionicons
-                        name="sparkles-outline"
-                        size={14}
-                        color={isDark ? "#67E8F9" : "#0F766E"}
-                      />
-                      <Text
-                        style={[
-                          styles.personalizationSummaryText,
-                          { color: textColor },
-                        ]}
-                      >
-                        {optimizationSummary}
-                      </Text>
-                    </View>
-                  ) : null}
-
-                  <View style={styles.personalizationList}>
-                    {highlights.map((highlight) => (
-                      <View
-                        key={highlight.id}
-                        style={[
-                          styles.personalizationItem,
-                          {
-                            backgroundColor: isDark
-                              ? "rgba(30, 41, 59, 0.9)"
-                              : "rgba(248, 250, 252, 0.96)",
-                            borderColor: isDark
-                              ? "rgba(148, 163, 184, 0.14)"
-                              : "rgba(226, 232, 240, 0.9)",
-                          },
-                        ]}
-                      >
-                        <Ionicons
-                          name={
-                            highlight.icon as keyof typeof Ionicons.glyphMap
-                          }
-                          size={16}
-                          color={isDark ? "#5EEAD4" : "#0F766E"}
-                        />
-                        <View style={styles.personalizationItemText}>
-                          <Text
-                            style={[
-                              styles.personalizationItemTitle,
-                              { color: textColor },
-                            ]}
-                          >
-                            {highlight.stationName}
-                          </Text>
-                          <Text
-                            style={[
-                              styles.personalizationItemSubtitle,
-                              { color: subtextColor },
-                            ]}
-                          >
-                            {highlight.title}
-                          </Text>
-                        </View>
-                      </View>
-                    ))}
-                  </View>
-                </View>
+              {highlights.length > 0 ? (
+                <BreakSuggestionsSection
+                  highlights={highlights}
+                  summary={optimizationSummary}
+                  palette={palette}
+                />
               ) : null}
 
               <View style={styles.sectionHeader}>
-                <Text style={[styles.sectionTitle, { color: textColor }]}>
+                <Text style={[styles.sectionTitle, { color: palette.text }]}>
                   Rota akışı
                 </Text>
-                <Text
-                  style={[styles.sectionSubtitle, { color: subtextColor }]}
-                >
+                <Text style={[styles.sectionSubtitle, { color: palette.textSecondary }]}>
                   Duraklar ve beklenen enerji geçişleri
                 </Text>
               </View>
 
               <View style={styles.timeline}>
-                {locations.map((loc, idx) => {
-                  const isLast = idx === locations.length - 1;
-                  const nextLoc =
-                    idx < locations.length - 1 ? locations[idx + 1] : null;
-
-                  return (
-                    <React.Fragment key={`${loc.type}-${loc.name}-${idx}`}>
-                      <View style={styles.timelineRow}>
-                        <TimelineDot type={loc.type} />
-                        <Text
-                          style={[
-                            styles.locationName,
-                            { color: textColor },
-                            loc.type === "destination" && styles.locationNameBold,
-                          ]}
-                          numberOfLines={2}
-                        >
-                          {loc.name}
-                        </Text>
-                      </View>
-
-                      {loc.type === "station" ? (
-                        <StationCard location={loc} isDark={isDark} />
-                      ) : null}
-
-                      {!isLast && nextLoc ? (
-                        <TimelineSegment
-                          duration={getSegmentDuration(loc, nextLoc)}
-                          distance={getSegmentDistance(loc, nextLoc)}
-                          weather={loc.weather}
-                          batteryFrom={getSegmentBatteryFrom(loc)}
-                          batteryTo={getSegmentBatteryTo(loc, nextLoc)}
-                          isDark={isDark}
-                        />
-                      ) : null}
-                    </React.Fragment>
-                  );
-                })}
+                {locations.map((location, idx) => (
+                  <TimelineStop
+                    key={`${location.type}-${location.name}-${idx}`}
+                    location={location}
+                    nextLocation={
+                      idx < locations.length - 1 ? locations[idx + 1] : null
+                    }
+                    palette={palette}
+                  />
+                ))}
               </View>
             </>
           ) : (
             <>
               <View style={styles.stationPanelHeader}>
                 <Pressable
-                  onPress={() => animatePanelChange("overview", "backward")}
+                  onPress={openOverview}
+                  accessibilityRole="button"
+                  accessibilityLabel="Rota özetine dön"
                   style={({ pressed }) => [
-                    styles.stationBackButton,
-                    { opacity: pressed ? 0.85 : 1 },
+                    styles.roundButton,
+                    cardSurface(palette),
+                    { opacity: pressed ? 0.7 : 1 },
                   ]}
                 >
-                  <Ionicons name="chevron-back" size={18} color={textColor} />
+                  <Ionicons name="chevron-back" size={18} color={palette.text} />
                 </Pressable>
                 <View style={styles.stationPanelCopy}>
-                  <Text
-                    style={[styles.stationPanelTitle, { color: textColor }]}
-                  >
+                  <Text style={[styles.sectionTitle, { color: palette.text }]}>
                     Şarj noktaları
                   </Text>
-                  <Text
-                    style={[
-                      styles.stationPanelSubtitle,
-                      { color: subtextColor },
-                    ]}
-                  >
+                  <Text style={[styles.sectionSubtitle, { color: palette.textSecondary }]}>
                     Dolum planı ve istasyon detayları
                   </Text>
                 </View>
@@ -1153,33 +881,21 @@ export function RoutePlanSheet({
                     <StationDetailCard
                       key={`${location.name}-${index}`}
                       location={location}
-                      isDark={isDark}
+                      palette={palette}
                     />
                   ))}
                 </View>
               ) : (
-                <View
-                  style={[
-                    styles.emptyStationCard,
-                    {
-                      backgroundColor: isDark ? COLORS.cardBgDark : COLORS.cardBg,
-                      borderColor: isDark ? COLORS.borderDark : COLORS.border,
-                    },
-                  ]}
-                >
+                <View style={[styles.card, styles.emptyCard, cardSurface(palette)]}>
                   <Ionicons
                     name="battery-dead-outline"
                     size={24}
-                    color={subtextColor}
+                    color={palette.textSecondary}
                   />
-                  <Text
-                    style={[styles.emptyStationTitle, { color: textColor }]}
-                  >
+                  <Text style={[styles.emptyTitle, { color: palette.text }]}>
                     Şarj durağı gerekmiyor
                   </Text>
-                  <Text
-                    style={[styles.emptyStationBody, { color: subtextColor }]}
-                  >
+                  <Text style={[styles.emptyBody, { color: palette.textSecondary }]}>
                     Bu rota için ek şarj noktası planlanmadı.
                   </Text>
                 </View>
@@ -1188,17 +904,8 @@ export function RoutePlanSheet({
           )}
         </Animated.View>
 
-        <View style={styles.footer}>
-          <Text
-            style={[
-              styles.footerText,
-              {
-                color: isDark
-                  ? COLORS.textSecondaryDark
-                  : COLORS.textSecondary,
-              },
-            ]}
-          >
+        <View style={[styles.footer, { borderTopColor: palette.hairline }]}>
+          <Text style={[styles.footerText, { color: palette.textTertiary }]}>
             Electrip Maps © 2026
           </Text>
         </View>
@@ -1212,259 +919,225 @@ const styles = StyleSheet.create({
     zIndex: 20000,
     elevation: 80,
   },
-  sheetBackground: {
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    borderWidth: 1,
-    borderColor: "rgba(148, 163, 184, 0.12)",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -10 },
-    shadowOpacity: 0.08,
-    shadowRadius: 24,
-  },
   handleIndicator: {
-    width: 44,
+    width: 40,
     height: 4,
     borderRadius: 999,
   },
   scrollContent: {
+    paddingTop: 4,
     paddingBottom: 60,
   },
-  energyHero: {
-    marginHorizontal: 12,
-    marginBottom: 16,
-    borderRadius: 24,
-    borderWidth: 1,
-    padding: 18,
-    shadowColor: "#0F172A",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.06,
-    shadowRadius: 24,
-    elevation: 4,
-    gap: 16,
+  panel: {
+    width: PANEL_WIDTH,
+    alignSelf: "center",
   },
-  energyHeroHeader: {
-    gap: 10,
-    alignItems: "flex-start",
+  card: {
+    borderRadius: CARD_RADIUS,
+    borderWidth: HAIRLINE,
   },
-  energyHeroEyebrow: {
-    fontSize: 11,
-    textTransform: "uppercase",
-    letterSpacing: 0.6,
-    fontWeight: "700",
+  cardDivided: {
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: HAIRLINE,
   },
-  energyHeroTitle: {
-    marginTop: 4,
-    fontSize: 20,
-    fontWeight: "800",
-    letterSpacing: -0.4,
-  },
-  energyHeroPill: {
+  inlineRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    gap: 4,
+  },
+  mutedIcon: {
+    opacity: 0.6,
+  },
+  // Sentence case on purpose: textTransform "uppercase" turns Turkish i into I.
+  eyebrow: {
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.2,
+  },
+  softPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: 999,
     alignSelf: "flex-start",
   },
-  energyHeroPillText: {
+  softPillText: {
     fontSize: 12,
     fontWeight: "700",
-    color: "#0369A1",
   },
-  energyHeroStats: {
+  smallPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+  },
+  smallPillText: {
+    fontSize: 11,
+    fontWeight: "700",
+  },
+
+  previewBar: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingBottom: 10,
   },
-  energyHeroStatCard: {
-    flex: 1,
-    borderRadius: 18,
-    borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    gap: 4,
-  },
-  energyHeroArrowWrap: {
-    width: 24,
+  backPill: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    gap: 2,
+    height: 36,
+    paddingLeft: 8,
+    paddingRight: 14,
+    borderRadius: 18,
+    borderWidth: HAIRLINE,
   },
-  energyHeroStatLabel: {
+  backPillText: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  previewTag: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  previewTagText: {
     fontSize: 12,
     fontWeight: "600",
   },
-  energyHeroStatValue: {
-    fontSize: 26,
-    fontWeight: "800",
-    letterSpacing: -0.8,
+
+  energyCard: {
+    marginHorizontal: 12,
+    marginBottom: 12,
+    padding: 18,
+    gap: 16,
+  },
+  energyHeader: {
+    gap: 6,
+  },
+  energyEyebrowRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  energyTitle: {
+    fontSize: 19,
+    fontWeight: "700",
+    letterSpacing: -0.4,
+  },
+  energyStats: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  energyTile: {
+    flex: 1,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 2,
+  },
+  energyTileLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  energyTileValue: {
+    fontSize: 24,
+    fontWeight: "700",
+    letterSpacing: -0.6,
   },
   energyTrackBlock: {
     gap: 8,
   },
-  energyTrackBackground: {
-    height: 12,
+  energyTrack: {
+    height: 8,
     borderRadius: 999,
     overflow: "hidden",
   },
   energyTrackFill: {
     height: "100%",
     borderRadius: 999,
-    backgroundColor: COLORS.batteryFrom,
   },
   energyTrackMeta: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 8,
   },
   energyTrackLabel: {
-    fontSize: 13,
-    fontWeight: "600",
+    flex: 1,
+    fontSize: 12.5,
+    fontWeight: "500",
   },
   energyTrackPercent: {
     fontSize: 13,
-    fontWeight: "800",
-    color: COLORS.batteryFrom,
+    fontWeight: "700",
   },
+
   summaryRow: {
     flexDirection: "row",
     paddingHorizontal: 12,
-    gap: 12,
-    marginBottom: 12,
+    gap: 10,
+    marginBottom: 10,
   },
   summaryCard: {
     flex: 1,
     padding: 12,
     borderRadius: 18,
-    borderWidth: 1,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.04,
-    shadowRadius: 10,
-    elevation: 2,
+    gap: 10,
   },
-  summaryIconContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+  summaryIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
   },
-  summaryTextContainer: {
+  summaryCopy: {
     flex: 1,
     gap: 2,
   },
   summaryLabel: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: "600",
-    textTransform: "uppercase",
-    letterSpacing: 0.3,
   },
   summaryValue: {
     fontSize: 16,
-    fontWeight: "800",
-  },
-  personalizationPanel: {
-    marginHorizontal: 12,
-    marginTop: 4,
-    borderRadius: 20,
-    borderWidth: 1,
-    padding: 16,
-    gap: 14,
-  },
-  personalizationHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  personalizationIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  personalizationCopy: {
-    flex: 1,
-    gap: 2,
-  },
-  personalizationBadge: {
-    borderRadius: 999,
-    borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  personalizationBadgeText: {
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 0.4,
-  },
-  personalizationTitle: {
-    fontSize: 14,
-    fontWeight: "800",
-  },
-  personalizationSubtitle: {
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  personalizationSummaryCard: {
-    borderRadius: 14,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  personalizationSummaryText: {
-    flex: 1,
-    fontSize: 12,
-    lineHeight: 18,
-    fontWeight: "600",
-  },
-  personalizationList: {
-    gap: 10,
-  },
-  personalizationItem: {
-    borderRadius: 14,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  personalizationItemText: {
-    flex: 1,
-    gap: 2,
-  },
-  personalizationItemTitle: {
-    fontSize: 13,
     fontWeight: "700",
   },
-  personalizationItemSubtitle: {
-    fontSize: 12,
-    fontWeight: "600",
-  },
+
   sectionHeader: {
     paddingHorizontal: 12,
-    marginTop: 20,
+    marginTop: 18,
     marginBottom: 10,
     gap: 2,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: "800",
+    fontSize: 17,
+    fontWeight: "700",
     letterSpacing: -0.3,
   },
   sectionSubtitle: {
     fontSize: 13,
     fontWeight: "500",
   },
+  listCard: {
+    marginHorizontal: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  listItemDivided: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: HAIRLINE,
+  },
+
   timeline: {
     paddingHorizontal: 12,
     marginTop: 4,
@@ -1472,46 +1145,45 @@ const styles = StyleSheet.create({
   timelineRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 16,
+    gap: 14,
   },
   timelineDot: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     alignItems: "center",
     justifyContent: "center",
-    zIndex: 2,
   },
   locationName: {
-    fontSize: 16,
-    fontWeight: "700",
     flex: 1,
+    fontSize: 15.5,
+    fontWeight: "600",
     letterSpacing: -0.2,
   },
-  locationNameBold: {
-    fontSize: 17,
-    fontWeight: "800",
+  locationNameStrong: {
+    fontSize: 16.5,
+    fontWeight: "700",
   },
-  segmentContainer: {
+  segment: {
     flexDirection: "row",
-    minHeight: 70,
+    minHeight: 64,
   },
-  segmentLineContainer: {
-    width: 28,
+  segmentRail: {
+    width: 26,
     alignItems: "center",
   },
-  segmentVerticalLine: {
+  segmentLine: {
     flex: 1,
     width: 0,
     borderWidth: 1,
     borderStyle: "dashed",
   },
-  segmentInfoContainer: {
+  segmentInfo: {
     flex: 1,
-    paddingLeft: 16,
+    paddingLeft: 14,
     paddingVertical: 10,
     justifyContent: "center",
-    gap: 6,
+    gap: 5,
   },
   segmentMainRow: {
     flexDirection: "row",
@@ -1519,10 +1191,10 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   segmentTravelText: {
-    fontSize: 14,
-    fontWeight: "700",
+    fontSize: 13.5,
+    fontWeight: "600",
   },
-  segmentWeatherRow: {
+  segmentWeather: {
     flexDirection: "row",
     alignItems: "center",
     gap: 2,
@@ -1535,29 +1207,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
   },
-  segmentBatteryRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
   segmentBatteryText: {
-    fontSize: 14,
-    fontWeight: "800",
+    fontSize: 13.5,
+    fontWeight: "700",
   },
-  segmentArrowIcon: {
-    opacity: 0.65,
-  },
+
   stationCard: {
-    marginLeft: 44,
-    borderRadius: 18,
-    borderWidth: 1,
+    marginLeft: 40,
+    marginVertical: 6,
     padding: 16,
-    marginVertical: 4,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
   },
   stationHeader: {
     flexDirection: "row",
@@ -1565,13 +1223,13 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     gap: 12,
   },
-  stationNameContainer: {
+  stationNameBlock: {
     flex: 1,
     gap: 6,
   },
   stationName: {
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   stationBadgeRow: {
     flexDirection: "row",
@@ -1579,167 +1237,69 @@ const styles = StyleSheet.create({
     gap: 8,
     flexWrap: "wrap",
   },
-  stationTypeBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-  },
-  stationTypeBadgeText: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: "#0EA5E9",
-  },
-  stationBrandText: {
-    fontSize: 11,
+  stationBrand: {
+    fontSize: 11.5,
     fontWeight: "600",
-  },
-  stationPowerPill: {
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 999,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  stationPowerText: {
-    fontSize: 11,
-    fontWeight: "800",
-    color: "#B45309",
   },
   stationFooter: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginTop: 14,
-  },
-  stationBatteryInfo: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
+    marginTop: 12,
   },
   stationBatteryText: {
-    fontSize: 15,
-    fontWeight: "800",
-  },
-  stationArrowIcon: {
-    opacity: 0.55,
+    fontSize: 14.5,
+    fontWeight: "700",
   },
   stationChargeTime: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 5,
   },
   stationChargeText: {
-    fontSize: 14,
-    fontWeight: "800",
+    fontSize: 13.5,
+    fontWeight: "700",
   },
-  highlightCard: {
-    marginTop: 14,
-    borderRadius: 14,
-    borderWidth: 1,
-    padding: 12,
-    flexDirection: "row",
-    gap: 10,
-    alignItems: "flex-start",
-  },
-  highlightIconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  highlightTextWrap: {
-    flex: 1,
-    gap: 4,
-  },
-  highlightMetaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  highlightPremiumBadge: {
-    borderRadius: 999,
-    borderWidth: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  highlightPremiumText: {
-    fontSize: 10,
-    fontWeight: "800",
-    letterSpacing: 0.4,
-  },
-  highlightTitle: {
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  highlightPoi: {
-    fontSize: 11,
-    fontWeight: "600",
-    marginTop: 2,
-  },
-  highlightMessage: {
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: "500",
-  },
+
   stationPanelHeader: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     paddingHorizontal: 12,
-    marginBottom: 16,
+    marginBottom: 14,
   },
-  stationBackButton: {
+  roundButton: {
     width: 36,
     height: 36,
     borderRadius: 18,
+    borderWidth: HAIRLINE,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(148,163,184,0.12)",
   },
   stationPanelCopy: {
     flex: 1,
     gap: 2,
   },
-  stationPanelTitle: {
-    fontSize: 18,
-    fontWeight: "800",
-    letterSpacing: -0.3,
-  },
-  stationPanelSubtitle: {
-    fontSize: 13,
-    fontWeight: "500",
-  },
   stationDetailList: {
     paddingHorizontal: 12,
-    gap: 14,
+    gap: 12,
   },
   detailCard: {
-    borderRadius: 20,
-    borderWidth: 1,
     padding: 16,
     gap: 14,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.05,
-    shadowRadius: 18,
-    elevation: 3,
   },
   detailTopRow: {
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 12,
   },
-  detailTitleWrap: {
+  detailTitleBlock: {
     flex: 1,
     gap: 4,
   },
   detailTitle: {
-    fontSize: 17,
-    fontWeight: "800",
+    fontSize: 16.5,
+    fontWeight: "700",
     letterSpacing: -0.3,
   },
   detailAddress: {
@@ -1747,108 +1307,72 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: "500",
   },
-  detailTypePill: {
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  detailTypeText: {
-    fontSize: 12,
-    fontWeight: "800",
-    color: "#2563EB",
-  },
   detailMetaRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
   },
-  detailMetaPill: {
+  metaPill: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
     paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: "rgba(148,163,184,0.08)",
   },
-  detailMetaText: {
+  metaPillText: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "600",
   },
   detailEnergyGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 10,
   },
-  detailEnergyMetric: {
+  detailMetric: {
     width: "48%",
-    borderRadius: 16,
+    borderRadius: 14,
     paddingHorizontal: 12,
-    paddingVertical: 14,
-    backgroundColor: "rgba(148,163,184,0.08)",
-    gap: 4,
+    paddingVertical: 12,
+    gap: 2,
   },
-  detailEnergyLabel: {
+  detailMetricLabel: {
     fontSize: 12,
     fontWeight: "600",
   },
-  detailEnergyValue: {
-    fontSize: 22,
-    fontWeight: "800",
+  detailMetricValue: {
+    fontSize: 21,
+    fontWeight: "700",
     letterSpacing: -0.5,
   },
-  detailAiCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 12,
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 10,
-  },
-  detailAiCopy: {
-    flex: 1,
-    gap: 4,
-  },
-  detailAiTitle: {
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  detailAiBody: {
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: "500",
-  },
-  emptyStationCard: {
+  emptyCard: {
     marginHorizontal: 12,
-    borderRadius: 20,
-    borderWidth: 1,
     padding: 24,
     alignItems: "center",
     gap: 8,
   },
-  emptyStationTitle: {
+  emptyTitle: {
     fontSize: 16,
-    fontWeight: "800",
+    fontWeight: "700",
   },
-  emptyStationBody: {
+  emptyBody: {
     fontSize: 13,
     fontWeight: "500",
     textAlign: "center",
     lineHeight: 18,
   },
+
   footer: {
     alignItems: "center",
-    paddingVertical: 32,
-    borderTopWidth: 1,
-    borderTopColor: "rgba(0,0,0,0.05)",
+    paddingVertical: 28,
+    borderTopWidth: HAIRLINE,
     marginTop: 20,
     marginHorizontal: 20,
   },
   footerText: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: "600",
     textTransform: "uppercase",
     letterSpacing: 1,
-    opacity: 0.5,
   },
 });

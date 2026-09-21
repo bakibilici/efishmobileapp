@@ -60,6 +60,18 @@ export interface RoutePlanInterestHighlight {
   poiCategory?: string;
   distanceM?: number;
   stationIndex?: number;
+  /** 'places' when poiName is a real Google Places result, 'none' when only the generic suggestion applies. */
+  poiSource?: "places" | "none";
+  /** Next-best places of other kinds at the same stop (ranker path only). */
+  alternatives?: RoutePlanHighlightAlternative[];
+}
+
+export interface RoutePlanHighlightAlternative {
+  name: string;
+  title?: string;
+  category?: string;
+  distanceM?: number;
+  reason?: string;
 }
 
 /** Full Electrip backend route plan data (cleaned, no polyline/spans). */
@@ -129,6 +141,12 @@ class DriveSessionStoreImpl {
   private listeners: Set<(state: DriveSessionState) => void> = new Set();
   private batteryListeners: Set<() => void> = new Set();
   private pendingVoiceReconnect = false;
+  /**
+   * True while a stored drive is only being looked at ("Rotayı Aç"). Such a
+   * preview must leave the stored record as it was — no endedAt reset, no new
+   * updatedAt — until it turns into a real drive or gets a new route.
+   */
+  private previewIsReadOnly = false;
 
   // Timer for end-drive confirmation
   private endDriveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -228,6 +246,7 @@ class DriveSessionStoreImpl {
         DEFAULT_ROUTE_ARRIVAL_BATTERY,
     };
     this.pendingVoiceReconnect = false;
+    this.previewIsReadOnly = false;
     this.setState(DriveSessionState.CAR_SESSION_ACTIVE);
     this.clearEndDriveTimer();
     this.persistCurrentSession();
@@ -318,6 +337,7 @@ class DriveSessionStoreImpl {
           summary: data.summary,
         } as any,
       };
+      this.previewIsReadOnly = false;
       this.persistCurrentSession();
       this.notifyListeners();
     }
@@ -342,6 +362,7 @@ class DriveSessionStoreImpl {
           summary: data.summary,
         },
       };
+      this.previewIsReadOnly = false;
       this.persistCurrentSession();
       this.notifyListeners();
     }
@@ -354,6 +375,7 @@ class DriveSessionStoreImpl {
         routePlanData: data,
       };
       console.log("[DriveSessionStore] 📋 Route plan data set:", data.summary);
+      this.previewIsReadOnly = false;
       this.persistCurrentSession();
       this.notifyListeners();
     }
@@ -381,8 +403,31 @@ class DriveSessionStoreImpl {
       ...this.context,
       isPreviewMode: false,
     };
+    this.previewIsReadOnly = false;
 
     this.persistCurrentSession();
+    this.notifyListeners();
+  }
+
+  /**
+   * Leaves a session preview without driving it. A preview that was only
+   * looked at writes nothing: the stored record keeps its endedAt, state and
+   * updatedAt, so a drive the list shows as "Kaydedildi" still does after a
+   * look at its route. A preview that already turned into a live drive
+   * ("AKBA ile Bağlan", a new route) is closed like one, with its endedAt.
+   */
+  public closePreview() {
+    if (!this.context?.isPreviewMode) return;
+
+    if (!this.previewIsReadOnly) {
+      this.persistCurrentSession({ endedAt: Date.now() });
+    }
+    this.currentState = DriveSessionState.IDLE;
+    this.context = null;
+    this.routePlanSheetIndex = -1;
+    this.pendingVoiceReconnect = false;
+    this.previewIsReadOnly = false;
+    this.clearEndDriveTimer();
     this.notifyListeners();
   }
 
@@ -392,6 +437,7 @@ class DriveSessionStoreImpl {
     this.context = null;
     this.routePlanSheetIndex = -1;
     this.pendingVoiceReconnect = false;
+    this.previewIsReadOnly = false;
     this.clearEndDriveTimer();
     this.notifyListeners();
   }
@@ -404,6 +450,8 @@ class DriveSessionStoreImpl {
     this.context = restoredContext;
     this.routePlanSheetIndex = -1;
     this.pendingVoiceReconnect = !!options.reconnectVoice;
+    // Resuming with AKBA continues the drive; opening the route only looks at it.
+    this.previewIsReadOnly = !options.reconnectVoice;
     this.clearEndDriveTimer();
     this.setState(
       options.reconnectVoice
@@ -453,6 +501,7 @@ class DriveSessionStoreImpl {
           ...this.context,
           isPreviewMode: false,
         };
+        this.previewIsReadOnly = false;
         this.persistCurrentSession();
         this.notifyListeners();
       }
@@ -572,6 +621,7 @@ class DriveSessionStoreImpl {
   }
 
   private persistCurrentSession(options: PersistSessionOptions = {}) {
+    if (this.previewIsReadOnly && this.context?.isPreviewMode) return;
     const snapshot = this.getSessionSnapshot(options);
     if (!snapshot) return;
     void (async () => {

@@ -1,25 +1,49 @@
 import { AudioSession } from "@livekit/react-native";
 import * as Sentry from "@sentry/react-native";
-import { Audio, InterruptionModeAndroid, InterruptionModeIOS } from "expo-av";
+import { Audio } from "expo-av";
 import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
 import type { RemoteAudioTrack, RemoteParticipant } from "livekit-client";
 import { ConnectionState, Room, RoomEvent, Track } from "livekit-client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PermissionsAndroid, Platform } from "react-native";
+import { AppState, PermissionsAndroid, Platform } from "react-native";
+import { PREDEFINED_USER_INTERESTS } from "../constants/userInterests";
 import { useUser } from "../context/UserContext";
 import { LocalUserStorage } from "../services/localUserStorage";
 import { ActivityState } from "../services/ActivityStateMachine";
 import { AtlasTokenError, fetchAtlasToken } from "../services/AtlasTokenService";
 import { VoiceLevelBus } from "../services/VoiceLevelBus";
+import {
+  BreakExclusions,
+  excludedBreaksPrefKey,
+  LEGACY_EXCLUDED_BREAKS_PREF,
+  parseStoredBreakKinds,
+} from "../services/breakExclusions";
 import type { RoutePlanData } from "../services/DriveSessionStore";
 import {
   DriveSessionState,
   DriveSessionStore,
 } from "../services/DriveSessionStore";
 import { fetchDirections } from "../services/GoogleMapsService";
-import { personalizeRoutePlan } from "../services/routePersonalization";
+import {
+  normalizeBreakKinds,
+  personalizeRoutePlan,
+  updateInterestChips,
+  type BreakKind,
+} from "../services/routePersonalization";
 import { normalizeRoutePlanFromGateway } from "../services/routePlanGateway";
+import { SpeedStore } from "../services/sensors/SpeedStore";
+import { applyAkbaAudioMode } from "../services/voice/audioMode";
+import {
+  playListenEnd,
+  playListenStart,
+  preloadEarcons,
+} from "../services/voice/Earcons";
+import {
+  requestWakeWordPermissionIfNeverAsked,
+  WakeWordListener,
+  type WakeWordStatus,
+} from "../services/voice/WakeWordListener";
 import { useActivityState } from "./useActivityState";
 import { useChargingSimulation } from "./useChargingSimulation";
 
@@ -36,6 +60,61 @@ const TOOL_TOPIC = "atlas.tool";
 
 /** How long to wait for a GPS fix before connecting without one. */
 const GPS_FIX_TIMEOUT_MS = 3000;
+
+/**
+ * Local preference keys (LocalUserStorage.getPreference / setPreference);
+ * Profile writes both. The break exclusions live under excludedBreaksPrefKey.
+ */
+const SHARE_LOCATION_PREF = "share_location";
+/** "off" switches the wake word off; anything else (or nothing) leaves it on. */
+const WAKE_WORD_PREF = "wake_word";
+
+/** Thrown inside startAgentSession when a stop arrived while it was still starting. */
+class StartCancelledError extends Error {
+  constructor() {
+    super("Voice session start cancelled");
+    this.name = "StartCancelledError";
+  }
+}
+
+const stringList = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.filter((entry: unknown): entry is string => typeof entry === "string")
+    : [];
+
+/**
+ * The wake word only listens while a drive is on screen and AKBA is not
+ * talking: the drive's passive states. Previews of old drives do not count.
+ */
+const WAKE_WORD_DRIVE_STATES = new Set<DriveSessionState>([
+  DriveSessionState.CAR_SESSION_ACTIVE,
+  DriveSessionState.CAR_SESSION_COLLAPSED,
+  DriveSessionState.NAVIGATION_ONLY,
+]);
+/** Lets the end cue finish and a flapping state settle before the mic opens again. */
+const WAKE_WORD_ARM_DELAY_MS = 700;
+
+/**
+ * The gateway only ever surfaces two suggestions and consumes the interest
+ * list in order, so the practical needs are sent ahead of the nice-to-haves.
+ */
+const PRIORITY_INTERESTS = [
+  "İhtiyaç molası",
+  "İbadet alanı",
+  "Tuvalet molası", // pre-rename profiles
+];
+
+/** The `interests` participant attribute: priority chips first, at most 8, comma-joined. */
+function buildInterestsAttribute(interests: readonly string[]): string {
+  return [...interests]
+    .sort(
+      (a, b) =>
+        Number(PRIORITY_INTERESTS.includes(b)) -
+        Number(PRIORITY_INTERESTS.includes(a)),
+    )
+    .slice(0, 8)
+    .join(",");
+}
 
 /** Atlas tool names → the tool keys CarModeView's TOOL_STATUS_COPY expects. */
 const ATLAS_TOOL_NAME_MAP: Record<string, string> = {
@@ -59,7 +138,13 @@ export interface AgentToolCall {
 
 export function useDrivingAgent() {
   const activity = useActivityState();
-  const { user } = useUser();
+  const activityRef = useRef(activity);
+  activityRef.current = activity;
+  const { user, setUser } = useUser();
+  const userRef = useRef(user);
+  userRef.current = user;
+  const setUserRef = useRef(setUser);
+  setUserRef.current = setUser;
   const charging = useChargingSimulation();
   const sessionStartedRef = useRef(false);
   const connectingRef = useRef(false);
@@ -70,6 +155,15 @@ export function useDrivingAgent() {
   const forceFreshSessionRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Bumped by every stop (and by unmount). A start that finds it changed
+   * after one of its awaits was overtaken by that stop and undoes itself.
+   */
+  const startGenerationRef = useRef(0);
+  /** AudioSession.startAudioSession succeeded and has not been stopped since. */
+  const audioSessionActiveRef = useRef(false);
+  /** preference_update events are applied one at a time, in arrival order. */
+  const preferenceQueueRef = useRef<Promise<void>>(Promise.resolve());
   const planningSoundRef = useRef<Audio.Sound | null>(null);
   const planningFeedbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
@@ -96,6 +190,102 @@ export function useDrivingAgent() {
   const currentLocationRef = useRef("0,0");
   const userInterestsRef = useRef<string[]>([]);
   userInterestsRef.current = user?.interests ?? [];
+  /** Break kinds the driver told AKBA never to suggest (preference_update). */
+  const excludedBreakKindsRef = useRef<BreakKind[]>([]);
+  const statusRef = useRef<VoiceStatus>(status);
+  statusRef.current = status;
+
+  // ── Listen cues ─────────────────────────────────────────────────────────
+  /** The rising cue already played for the current voice session. */
+  const startCuePlayedRef = useRef(false);
+  /** A voice session finished starting and has not gone passive yet. */
+  const voiceLiveRef = useRef(false);
+  /** Set by the unmount cleanup: tearing the app down is not "AKBA stopped listening". */
+  const unmountingRef = useRef(false);
+
+  /**
+   * The rising cue means "AKBA hears you now": only for a session that is
+   * live (mic published), never for a connect that may still fail.
+   */
+  const playStartCueOnce = useCallback(() => {
+    if (!voiceLiveRef.current || startCuePlayedRef.current) return;
+    startCuePlayedRef.current = true;
+    void playListenStart();
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+  }, []);
+
+  /**
+   * Every end of a voice session funnels through disconnectRoom, which calls
+   * this after the audio session is released (releasing it later would cut
+   * the cue off). The falling cue plays only for a session that was live: not
+   * for a failed connect, not for a retry, not for app teardown.
+   */
+  const markVoicePassive = useCallback(() => {
+    startCuePlayedRef.current = false;
+    if (!voiceLiveRef.current) return;
+    voiceLiveRef.current = false;
+    if (unmountingRef.current) return;
+    void playListenEnd();
+  }, []);
+
+  // ── Wake word ───────────────────────────────────────────────────────────
+  /** null until the wake_word preference has been read: nothing arms before that. */
+  const wakeWordEnabledRef = useRef<boolean | null>(null);
+  const appStateRef = useRef(AppState.currentState);
+  /** disconnectRoom calls in flight; the mic is not handed back until they finish. */
+  const teardownCountRef = useRef(0);
+  const wakeArmRequestedRef = useRef(false);
+  const wakeArmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleWakeRef = useRef<() => void>(() => {});
+  const [wakeWordStatus, setWakeWordStatus] = useState<WakeWordStatus>(
+    WakeWordListener.getStatus(),
+  );
+  useEffect(() => WakeWordListener.subscribe(setWakeWordStatus), []);
+
+  const shouldArmWakeWord = useCallback(
+    () =>
+      wakeWordEnabledRef.current === true &&
+      !!userRef.current &&
+      !unmountingRef.current &&
+      appStateRef.current === "active" &&
+      !connectingRef.current &&
+      !roomRef.current &&
+      teardownCountRef.current === 0 &&
+      statusRef.current !== "connected" &&
+      statusRef.current !== "connecting" &&
+      WAKE_WORD_DRIVE_STATES.has(DriveSessionStore.getState()) &&
+      !DriveSessionStore.getContext()?.isPreviewMode,
+    [],
+  );
+
+  /** Resolves once the recognizer has let go of the microphone. */
+  const disarmWakeWord = useCallback(async () => {
+    if (wakeArmTimerRef.current) {
+      clearTimeout(wakeArmTimerRef.current);
+      wakeArmTimerRef.current = null;
+    }
+    wakeArmRequestedRef.current = false;
+    await WakeWordListener.disarm();
+  }, []);
+
+  /**
+   * Edge-triggered: arms once when the conditions start to hold and disarms
+   * when they stop. A listener that gave up stays off until the conditions
+   * drop and return (the next arm), instead of retrying on every state tick.
+   */
+  const evaluateWakeWord = useCallback(() => {
+    if (shouldArmWakeWord()) {
+      if (wakeArmRequestedRef.current || wakeArmTimerRef.current) return;
+      wakeArmTimerRef.current = setTimeout(() => {
+        wakeArmTimerRef.current = null;
+        if (wakeArmRequestedRef.current || !shouldArmWakeWord()) return;
+        wakeArmRequestedRef.current = true;
+        void WakeWordListener.arm(() => handleWakeRef.current());
+      }, WAKE_WORD_ARM_DELAY_MS);
+    } else if (wakeArmRequestedRef.current || wakeArmTimerRef.current) {
+      void disarmWakeWord();
+    }
+  }, [disarmWakeWord, shouldArmWakeWord]);
 
   const setPassiveDriveState = useCallback(() => {
     const hasRoute = !!DriveSessionStore.getRoutePlanData();
@@ -134,20 +324,7 @@ export function useDrivingAgent() {
       planningFeedbackTimerRef.current = setInterval(() => {
         void Haptics.selectionAsync();
       }, 2600);
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        // This call mutates the process-wide AVAudioSession that LiveKit
-        // configured, and nothing restores it afterwards. Leaving it false is
-        // what lets iOS tear the call's audio down the moment the screen locks
-        // — right after a route is planned, which is exactly when the driver
-        // puts the phone away. UIBackgroundModes already declares "audio".
-        staysActiveInBackground: true,
-        interruptionModeIOS: InterruptionModeIOS.MixWithOthers,
-        interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
-        shouldDuckAndroid: false,
-        playThroughEarpieceAndroid: false,
-      });
+      await applyAkbaAudioMode();
       const { sound } = await Audio.Sound.createAsync(
         ROUTE_PLANNING_HOLD_SOUND,
         {
@@ -172,35 +349,96 @@ export function useDrivingAgent() {
   }, []);
 
   const disconnectRoom = useCallback(async () => {
-    stopGpsWatch();
-    clearPlanWatchdog();
-    const room = roomRef.current;
-    roomRef.current = null;
-    agentParticipantRef.current = null;
-    setAgentAudioTrack(null);
-    VoiceLevelBus.reset();
-    if (room) {
-      try {
-        await room.disconnect();
-      } catch (error) {
-        console.error("[useDrivingAgent] Failed to disconnect room:", error);
-      }
-    }
+    teardownCountRef.current += 1;
     try {
-      await AudioSession.stopAudioSession();
-    } catch {
-      // Audio session may already be stopped; ignore.
+      stopGpsWatch();
+      clearPlanWatchdog();
+      const room = roomRef.current;
+      roomRef.current = null;
+      agentParticipantRef.current = null;
+      setAgentAudioTrack(null);
+      VoiceLevelBus.reset();
+      // LiveKit and the recognizer share one audio session: the wake word
+      // must never be running across the stop below.
+      await disarmWakeWord();
+      if (room) {
+        try {
+          await room.disconnect();
+        } catch (error) {
+          console.error("[useDrivingAgent] Failed to disconnect room:", error);
+        }
+      }
+      // Balanced with the start: stopping a session this hook never started
+      // would deactivate audio something else still uses.
+      if (audioSessionActiveRef.current) {
+        audioSessionActiveRef.current = false;
+        try {
+          await AudioSession.stopAudioSession();
+        } catch {
+          // Audio session may already be stopped; ignore.
+        }
+      }
+      markVoicePassive();
+    } finally {
+      teardownCountRef.current -= 1;
+      // Only now may the wake word take the microphone back.
+      evaluateWakeWord();
     }
-  }, [stopGpsWatch, clearPlanWatchdog]);
+  }, [stopGpsWatch, clearPlanWatchdog, disarmWakeWord, markVoicePassive, evaluateWakeWord]);
 
   // KVKK m.11/e: when the driver turns location sharing off, no position
   // leaves the phone (AKBA then plans from the İstanbul fallback).
   const shareLocationRef = useRef(true);
   useEffect(() => {
-    void LocalUserStorage.getPreference("share_location").then((v: string | null) => {
+    void LocalUserStorage.getPreference(SHARE_LOCATION_PREF).then((v: string | null) => {
       shareLocationRef.current = v !== "off";
     });
   }, [user?.id]);
+
+  // The driver's standing break exclusions (per person) and the wake-word
+  // switch (per device), re-read when the signed-in person changes.
+  useEffect(() => {
+    let cancelled = false;
+    const userId = user?.id;
+    if (userId == null) {
+      excludedBreakKindsRef.current = [];
+      BreakExclusions.set([]);
+    } else {
+      void LocalUserStorage.getPreference(excludedBreaksPrefKey(userId)).then(
+        (raw: string | null) => {
+          if (cancelled) return;
+          const kinds = parseStoredBreakKinds(raw);
+          excludedBreakKindsRef.current = kinds;
+          BreakExclusions.set(kinds);
+        },
+      );
+    }
+    // The device-wide key the list used before it was per person. Whose it
+    // was cannot be told, so it is dropped rather than handed to this driver.
+    void LocalUserStorage.deletePreference(LEGACY_EXCLUDED_BREAKS_PREF).catch(() => {});
+    void LocalUserStorage.getPreference(WAKE_WORD_PREF).then((v: string | null) => {
+      if (cancelled) return;
+      wakeWordEnabledRef.current = v !== "off";
+      evaluateWakeWord();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, evaluateWakeWord]);
+
+  // Profile's switches take effect at once, also in the middle of a drive.
+  useEffect(
+    () =>
+      LocalUserStorage.onPreferenceChange((key, value) => {
+        if (key === SHARE_LOCATION_PREF) {
+          shareLocationRef.current = value !== "off";
+        } else if (key === WAKE_WORD_PREF) {
+          wakeWordEnabledRef.current = value !== "off";
+          evaluateWakeWord();
+        }
+      }),
+    [evaluateWakeWord],
+  );
 
   const publishClientMessage = useCallback((message: Record<string, unknown>) => {
     if (message.type === "gps_update" && !shareLocationRef.current) return;
@@ -238,6 +476,10 @@ export function useDrivingAgent() {
   }, [publishClientMessage, charging.isActive]);
 
   const stopVoiceSessionPreservingDrive = useCallback(async () => {
+    // A start still in flight is overtaken by this stop. It only notices at
+    // its next await; the controls should not wait for that.
+    startGenerationRef.current += 1;
+    if (connectingRef.current) setStatus("disconnected");
     try {
       // Agent explicitly ended the voice leg of the drive. Prevent any
       // auto-reconnect and move the UI back to passive navigation.
@@ -256,14 +498,23 @@ export function useDrivingAgent() {
   }, [disconnectRoom, setPassiveDriveState, stopPlanningHoldSound]);
 
   const stopAgentSession = useCallback(async () => {
+    // A start still in flight is overtaken by this stop. The flags below are
+    // set before the first await, so the status change of that start's quiet
+    // teardown cannot look like a dropped connection to the reconnect ladder.
+    startGenerationRef.current += 1;
+    if (connectingRef.current) setStatus("disconnected");
+    sessionStartedRef.current = false;
+    manuallyEndedRef.current = true;
+    // The drive is over; the next explicit start should be a fresh session.
+    forceFreshSessionRef.current = true;
     try {
       await stopPlanningHoldSound();
-      sessionStartedRef.current = false;
-      manuallyEndedRef.current = true;
-      // The drive is over; the next explicit start should be a fresh session.
-      forceFreshSessionRef.current = true;
       await disconnectRoom();
       DriveSessionStore.endSession();
+      // Whatever held this drive's voice passive ends with it: the next drive
+      // starts by itself again, with a full reconnect ladder.
+      blockAutoVoiceRestartRef.current = false;
+      reconnectAttemptsRef.current = 0;
     } catch (error) {
       console.error("[useDrivingAgent] Failed to stop agent session:", error);
     }
@@ -362,9 +613,17 @@ export function useDrivingAgent() {
       // above) and returns its own highlights; personalizeRoutePlan only fills
       // in locally when that server pass produced nothing.
       const normalized = normalizeRoutePlanFromGateway(data as RoutePlanData);
+      // The agent's list is the newest truth; the stored one covers an agent
+      // that does not send it.
+      const excludedKinds = Array.isArray(result?.excluded_break_categories)
+        ? result.excluded_break_categories
+        : Array.isArray(data?.excluded_break_categories)
+          ? data.excluded_break_categories
+          : excludedBreakKindsRef.current;
       const personalized = personalizeRoutePlan(
         normalized,
         userInterestsRef.current,
+        excludedKinds,
       );
       if (personalized.locations && personalized.summary) {
         DriveSessionStore.setRoutePlanData(personalized);
@@ -374,6 +633,96 @@ export function useDrivingAgent() {
     },
     [],
   );
+
+  /**
+   * The profile chips AKBA stopped using (removed_interests) or that the
+   * driver allowed again (restored_interests), made binding on this phone.
+   */
+  const applyInterestChanges = useCallback(async (event: Record<string, any>) => {
+    const removed = stringList(event.removed_interests);
+    const restored = stringList(event.restored_interests);
+    const signedIn = userRef.current;
+    if ((!removed.length && !restored.length) || !signedIn) return;
+    // The stored row, not the rendered one: the update just before this one
+    // may not have reached UserContext yet, and filtering the rendered list
+    // would bring back a chip it removed.
+    const current = await LocalUserStorage.getUserById(signedIn.id);
+    if (!current) return;
+    const next = updateInterestChips(
+      current.interests,
+      removed,
+      restored,
+      PREDEFINED_USER_INTERESTS,
+    );
+    if (
+      next.length === current.interests.length &&
+      next.every((interest, i) => interest === current.interests[i])
+    ) {
+      return;
+    }
+    userInterestsRef.current = next;
+
+    // Same format as at join. With the last chip gone this is "", which
+    // LiveKit does not store: it deletes the attribute. It is still sent, and
+    // the agent reads the interests key disappearing as an empty list.
+    const room = roomRef.current;
+    if (room && room.state === ConnectionState.Connected) {
+      void room.localParticipant
+        .setAttributes({ interests: buildInterestsAttribute(next) })
+        .catch((error) => {
+          console.error("[useDrivingAgent] Failed to republish interests:", error);
+        });
+    }
+
+    try {
+      const updated = await LocalUserStorage.updateUser(current.id, {
+        firstName: current.first_name,
+        lastName: current.last_name,
+        interests: next,
+      });
+      // Through UserContext, so Profile shows the chips as they are now.
+      if (updated) setUserRef.current(updated);
+    } catch (error) {
+      console.error("[useDrivingAgent] Failed to update interests:", error);
+    }
+  }, []);
+
+  /**
+   * The driver told AKBA never to suggest a kind of break (or to suggest it
+   * again). The agent sends the full list after the change plus the profile
+   * chips it stopped using or gave back; all of it is made binding on this
+   * phone. Called through preferenceQueueRef, one event at a time.
+   */
+  const applyPreferenceUpdate = useCallback(async (event: Record<string, any>) => {
+    let kinds: BreakKind[] | null = null;
+    if (Array.isArray(event.excluded_break_categories)) {
+      kinds = normalizeBreakKinds(event.excluded_break_categories);
+      excludedBreakKindsRef.current = kinds;
+      BreakExclusions.set(kinds);
+      const userId = userRef.current?.id;
+      if (userId != null) {
+        try {
+          await LocalUserStorage.setPreference(
+            excludedBreaksPrefKey(userId),
+            JSON.stringify(kinds),
+          );
+        } catch (error) {
+          console.error("[useDrivingAgent] Failed to store break exclusions:", error);
+        }
+      }
+    }
+
+    await applyInterestChanges(event);
+
+    // The route on screen drops the excluded kind now (sheet card and map
+    // marker), even if the driver declines the re-plan AKBA offers. A preview
+    // of a stored drive is left as it was stored.
+    const shown = DriveSessionStore.getRoutePlanData();
+    if (kinds && shown && !DriveSessionStore.getContext()?.isPreviewMode) {
+      const refiltered = personalizeRoutePlan(shown, userInterestsRef.current, kinds);
+      if (refiltered !== shown) DriveSessionStore.setRoutePlanData(refiltered);
+    }
+  }, [applyInterestChanges]);
 
   const handleToolEvent = useCallback(
     (event: Record<string, any>) => {
@@ -425,6 +774,21 @@ export function useDrivingAgent() {
 
       if (eventType === "tool_end") {
         const mappedName = ATLAS_TOOL_NAME_MAP[event.name] ?? event.name;
+        // A plan the driver already replaced with a newer one. The newer plan may
+        // still be running, so only resolve the oldest pending entry quietly: no
+        // error, no route change, no touching the planning state or its sound.
+        if (event.result?.superseded === true) {
+          setToolCalls((prev) => {
+            const idx = prev.findIndex(
+              (tc) => tc.toolName === mappedName && tc.status === "pending",
+            );
+            if (idx === -1) return prev;
+            return prev.map((tc, i) =>
+              i === idx ? { ...tc, status: "success" as const, respondedAt: Date.now() } : tc,
+            );
+          });
+          return;
+        }
         const isError = event.result?.success === false;
         console.log("[Atlas Tool Response]", event.name, "error:", isError);
 
@@ -480,6 +844,23 @@ export function useDrivingAgent() {
         return;
       }
 
+      if (eventType === "preference_update") {
+        console.log(
+          "[useDrivingAgent] Break preferences changed:",
+          event.excluded_break_categories,
+          event.removed_interests,
+          event.restored_interests,
+        );
+        // One at a time: two quick updates must not both start from the
+        // chips as they were before either of them.
+        preferenceQueueRef.current = preferenceQueueRef.current
+          .then(() => applyPreferenceUpdate(event))
+          .catch((error) => {
+            console.error("[useDrivingAgent] Failed to apply preference update:", error);
+          });
+        return;
+      }
+
       if (eventType === "client_error") {
         // The agent only emits this for no_active_session and
         // agent_session_unavailable — both mean the session is dead. Logging
@@ -498,6 +879,7 @@ export function useDrivingAgent() {
       // usage / assistant_output_done are telemetry-only for now.
     },
     [
+      applyPreferenceUpdate,
       clearPlanWatchdog,
       ingestRoutePlanResult,
       startPlanningHoldSound,
@@ -513,6 +895,14 @@ export function useDrivingAgent() {
 
     if (sessionStartedRef.current || connectingRef.current || !user) return;
     connectingRef.current = true;
+    // Started now, awaited before the audio session: the recognizer lets go
+    // of the microphone while the GPS fix and the token are fetched.
+    const wakeWordReleased = disarmWakeWord();
+    // Checked after every await below: a stop pressed meanwhile wins.
+    const generation = startGenerationRef.current;
+    const ensureStillWanted = () => {
+      if (generation !== startGenerationRef.current) throw new StartCancelledError();
+    };
 
     try {
       DriveSessionStore.setAiState(DriveSessionState.AI_CONNECTING);
@@ -530,6 +920,7 @@ export function useDrivingAgent() {
       let coords: { latitude: number; longitude: number } | null = null;
       const { status: locStatus } =
         await Location.requestForegroundPermissionsAsync();
+      ensureStillWanted();
       if (locStatus === "granted") {
         const loc = await Promise.race([
           Location.getCurrentPositionAsync({
@@ -539,6 +930,7 @@ export function useDrivingAgent() {
             setTimeout(() => resolve(null), GPS_FIX_TIMEOUT_MS),
           ),
         ]);
+        ensureStillWanted();
         if (loc) {
           coords = {
             latitude: loc.coords.latitude,
@@ -562,12 +954,19 @@ export function useDrivingAgent() {
         language: "tr",
         newSession: forceFreshSessionRef.current,
       });
+      ensureStillWanted();
 
-      // 3. Configure and start the audio session (speaker output for driving)
+      // 3. Configure and start the audio session (speaker output for driving).
+      // The wake-word recognizer must be fully stopped first.
+      await wakeWordReleased;
+      ensureStillWanted();
       await AudioSession.configureAudio({
         ios: { defaultOutput: "speaker" },
       });
+      ensureStillWanted();
       await AudioSession.startAudioSession();
+      audioSessionActiveRef.current = true;
+      ensureStillWanted();
 
       // 4. Connect to the room; the LiveKit server auto-dispatches Atlas into it
       const room = new Room();
@@ -583,6 +982,10 @@ export function useDrivingAgent() {
           // the battery snapshot once the agent is actually present to receive it.
           if (isFirstCapture) {
             publishBatterySnapshot();
+          }
+          // An agent that was already listening fires no attribute change.
+          if (participant.attributes["lk.agent.state"] === "listening") {
+            playStartCueOnce();
           }
         }
       };
@@ -636,6 +1039,13 @@ export function useDrivingAgent() {
           if (agentState) {
             setIsSpeaking(agentState === "speaking");
           }
+          // The room is up before the agent is: its first "listening" is the
+          // moment the driver can actually be heard. Before the session is
+          // live (mic published) this does nothing; the start's success
+          // block cues an agent that was already listening by then.
+          if (agentState === "listening") {
+            playStartCueOnce();
+          }
           // The join-time snapshot can reach the agent before it listens for
           // data; by its first "listening" it does. Re-sending is idempotent.
           if (agentState === "listening" && !batteryResentRef.current) {
@@ -662,11 +1072,19 @@ export function useDrivingAgent() {
           setIsSpeaking(false);
           setAgentAudioTrack(null);
           VoiceLevelBus.reset();
-          void AudioSession.stopAudioSession().catch(() => {});
+          // Still ours means the server or the network closed it; a local stop
+          // has already let go of it. Either way disconnectRoom releases the
+          // audio session and plays the end cue, and only then can the wake
+          // word listen again.
+          if (roomRef.current === room) {
+            void disconnectRoom();
+          }
 
           // Once a route exists, Atlas voice should stay passive until the user
           // explicitly taps the orb again. This avoids unexpected reconnects.
-          if (hasRoute) {
+          // Not for "Sürüşü Bitir": that drive is over, and stopAgentSession
+          // leaves the next one free to start by itself.
+          if (hasRoute && !manuallyEndedRef.current) {
             blockAutoVoiceRestartRef.current = true;
           }
 
@@ -679,6 +1097,7 @@ export function useDrivingAgent() {
         });
 
       await room.connect(url, token);
+      ensureStillWanted();
 
       // 5. Push GPS + profile as participant attributes FIRST — before the
       // (slower) mic publish — so they land inside the agent's 1.5 s
@@ -693,21 +1112,9 @@ export function useDrivingAgent() {
       }
       // Deliberately outside the coords check — a driver starting in an
       // underground garage has no fix yet, but still has stop preferences.
-      // The gateway only ever surfaces two suggestions and consumes this list
-      // in order, so the practical needs are sent ahead of the nice-to-haves.
-      const PRIORITY_INTERESTS = [
-        "İhtiyaç molası",
-        "İbadet alanı",
-        "Tuvalet molası", // pre-rename profiles
-      ];
-      const interests = [...(user?.interests ?? [])]
-        .sort(
-          (a, b) =>
-            Number(PRIORITY_INTERESTS.includes(b)) -
-            Number(PRIORITY_INTERESTS.includes(a)),
-        )
-        .slice(0, 8);
-      if (interests.length) attributes.interests = interests.join(",");
+      // buildInterestsAttribute puts the practical needs first.
+      const interestsAttribute = buildInterestsAttribute(user?.interests ?? []);
+      if (interestsAttribute) attributes.interests = interestsAttribute;
       // The battery level rides along as participant state, so it is already
       // there when the agent comes up (see publishBatterySnapshot).
       const batteryAtJoin = DriveSessionStore.getBatteryPreferences();
@@ -715,8 +1122,16 @@ export function useDrivingAgent() {
         attributes.battery_percent = String(batteryAtJoin.start);
         attributes.battery_updated_at = String(batteryAtJoin.updatedAt);
       }
+      // Whether the driver is already on the road decides AKBA's opening line.
+      // Motion is not position, so it goes out even with location sharing off.
+      attributes.activity = activityRef.current;
+      const speedKmh = SpeedStore.getSpeed(); // km/h, the source useSpeed reads
+      if (Number.isFinite(speedKmh)) {
+        attributes.speed_kmh = String(Math.max(0, Math.round(speedKmh)));
+      }
       if (Object.keys(attributes).length) {
         await room.localParticipant.setAttributes(attributes);
+        ensureStillWanted();
       }
 
       // 6. Capture the agent participant if it is already present, then publish mic.
@@ -731,12 +1146,14 @@ export function useDrivingAgent() {
         const granted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
         );
+        ensureStillWanted();
         if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
           throw new Error("Microphone permission denied");
         }
       }
 
       await room.localParticipant.setMicrophoneEnabled(true);
+      ensureStillWanted();
       setIsMuted(false);
 
       // 7. Stream GPS + basic telemetry while the session is live
@@ -748,22 +1165,57 @@ export function useDrivingAgent() {
         },
         (loc) => {
           currentLocationRef.current = `${loc.coords.latitude},${loc.coords.longitude}`;
+          const speed = loc.coords.speed;
           publishClientMessage({
             type: "gps_update",
             latitude: loc.coords.latitude,
             longitude: loc.coords.longitude,
             accuracy: loc.coords.accuracy ?? undefined,
-            speed_mps: loc.coords.speed ?? undefined,
+            // iOS reports -1 when it does not know; say nothing instead.
+            speed_mps: speed != null && speed >= 0 ? speed : undefined,
             heading: loc.coords.heading ?? undefined,
           });
         },
       );
+      // Assigned first, so the teardown of a cancelled start removes it.
+      ensureStillWanted();
 
+      if (roomRef.current !== room) {
+        // Closed by the server while it was still being set up.
+        throw new Error("Room disconnected during session start");
+      }
       sessionStartedRef.current = true;
+      voiceLiveRef.current = true;
       manuallyEndedRef.current = false;
       forceFreshSessionRef.current = false;
       console.log("[useDrivingAgent] Session started successfully");
+      // An agent that reached "listening" before the mic was up fired its
+      // attribute change too early to cue; the session is live only now.
+      // (Cast: the room events set the ref, which flow analysis cannot see.)
+      const agentNow = agentParticipantRef.current as RemoteParticipant | null;
+      if (agentNow?.attributes["lk.agent.state"] === "listening") {
+        playStartCueOnce();
+      }
+      if (wakeWordEnabledRef.current !== false) {
+        // The one moment the app asks: in car mode, with the microphone just
+        // granted. Never from the wake-word listener itself.
+        void requestWakeWordPermissionIfNeverAsked();
+      }
     } catch (error) {
+      if (
+        error instanceof StartCancelledError ||
+        generation !== startGenerationRef.current
+      ) {
+        // A stop arrived while this start was still in flight. The stop has
+        // already set the drive state; only what this start acquired after it
+        // (room, audio session, GPS watch) is let go. Not an error: no error
+        // state, no Sentry. The status only leaves "connecting", which no
+        // room event reports when the stop came before the room existed.
+        console.log("[useDrivingAgent] Session start cancelled by a stop");
+        await disconnectRoom();
+        setStatus("disconnected");
+        return;
+      }
       console.error("[useDrivingAgent] Failed to start agent session:", error);
       Sentry.captureException(error, {
         tags: { feature: "atlas-voice", phase: "start-session" },
@@ -782,16 +1234,34 @@ export function useDrivingAgent() {
       DriveSessionStore.setAiState(DriveSessionState.AI_ERROR);
     } finally {
       connectingRef.current = false;
+      evaluateWakeWord();
     }
   }, [
     user,
     disconnectRoom,
+    disarmWakeWord,
+    evaluateWakeWord,
+    playStartCueOnce,
     publishClientMessage,
     publishBatterySnapshot,
     stopGpsWatch,
     stopPlanningHoldSound,
     clearPlanWatchdog,
   ]);
+  const startAgentSessionRef = useRef(startAgentSession);
+  startAgentSessionRef.current = startAgentSession;
+
+  // "AKBA" heard on the phone: the same connect path as tapping the orb. The
+  // rising cue follows once the session is live, never for a failed start.
+  handleWakeRef.current = () => {
+    // A disarm that raced the match (screen lock, drive end) took it back.
+    if (!wakeArmRequestedRef.current) return;
+    // The listener has already stopped itself.
+    wakeArmRequestedRef.current = false;
+    void startAgentSessionRef.current();
+    // If the start bailed out (it was already connecting), listen again.
+    evaluateWakeWord();
+  };
 
   const setMuted = useCallback(async (muted: boolean) => {
     const room = roomRef.current;
@@ -803,6 +1273,41 @@ export function useDrivingAgent() {
       console.error("[useDrivingAgent] Failed to toggle microphone:", error);
     }
   }, []);
+
+  // Re-check the wake word whenever the transport, the drive or the app's
+  // foreground state changes.
+  useEffect(() => {
+    evaluateWakeWord();
+  }, [status, evaluateWakeWord]);
+
+  useEffect(
+    () => DriveSessionStore.onStateChange(() => evaluateWakeWord()),
+    [evaluateWakeWord],
+  );
+
+  // A drive that ends without stopAgentSession (a closed preview that had
+  // gone live, a dismissed prompt) must not keep the next one from starting.
+  // Only the moment the drive goes away counts: a notify while there is no
+  // drive (e.g. AI_ERROR after a non-retryable token error) keeps the block.
+  useEffect(() => {
+    let hadDrive = DriveSessionStore.getContext() !== null;
+    return DriveSessionStore.onStateChange(() => {
+      const hasDrive = DriveSessionStore.getContext() !== null;
+      if (hadDrive && !hasDrive) {
+        blockAutoVoiceRestartRef.current = false;
+        reconnectAttemptsRef.current = 0;
+      }
+      hadDrive = hasDrive;
+    });
+  }, []);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (next) => {
+      appStateRef.current = next;
+      evaluateWakeWord();
+    });
+    return () => subscription.remove();
+  }, [evaluateWakeWord]);
 
   // Sync transport status to DriveSessionStore
   useEffect(() => {
@@ -870,8 +1375,12 @@ export function useDrivingAgent() {
     // startAgentSession — token server down, DNS, TLS, room.connect rejecting —
     // lands in its catch and sets "error", never "disconnected". Without this
     // the retry ladder only covered the one case that rarely happens.
+    // Not while a start is still running: a failed room.connect reports
+    // "disconnected" from the room and then "error" from the start's catch,
+    // and only the second may count, or one failure burns two attempts.
     if (
       (status === "disconnected" || status === "error") &&
+      !connectingRef.current &&
       !manuallyEndedRef.current &&
       !sessionStartedRef.current &&
       !blockAutoVoiceRestartRef.current &&
@@ -906,11 +1415,17 @@ export function useDrivingAgent() {
   }, [status, activity, startAgentSession, stopVoiceSessionPreservingDrive]);
 
   useEffect(() => {
+    unmountingRef.current = false;
+    void preloadEarcons();
     return () => {
+      unmountingRef.current = true;
+      // A start still in flight must not finish into an unmounted hook.
+      startGenerationRef.current += 1;
+      void disarmWakeWord();
       void stopPlanningHoldSound();
       void disconnectRoom();
     };
-  }, [disconnectRoom, stopPlanningHoldSound]);
+  }, [disarmWakeWord, disconnectRoom, stopPlanningHoldSound]);
 
   // Poll the agent's audio level for the visualizer
   useEffect(() => {
@@ -991,5 +1506,9 @@ export function useDrivingAgent() {
     stopConversation: stopVoiceSessionPreservingDrive,
     stopSession: stopAgentSession,
     setMuted,
+    /** The on-device wake word is listening for "AKBA" right now. */
+    wakeWordArmed: wakeWordStatus.armed,
+    /** Why the wake word is off, when something is missing (permission, device support). */
+    wakeWordUnavailableReason: wakeWordStatus.reason,
   };
 }

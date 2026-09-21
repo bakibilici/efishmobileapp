@@ -1,5 +1,6 @@
 import * as SQLite from "expo-sqlite";
 import * as SecureStore from "expo-secure-store";
+import { excludedBreaksPrefKey } from "./breakExclusions";
 
 const DB_NAME = "demo_users.db";
 const CURRENT_USER_ID_KEY = "demo_current_user_id";
@@ -173,9 +174,12 @@ const sha256Ascii = (input: string) => {
     .join("");
 };
 
+type PreferenceListener = (key: string, value: string | null) => void;
+
 class LocalUserStorageImpl {
   private db: SQLite.SQLiteDatabase | null = null;
   private isInitialized = false;
+  private preferenceListeners = new Set<PreferenceListener>();
 
   constructor() {
     void this.init();
@@ -424,6 +428,32 @@ class LocalUserStorageImpl {
     if (!this.isInitialized) await this.waitForInit();
     if (!this.db) return;
     await this.db.runAsync("INSERT OR REPLACE INTO local_meta (key, value) VALUES (?, ?)", [`pref:${key}`, value]);
+    this.notifyPreferenceChange(key, value);
+  }
+
+  public async deletePreference(key: string): Promise<void> {
+    if (!this.isInitialized) await this.waitForInit();
+    if (!this.db) return;
+    await this.db.runAsync("DELETE FROM local_meta WHERE key = ?", [`pref:${key}`]);
+    this.notifyPreferenceChange(key, null);
+  }
+
+  /** Called after every write, so a switch flipped in Profile takes effect in car mode at once. */
+  public onPreferenceChange(listener: PreferenceListener): () => void {
+    this.preferenceListeners.add(listener);
+    return () => {
+      this.preferenceListeners.delete(listener);
+    };
+  }
+
+  private notifyPreferenceChange(key: string, value: string | null) {
+    this.preferenceListeners.forEach((listener) => {
+      try {
+        listener(key, value);
+      } catch (error) {
+        console.error("[LocalUserStorage] Preference listener failed:", error);
+      }
+    });
   }
 
   /** KVKK m.11/d: remove the person's row on request. Drive sessions are deleted by the caller. */
@@ -431,6 +461,8 @@ class LocalUserStorageImpl {
     if (!this.isInitialized) await this.waitForInit();
     if (!this.db) return;
     await this.db.runAsync("DELETE FROM users WHERE id = ?", [userId]);
+    // The person's standing break exclusions go with the row.
+    await this.deletePreference(excludedBreaksPrefKey(userId));
     const current = await this.getCurrentUserId();
     if (current === userId) await this.clearCurrentUserId();
   }

@@ -100,6 +100,17 @@ export default function ProfileScreen() {
     await LocalUserStorage.setPreference("share_location", value ? "on" : "off");
   };
 
+  // On by default; car mode picks a change up at once (onPreferenceChange).
+  const [wakeWord, setWakeWord] = useState(true);
+  useEffect(() => {
+    void LocalUserStorage.getPreference("wake_word").then((v) => setWakeWord(v !== "off"));
+  }, [user?.id]);
+
+  const toggleWakeWord = async (value: boolean) => {
+    setWakeWord(value);
+    await LocalUserStorage.setPreference("wake_word", value ? "on" : "off");
+  };
+
   const handleExportData = async () => {
     if (!user) return;
     try {
@@ -424,6 +435,17 @@ export default function ProfileScreen() {
                   </Text>
                 </View>
                 <Switch value={shareLocation} onValueChange={toggleShareLocation} />
+              </View>
+              <View style={[styles.switchRow, { borderTopColor: colors.border }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.switchTitle, { color: colors.text }]}>
+                    “AKBA” diye seslenince uyan
+                  </Text>
+                  <Text style={[styles.switchSubtitle, { color: colors.textTertiary }]}>
+                    {"Dinleme telefonunda yapılır; ses, AKBA'ya seslenmeden telefondan çıkmaz."}
+                  </Text>
+                </View>
+                <Switch value={wakeWord} onValueChange={toggleWakeWord} />
               </View>
               <SettingsItem
                 icon="trash-outline"

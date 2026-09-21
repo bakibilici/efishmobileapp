@@ -1,5 +1,6 @@
 import type {
   RoutePlanData,
+  RoutePlanHighlightAlternative,
   RoutePlanInterestHighlight,
   RoutePlanLocation,
 } from "./DriveSessionStore";
@@ -27,7 +28,7 @@ export function mapGatewayHighlightToApp(
     id: String(h.id ?? ""),
     interestKey: String(h.interest_key),
     interestLabel: String(h.interest_label ?? ""),
-    icon: String(h.icon ?? "sparkles-outline"),
+    icon: String(h.icon ?? "location-outline"),
     shortLabel: String(h.short_label ?? ""),
     title: String(h.title ?? ""),
     message: String(h.message ?? ""),
@@ -37,6 +38,22 @@ export function mapGatewayHighlightToApp(
     distanceM: typeof h.distance_m === "number" ? h.distance_m : undefined,
     stationIndex:
       typeof h.station_index === "number" ? h.station_index : undefined,
+    poiSource:
+      h.poi_source === "places" || h.poi_source === "none" ? h.poi_source : undefined,
+    alternatives: Array.isArray(h.alternatives)
+      ? h.alternatives.map(mapGatewayAlternative).filter((a) => a.name !== "")
+      : undefined,
+  };
+}
+
+function mapGatewayAlternative(raw: unknown): RoutePlanHighlightAlternative {
+  const a = (raw ?? {}) as Record<string, unknown>;
+  return {
+    name: String(a.name ?? ""),
+    title: typeof a.title === "string" ? a.title : undefined,
+    category: typeof a.category === "string" ? a.category : undefined,
+    distanceM: typeof a.distance_m === "number" ? a.distance_m : undefined,
+    reason: typeof a.reason === "string" ? a.reason : undefined,
   };
 }
 

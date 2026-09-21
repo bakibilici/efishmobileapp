@@ -1,0 +1,171 @@
+diff --git a/node_modules/expo-speech-recognition/build/ExpoSpeechRecognitionModule.types.d.ts b/node_modules/expo-speech-recognition/build/ExpoSpeechRecognitionModule.types.d.ts
+index fa62cc8..412bdd5 100644
+--- a/node_modules/expo-speech-recognition/build/ExpoSpeechRecognitionModule.types.d.ts
++++ b/node_modules/expo-speech-recognition/build/ExpoSpeechRecognitionModule.types.d.ts
+@@ -643,8 +643,12 @@ export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSp
+     };
+     /**
+      * Whether the on-device speech recognition is available on the device.
++     *
++     * iOS (patched): pass the locale you will start with, e.g. "tr-TR". Without it the
++     * check uses the device's default language. Android ignores the locale; do not pass
++     * it there (the native function takes no arguments).
+      */
+-    supportsOnDeviceRecognition(): boolean;
++    supportsOnDeviceRecognition(locale?: string): boolean;
+     /**
+      * Whether the recording feature is available on the device.
+      *
+@@ -655,8 +659,11 @@ export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSp
+      * Whether on-device speech recognition is available.
+      *
+      * If this method returns false, `start()` will fail and emit an error event with the code `service-not-allowed` or `language-not-supported`.
++     *
++     * iOS (patched): the optional locale checks that language's recognizer instead of the
++     * device default's. Android ignores it; do not pass it there.
+      */
+-    isRecognitionAvailable(): boolean;
++    isRecognitionAvailable(locale?: string): boolean;
+     /**
+      * Downloads the offline model for the specified locale.
+      * Note: this is only supported on Android 13 and above.
+diff --git a/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognitionModule.swift b/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognitionModule.swift
+index 5264fa4..208587d 100644
+--- a/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognitionModule.swift
++++ b/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognitionModule.swift
+@@ -343,18 +343,24 @@ public class ExpoSpeechRecognitionModule: Module {
+       try AVAudioSession.sharedInstance().setActive(value, options: setActiveOptions)
+     }
+ 
+-    Function("supportsOnDeviceRecognition") { () -> Bool in
+-      let recognizer = SFSpeechRecognizer()
+-      return recognizer?.supportsOnDeviceRecognition ?? false
++    // `locale` is optional: without it the check runs against the phone's
++    // default language, which says nothing about the locale passed to start().
++    Function("supportsOnDeviceRecognition") { (localeIdentifier: String?) -> Bool in
++      guard let recognizer = makeRecognizer(localeIdentifier: localeIdentifier) else {
++        return false
++      }
++      return recognizer.supportsOnDeviceRecognition
+     }
+ 
+     Function("supportsRecording") { () -> Bool in
+       return true
+     }
+ 
+-    Function("isRecognitionAvailable") { () -> Bool in
+-      let recognizer = SFSpeechRecognizer()
+-      return recognizer?.isAvailable ?? false
++    Function("isRecognitionAvailable") { (localeIdentifier: String?) -> Bool in
++      guard let recognizer = makeRecognizer(localeIdentifier: localeIdentifier) else {
++        return false
++      }
++      return recognizer.isAvailable
+     }
+ 
+     Function("stop") { () -> Void in
+@@ -409,6 +415,17 @@ public class ExpoSpeechRecognitionModule: Module {
+     }
+   }
+ 
++  /** A recognizer for the given locale, or for the device default when none is given. */
++  func makeRecognizer(localeIdentifier: String?) -> SFSpeechRecognizer? {
++    guard let localeIdentifier else {
++      return SFSpeechRecognizer()
++    }
++    guard let locale = resolveLocale(localeIdentifier: localeIdentifier) else {
++      return nil
++    }
++    return SFSpeechRecognizer(locale: locale)
++  }
++
+   /** Normalizes the locale for compatibility between Android and iOS */
+   func resolveLocale(localeIdentifier: String) -> Locale? {
+     // The supportedLocales() method returns the locales in the format with dashes, e.g. "en-US"
+@@ -542,6 +559,9 @@ public class ExpoSpeechRecognitionModule: Module {
+         sendEvent("error", ["error": "interrupted", "message": recognitionError.message])
+       case .audioRouteChanged:
+         sendEvent("error", ["error": "audio-capture", "message": recognitionError.message])
++      case .onDeviceRecognitionUnavailable:
++        sendEvent(
++          "error", ["error": "language-not-supported", "message": recognitionError.message])
+       }
+       return
+     }
+diff --git a/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognizer.swift b/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognizer.swift
+index c474f80..bd0391d 100644
+--- a/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognizer.swift
++++ b/node_modules/expo-speech-recognition/ios/ExpoSpeechRecognizer.swift
+@@ -13,6 +13,7 @@ enum RecognizerError: Error {
+   case audioInputBusy
+   case audioSessionInterrupted
+   case audioRouteChanged
++  case onDeviceRecognitionUnavailable
+ 
+   var message: String {
+     switch self {
+@@ -25,6 +26,9 @@ enum RecognizerError: Error {
+     case .audioInputBusy: return "The audio input is busy"
+     case .audioSessionInterrupted: return "Audio session was interrupted"
+     case .audioRouteChanged: return "Audio route changed and failed to restart the audio engine"
++    case .onDeviceRecognitionUnavailable:
++      return
++        "On-device recognition was required but is not supported for this locale; refusing to fall back to server-based recognition"
+     }
+   }
+ }
+@@ -220,7 +224,7 @@ actor ExpoSpeechRecognizer: ObservableObject {
+     }
+ 
+     do {
+-      let request = Self.prepareRequest(
++      let request = try Self.prepareRequest(
+         options: options,
+         recognizer: recognizer
+       )
+@@ -568,7 +572,13 @@ actor ExpoSpeechRecognizer: ObservableObject {
+   private static func prepareRequest(
+     options: SpeechRecognitionOptions,
+     recognizer: SFSpeechRecognizer
+-  ) -> SFSpeechRecognitionRequest {
++  ) throws -> SFSpeechRecognitionRequest {
++    // A caller that requires on-device recognition must never have its audio
++    // sent to Apple's servers: fail instead of silently dropping the flag.
++    if options.requiresOnDeviceRecognition && !recognizer.supportsOnDeviceRecognition {
++      throw RecognizerError.onDeviceRecognitionUnavailable
++    }
++
+     let request = SFSpeechAudioBufferRecognitionRequest()
+ 
+     // We also force-enable partial results on non-continuous mode,
+diff --git a/node_modules/expo-speech-recognition/src/ExpoSpeechRecognitionModule.types.ts b/node_modules/expo-speech-recognition/src/ExpoSpeechRecognitionModule.types.ts
+index e306d49..1e29a6b 100644
+--- a/node_modules/expo-speech-recognition/src/ExpoSpeechRecognitionModule.types.ts
++++ b/node_modules/expo-speech-recognition/src/ExpoSpeechRecognitionModule.types.ts
+@@ -689,8 +689,12 @@ export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSp
+   };
+   /**
+    * Whether the on-device speech recognition is available on the device.
++   *
++   * iOS (patched): pass the locale you will start with, e.g. "tr-TR". Without it the
++   * check uses the device's default language. Android ignores the locale; do not pass
++   * it there (the native function takes no arguments).
+    */
+-  supportsOnDeviceRecognition(): boolean;
++  supportsOnDeviceRecognition(locale?: string): boolean;
+   /**
+    * Whether the recording feature is available on the device.
+    *
+@@ -701,8 +705,11 @@ export declare class ExpoSpeechRecognitionModuleType extends NativeModule<ExpoSp
+    * Whether on-device speech recognition is available.
+    *
+    * If this method returns false, `start()` will fail and emit an error event with the code `service-not-allowed` or `language-not-supported`.
++   *
++   * iOS (patched): the optional locale checks that language's recognizer instead of the
++   * device default's. Android ignores it; do not pass it there.
+    */
+-  isRecognitionAvailable(): boolean;
++  isRecognitionAvailable(locale?: string): boolean;
+ 
+   /**
+    * Downloads the offline model for the specified locale.

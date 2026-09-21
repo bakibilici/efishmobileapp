@@ -10,10 +10,9 @@ type Notice = { icon: keyof typeof Ionicons.glyphMap; text: string };
 
 function noticeFor(prev: ActivityState, next: ActivityState): Notice | null {
   switch (next) {
+    // Idle needs no banner: the activity bar right above already reads "Beklemede".
     case ActivityState.IDLE:
-      return prev === ActivityState.UNKNOWN
-        ? null
-        : { icon: "moon", text: "Bekleme bildirimi: hareketsiz görünüyorsunuz." };
+      return null;
     case ActivityState.CAR:
       return { icon: "car-sport", text: "Sürüş algılandı. AKBA sürüş moduna geçiyor." };
     case ActivityState.CHARGING:
