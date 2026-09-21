@@ -1,5 +1,6 @@
 /**
- * Asserts the pure helpers behind the wake word and the break exclusions.
+ * Asserts the pure helpers behind the wake word, the car-mode header, the
+ * route-planning hold music and the break exclusions.
  * The repo has no test runner installed, so this runs under tsx:
  *
  *   npx tsx scripts/voice/check-voice-helpers.ts
@@ -35,6 +36,23 @@ import {
   wakeWordLocaleCandidates,
 } from "../../services/voice/wakeWordLocales";
 import { foldTurkish, matchesWakeWord } from "../../services/voice/wakeWordMatcher";
+import {
+  HEADER_COPY,
+  resolveHeaderLine,
+  ROUTE_PLAN_FAILED_LINE_MS,
+  routePlanFailedLineRemainingMs,
+  TOOL_STATUS_COPY,
+  type HeaderInput,
+} from "../../services/voice/carModeHeader";
+import {
+  HOLD_NO_SPEECH_MS,
+  HOLD_QUIET_MS,
+  holdGateDecision,
+  INITIAL_HOLD_GATE,
+  reduceHoldGate,
+  type HoldGateEvent,
+  type HoldGateState,
+} from "../../services/voice/planningHoldGate";
 
 let passed = 0;
 const check = (name: string, fn: () => void) => {
@@ -210,6 +228,291 @@ check("the reason names every locale that could not be used", () => {
     describeUnusableLocales(["tr-TR"], ["en-US"]),
     "no on-device recognizer for tr-TR; speech recognizer unavailable for en-US",
   );
+});
+
+// ── Car-mode header ───────────────────────────────────────────────────────
+const header = (overrides: Partial<HeaderInput> = {}) =>
+  resolveHeaderLine({
+    status: "connected",
+    agentState: "listening",
+    pendingToolText: null,
+    planning: false,
+    aiError: false,
+    aiConnecting: false,
+    hasRoute: false,
+    hasEverConnected: true,
+    wakeWordArmed: false,
+    thinking: false,
+    routePlanFailed: false,
+    ...overrides,
+  });
+
+check("the fallback copy is one calm line per state", () => {
+  assert.equal(HEADER_COPY.ask, "Nereye gidiyoruz?");
+  assert.equal(HEADER_COPY.wake, "“AKBA” de, dinleyeyim");
+  assert.equal(HEADER_COPY.tap, "Konuşmak için AKBA'ya dokun");
+  assert.equal(HEADER_COPY.routePlanFailed, "Rota hesaplanamadı");
+  for (const line of [HEADER_COPY.ask, HEADER_COPY.wake, HEADER_COPY.tap]) {
+    assert.ok(!line.includes("\n"), line);
+    assert.notEqual(line, line.toLocaleUpperCase("tr-TR"), line);
+  }
+});
+
+check("live with no route and no work asks where to", () => {
+  for (const agentState of ["listening", "speaking", "idle"]) {
+    assert.deepEqual(header({ agentState }), { kind: "prompt", prompt: "ask" }, agentState);
+  }
+  // A "thinking" too short to be shown yet does not empty the row either.
+  assert.deepEqual(header({ agentState: "thinking" }), { kind: "prompt", prompt: "ask" });
+});
+
+check("passive with no route says how to start talking", () => {
+  const passive = { status: "disconnected" as const, agentState: null, hasEverConnected: false };
+  assert.deepEqual(header(passive), { kind: "prompt", prompt: "tap" });
+  assert.deepEqual(header({ ...passive, wakeWordArmed: true }), { kind: "prompt", prompt: "wake" });
+  // Listening for its name is not a broken connection, even after one.
+  assert.deepEqual(
+    header({ ...passive, hasEverConnected: true, wakeWordArmed: true }),
+    { kind: "prompt", prompt: "wake" },
+  );
+});
+
+check("with a route the trip is the fallback, live or passive", () => {
+  assert.deepEqual(header({ hasRoute: true }), { kind: "trip" });
+  assert.deepEqual(header({ hasRoute: true, status: "disconnected", agentState: null }), {
+    kind: "trip",
+  });
+  assert.deepEqual(
+    header({ hasRoute: true, status: "disconnected", agentState: null, wakeWordArmed: true }),
+    { kind: "trip" },
+  );
+});
+
+check("work in progress and errors replace the fallback", () => {
+  assert.deepEqual(header({ pendingToolText: TOOL_STATUS_COPY.create_route_plan }), {
+    kind: "busy",
+    text: "Rota planlanıyor…",
+  });
+  assert.deepEqual(header({ pendingToolText: TOOL_STATUS_COPY.geocodeDestination }), {
+    kind: "busy",
+    text: "Adresi arıyor…",
+  });
+  assert.deepEqual(header({ planning: true, hasRoute: true }), {
+    kind: "busy",
+    text: "Rota planlanıyor…",
+  });
+  assert.deepEqual(header({ thinking: true }), { kind: "busy", text: "Düşünüyor…" });
+  assert.deepEqual(header({ status: "connecting", agentState: null }), {
+    kind: "busy",
+    text: "Bağlanıyor…",
+  });
+  assert.deepEqual(header({ agentState: "initializing" }), { kind: "busy", text: "Bağlanıyor…" });
+  assert.deepEqual(header({ status: "error", agentState: null }), { kind: "offline" });
+  assert.deepEqual(header({ status: "disconnected", agentState: null }), { kind: "offline" });
+  assert.deepEqual(header({ aiError: true, hasRoute: true }), { kind: "offline" });
+  // A pending call left by a dropped session is not work in progress.
+  assert.deepEqual(
+    header({
+      status: "disconnected",
+      agentState: null,
+      hasEverConnected: false,
+      pendingToolText: TOOL_STATUS_COPY.create_route_plan,
+    }),
+    { kind: "prompt", prompt: "tap" },
+  );
+});
+
+check("a failed plan shows briefly, under real work and connection trouble", () => {
+  assert.deepEqual(header({ routePlanFailed: true }), { kind: "failed" });
+  assert.deepEqual(header({ routePlanFailed: true, hasRoute: true }), { kind: "failed" });
+  assert.deepEqual(header({ routePlanFailed: true, agentState: "speaking" }), { kind: "failed" });
+  // It says more than "Düşünüyor…" does.
+  assert.deepEqual(header({ routePlanFailed: true, thinking: true }), { kind: "failed" });
+  // A new plan, or a lost connection, is newer news.
+  assert.deepEqual(header({ routePlanFailed: true, planning: true }).kind, "busy");
+  assert.deepEqual(header({ routePlanFailed: true, status: "error", agentState: null }), {
+    kind: "offline",
+  });
+});
+
+check("the failed-plan line lasts about five seconds", () => {
+  assert.equal(ROUTE_PLAN_FAILED_LINE_MS, 5000);
+  assert.equal(routePlanFailedLineRemainingMs(null, 1000), 0);
+  assert.equal(routePlanFailedLineRemainingMs(1000, 1000), 5000);
+  assert.equal(routePlanFailedLineRemainingMs(1000, 4000), 2000);
+  assert.equal(routePlanFailedLineRemainingMs(1000, 6000), 0);
+  assert.equal(routePlanFailedLineRemainingMs(1000, 60000), 0);
+});
+
+// ── Route-planning hold music ─────────────────────────────────────────────
+const gateAfter = (events: HoldGateEvent[], from: HoldGateState = INITIAL_HOLD_GATE) =>
+  events.reduce(reduceHoldGate, from);
+const agentState = (state: string | null, at: number): HoldGateEvent => ({
+  type: "agent_state",
+  state,
+  at,
+});
+const speaking = (at: number) => agentState("speaking", at);
+/** How say() ends: AKBA's turn is over. */
+const listening = (at: number) => agentState("listening", at);
+/** How the model's own words before a tool call end: more speech is coming. */
+const thinking = (at: number) => agentState("thinking", at);
+const planStart = (at: number): HoldGateEvent => ({ type: "plan_start", at });
+const planEnd: HoldGateEvent = { type: "plan_end" };
+
+check("no plan, no music", () => {
+  assert.deepEqual(holdGateDecision(INITIAL_HOLD_GATE, 0), { mode: "off", recheckInMs: null });
+  const talked = gateAfter([speaking(0), listening(1000)]);
+  assert.equal(holdGateDecision(talked, 5000).mode, "off");
+});
+
+check("the no-speech wait is long enough for a slow first chunk", () => {
+  assert.ok(HOLD_NO_SPEECH_MS >= 4000);
+});
+
+check("waits for the interim sentence, then starts after a short quiet", () => {
+  // tool_start, then AKBA says "Rotanı hazırlıyorum, birkaç saniye lütfen."
+  let gate = gateAfter([planStart(1000)]);
+  assert.deepEqual(holdGateDecision(gate, 1000), {
+    mode: "ready",
+    recheckInMs: HOLD_NO_SPEECH_MS,
+  });
+  gate = gateAfter([speaking(1300)], gate);
+  assert.deepEqual(holdGateDecision(gate, 1300), { mode: "ready", recheckInMs: null });
+  // Past the no-speech wait, still talking: still silent.
+  const endsAt = 1000 + HOLD_NO_SPEECH_MS + 1000;
+  assert.equal(holdGateDecision(gate, endsAt - 1).mode, "ready");
+  gate = gateAfter([listening(endsAt)], gate);
+  assert.deepEqual(holdGateDecision(gate, endsAt), { mode: "ready", recheckInMs: HOLD_QUIET_MS });
+  assert.deepEqual(holdGateDecision(gate, endsAt + HOLD_QUIET_MS), {
+    mode: "playing",
+    recheckInMs: null,
+  });
+});
+
+check("already speaking at tool_start counts as the interim sentence", () => {
+  let gate = gateAfter([speaking(900), planStart(1000)]);
+  assert.equal(holdGateDecision(gate, 1000).mode, "ready");
+  gate = gateAfter([listening(2000)], gate);
+  assert.equal(holdGateDecision(gate, 2000 + HOLD_QUIET_MS - 1).mode, "ready");
+  assert.equal(holdGateDecision(gate, 2000 + HOLD_QUIET_MS).mode, "playing");
+});
+
+check("the model's words before the interim sentence do not let the music in", () => {
+  // "Tamam, bakıyorum." is still playing when tool_start arrives, ends in
+  // "thinking", and the interim sentence follows after a realistic gap.
+  for (const gap of [600, 1000, 1500]) {
+    let gate = gateAfter([speaking(0), planStart(300), thinking(1200)]);
+    // Where a plain quiet debounce would have opened, it keeps waiting.
+    assert.deepEqual(holdGateDecision(gate, 1200 + HOLD_QUIET_MS), {
+      mode: "ready",
+      recheckInMs: HOLD_NO_SPEECH_MS - HOLD_QUIET_MS,
+    });
+    assert.equal(holdGateDecision(gate, 1200 + gap - 1).mode, "ready");
+    gate = gateAfter([speaking(1200 + gap)], gate);
+    assert.equal(holdGateDecision(gate, 1200 + gap + 100).mode, "ready");
+    gate = gateAfter([listening(4200 + gap)], gate);
+    assert.equal(holdGateDecision(gate, 4200 + gap + HOLD_QUIET_MS - 1).mode, "ready");
+    assert.equal(holdGateDecision(gate, 4200 + gap + HOLD_QUIET_MS).mode, "playing");
+  }
+  // The same when the model's words start only after tool_start.
+  for (const gap of [600, 1500]) {
+    let gate = gateAfter([planStart(0), speaking(200), thinking(900)]);
+    assert.equal(holdGateDecision(gate, 900 + gap - 1).mode, "ready");
+    gate = gateAfter([speaking(900 + gap), listening(3500 + gap)], gate);
+    assert.equal(holdGateDecision(gate, 3500 + gap + HOLD_QUIET_MS).mode, "playing");
+  }
+});
+
+check("speech that ends in thinking with nothing after waits the no-speech time", () => {
+  const gate = gateAfter([planStart(0), speaking(100), thinking(1000)]);
+  assert.equal(holdGateDecision(gate, 1000 + HOLD_NO_SPEECH_MS - 1).mode, "ready");
+  assert.equal(holdGateDecision(gate, 1000 + HOLD_NO_SPEECH_MS).mode, "playing");
+});
+
+check("thinking that ends in listening without more speech lets the music in", () => {
+  let gate = gateAfter([planStart(0), speaking(100), thinking(1000)]);
+  assert.equal(holdGateDecision(gate, 1800).mode, "ready");
+  gate = gateAfter([listening(1800)], gate);
+  // The quiet began at 1000, so the debounce is long over.
+  assert.deepEqual(holdGateDecision(gate, 1800), { mode: "playing", recheckInMs: null });
+});
+
+check("a pause between two sentences does not let the music in", () => {
+  let gate = gateAfter([planStart(0), speaking(100), listening(1000)]);
+  assert.equal(holdGateDecision(gate, 1100).mode, "ready");
+  gate = gateAfter([speaking(1150)], gate);
+  assert.equal(holdGateDecision(gate, 1400).mode, "ready");
+  gate = gateAfter([listening(3000)], gate);
+  assert.equal(holdGateDecision(gate, 3000 + HOLD_QUIET_MS).mode, "playing");
+});
+
+check("starts on its own when AKBA says nothing", () => {
+  // Speech that ended before the plan started is not the interim sentence.
+  const gate = gateAfter([speaking(0), listening(500), planStart(1000)]);
+  assert.deepEqual(holdGateDecision(gate, 1000 + HOLD_QUIET_MS), {
+    mode: "ready",
+    recheckInMs: HOLD_NO_SPEECH_MS - HOLD_QUIET_MS,
+  });
+  assert.equal(holdGateDecision(gate, 1000 + HOLD_NO_SPEECH_MS - 1).mode, "ready");
+  assert.deepEqual(holdGateDecision(gate, 1000 + HOLD_NO_SPEECH_MS), {
+    mode: "playing",
+    recheckInMs: null,
+  });
+});
+
+check("AKBA speaking mid-plan silences the music until it is quiet again", () => {
+  let gate = gateAfter([planStart(0)]);
+  const opened = HOLD_NO_SPEECH_MS;
+  assert.equal(holdGateDecision(gate, opened).mode, "playing");
+  gate = gateAfter([speaking(opened + 1000)], gate);
+  assert.equal(holdGateDecision(gate, opened + 1000).mode, "ready");
+  gate = gateAfter([listening(opened + 3000)], gate);
+  assert.equal(holdGateDecision(gate, opened + 3100).mode, "ready");
+  assert.equal(holdGateDecision(gate, opened + 3000 + HOLD_QUIET_MS).mode, "playing");
+});
+
+check("the driver talking mid-plan leaves the music on until AKBA answers", () => {
+  let gate = gateAfter([planStart(0), speaking(100), listening(2000)]);
+  assert.equal(holdGateDecision(gate, 3000).mode, "playing");
+  // The driver says something: AKBA thinks about it, still silent.
+  gate = gateAfter([thinking(3000)], gate);
+  assert.equal(holdGateDecision(gate, 3500).mode, "playing");
+  gate = gateAfter([speaking(3800)], gate);
+  assert.equal(holdGateDecision(gate, 3800).mode, "ready");
+});
+
+check("the plan's end stops the music for good, even while AKBA is quiet", () => {
+  let gate = gateAfter([planStart(0), speaking(100), listening(1000)]);
+  assert.equal(holdGateDecision(gate, 2000).mode, "playing");
+  gate = gateAfter([planEnd], gate);
+  assert.deepEqual(holdGateDecision(gate, 2000), { mode: "off", recheckInMs: null });
+  // AKBA reading out the result, then going quiet, brings nothing back.
+  gate = gateAfter([speaking(2100), listening(5000)], gate);
+  assert.equal(holdGateDecision(gate, 9000).mode, "off");
+  // An agent that left (state null) is quiet, not a new plan.
+  assert.equal(holdGateDecision(gateAfter([agentState(null, 9100)], gate), 9500).mode, "off");
+});
+
+check("a new plan starts a fresh wait", () => {
+  let gate = gateAfter([planStart(0), speaking(100), listening(1000), planEnd]);
+  gate = gateAfter([planStart(10000)], gate);
+  // The earlier sentence does not count for this plan.
+  assert.equal(holdGateDecision(gate, 10000 + HOLD_QUIET_MS).mode, "ready");
+  assert.equal(holdGateDecision(gate, 10000 + HOLD_NO_SPEECH_MS).mode, "playing");
+  // A replacement plan while one is pending waits again too.
+  gate = gateAfter([planStart(20000), speaking(20050)], gate);
+  assert.equal(holdGateDecision(gate, 20100).mode, "ready");
+});
+
+check("repeated states change nothing", () => {
+  const gate = gateAfter([planStart(0), speaking(100)]);
+  assert.equal(reduceHoldGate(gate, speaking(200)), gate);
+  const silent = gateAfter([listening(300)], gate);
+  assert.equal(reduceHoldGate(silent, listening(400)), silent);
+  assert.equal(silent.quietSince, 300);
+  // Moving between quiet states keeps when the quiet began.
+  assert.equal(gateAfter([thinking(500), listening(900)], silent).quietSince, 300);
 });
 
 // ── Break exclusions ──────────────────────────────────────────────────────

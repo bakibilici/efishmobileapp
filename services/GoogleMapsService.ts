@@ -84,11 +84,13 @@ export async function fetchDirections(
         duration: totalDuration,
       };
     } else {
-      console.error('Directions API error:', data.status, data.error_message);
+      // Handled by the caller (the route keeps its straight-line shape), so a
+      // warning: the dev overlay must not take it for a crash.
+      console.warn('Directions API error:', data.status, data.error_message);
       return null;
     }
   } catch (error) {
-    console.error('Failed to fetch directions:', error);
+    console.warn('Failed to fetch directions:', error);
     return null;
   }
 }

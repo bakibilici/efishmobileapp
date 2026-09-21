@@ -1,6 +1,5 @@
 import { AudioSession } from "@livekit/react-native";
 import * as Sentry from "@sentry/react-native";
-import { Audio } from "expo-av";
 import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
 import type { RemoteAudioTrack, RemoteParticipant } from "livekit-client";
@@ -33,12 +32,18 @@ import {
 } from "../services/routePersonalization";
 import { normalizeRoutePlanFromGateway } from "../services/routePlanGateway";
 import { SpeedStore } from "../services/sensors/SpeedStore";
-import { applyAkbaAudioMode } from "../services/voice/audioMode";
 import {
   playListenEnd,
   playListenStart,
   preloadEarcons,
 } from "../services/voice/Earcons";
+import { PlanningHoldSound } from "../services/voice/PlanningHoldSound";
+import {
+  holdGateDecision,
+  INITIAL_HOLD_GATE,
+  reduceHoldGate,
+  type HoldGateEvent,
+} from "../services/voice/planningHoldGate";
 import {
   requestWakeWordPermissionIfNeverAsked,
   WakeWordListener,
@@ -186,10 +191,11 @@ export function useDrivingAgent() {
   const audioSessionActiveRef = useRef(false);
   /** preference_update events are applied one at a time, in arrival order. */
   const preferenceQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const planningSoundRef = useRef<Audio.Sound | null>(null);
-  const planningFeedbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(
-    null,
-  );
+  /** The route-planning hold loop; planningHoldGate decides when it is heard. */
+  const holdSoundRef = useRef<PlanningHoldSound | null>(null);
+  const holdGateRef = useRef(INITIAL_HOLD_GATE);
+  /** Re-applies the gate when it opens by itself (quiet debounce, no-speech wait). */
+  const holdGateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const roomRef = useRef<Room | null>(null);
   const agentParticipantRef = useRef<RemoteParticipant | null>(null);
   /** The battery snapshot is re-sent once per connection, on the agent's first "listening". */
@@ -198,6 +204,12 @@ export function useDrivingAgent() {
   const planWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Failsafe: if planEvRoute never returns a tool_end, unstick the UI. */
   const PLAN_WATCHDOG_MS = 45000;
+  /**
+   * planEvRoute calls started (tool_start) and not ended yet (any tool_end,
+   * superseded ones included). Reset when the plan is given up on (watchdog,
+   * agent gone) or the session ends.
+   */
+  const pendingPlanStartsRef = useRef(0);
   const agentAbsentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const MAX_RECONNECT_ATTEMPTS = 3;
   const [status, setStatus] = useState<VoiceStatus>("disconnected");
@@ -212,6 +224,11 @@ export function useDrivingAgent() {
   const [lastToolEvent, setLastToolEvent] = useState<AgentToolCall | null>(
     null,
   );
+  /**
+   * When the latest route plan ended without a route to show (planEvRoute
+   * failed, or came back empty); null once a plan starts or succeeds.
+   */
+  const [routePlanFailedAt, setRoutePlanFailedAt] = useState<number | null>(null);
   const currentLocationRef = useRef("0,0");
   const userInterestsRef = useRef<string[]>([]);
   userInterestsRef.current = user?.interests ?? [];
@@ -350,47 +367,86 @@ export function useDrivingAgent() {
     [],
   );
 
-  const stopPlanningHoldSound = useCallback(async () => {
-    try {
-      if (planningFeedbackTimerRef.current) {
-        clearInterval(planningFeedbackTimerRef.current);
-        planningFeedbackTimerRef.current = null;
-      }
-      const sound = planningSoundRef.current;
-      planningSoundRef.current = null;
-      if (!sound) return;
-      await sound.stopAsync();
-      await sound.unloadAsync();
-    } catch (error) {
-      console.error("[useDrivingAgent] Failed to stop planning hold sound:", error);
+  /**
+   * Brings the hold loop (and its haptic ticks) in line with the gate, and
+   * comes back by itself when the gate is due to open later. Resolves once
+   * the sound got there.
+   */
+  const applyHoldGate = useCallback((): Promise<void> => {
+    if (holdGateTimerRef.current) {
+      clearTimeout(holdGateTimerRef.current);
+      holdGateTimerRef.current = null;
     }
+    const { mode, recheckInMs } = holdGateDecision(holdGateRef.current, Date.now());
+    if (recheckInMs !== null) {
+      holdGateTimerRef.current = setTimeout(() => {
+        holdGateTimerRef.current = null;
+        void applyHoldGateRef.current();
+      }, recheckInMs);
+    }
+    if (!holdSoundRef.current) {
+      if (mode === "off") return Promise.resolve();
+      holdSoundRef.current = new PlanningHoldSound(ROUTE_PLANNING_HOLD_SOUND);
+    }
+    return holdSoundRef.current.set(mode);
   }, []);
+  const applyHoldGateRef = useRef(applyHoldGate);
+  applyHoldGateRef.current = applyHoldGate;
 
-  const startPlanningHoldSound = useCallback(async () => {
-    try {
-      await stopPlanningHoldSound();
-      await Haptics.selectionAsync();
-      planningFeedbackTimerRef.current = setInterval(() => {
-        void Haptics.selectionAsync();
-      }, 2600);
-      await applyAkbaAudioMode();
-      const { sound } = await Audio.Sound.createAsync(
-        ROUTE_PLANNING_HOLD_SOUND,
-        {
-          shouldPlay: true,
-          isLooping: true,
-          volume: 0.52,
-          progressUpdateIntervalMillis: 1000,
-        },
-      );
-      planningSoundRef.current = sound;
-    } catch (error) {
-      console.error(
-        "[useDrivingAgent] Failed to start planning hold sound:",
-        error,
-      );
+  const dispatchHoldGate = useCallback(
+    (event: HoldGateEvent): Promise<void> => {
+      holdGateRef.current = reduceHoldGate(holdGateRef.current, event);
+      return applyHoldGate();
+    },
+    [applyHoldGate],
+  );
+
+  /**
+   * Every change of AKBA's state goes through here. The hold music needs the
+   * state itself, not only "speaking": speech that ends in "thinking" has
+   * more coming, speech that ends in "listening" is over.
+   */
+  const updateAgentState = useCallback(
+    (state: AgentState | null) => {
+      setAgentState(state);
+      void dispatchHoldGate({ type: "agent_state", state, at: Date.now() });
+    },
+    [dispatchHoldGate],
+  );
+
+  /** Stops the hold music for good (fading out); safe to call when none plays. */
+  const stopPlanningHoldSound = useCallback(
+    () => dispatchHoldGate({ type: "plan_end" }),
+    [dispatchHoldGate],
+  );
+
+  /**
+   * A route plan started. The music waits for AKBA's interim sentence to end
+   * (or for a silent start to pass) and never plays over AKBA's voice.
+   */
+  const startPlanningHoldSound = useCallback(
+    () => dispatchHoldGate({ type: "plan_start", at: Date.now() }),
+    [dispatchHoldGate],
+  );
+
+  /**
+   * Ends the route plan on this phone without a result: no route and no
+   * "Rota hesaplanamadı". For a plan nothing will finish any more (its agent
+   * left, the watchdog gave up) and for one that ended superseded with no
+   * newer plan running. A tool_end that still comes later is ingested as usual.
+   */
+  const abandonPendingPlan = useCallback(() => {
+    pendingPlanStartsRef.current = 0;
+    clearPlanWatchdog();
+    settlePendingToolCalls(
+      "error",
+      (call) => call.toolName === ATLAS_TOOL_NAME_MAP.planEvRoute,
+    );
+    void stopPlanningHoldSound();
+    if (DriveSessionStore.getState() === DriveSessionState.PLANNING_ROUTE) {
+      DriveSessionStore.setAiState(DriveSessionState.AI_LISTENING);
     }
-  }, [stopPlanningHoldSound]);
+  }, [clearPlanWatchdog, settlePendingToolCalls, stopPlanningHoldSound]);
 
   const stopGpsWatch = useCallback(() => {
     gpsWatchRef.current?.remove();
@@ -403,10 +459,16 @@ export function useDrivingAgent() {
       stopGpsWatch();
       clearPlanWatchdog();
       clearAgentAbsentTimer();
+      // No plan outlives its session; every end of one comes through here.
+      pendingPlanStartsRef.current = 0;
+      void stopPlanningHoldSound();
       const room = roomRef.current;
       roomRef.current = null;
       agentParticipantRef.current = null;
-      setAgentState(null);
+      updateAgentState(null);
+      // A mute belongs to the session it was set in: the passive header shows
+      // the mic as it will be, and the next session starts listening.
+      setIsMuted(false);
       setAgentAudioTrack(null);
       VoiceLevelBus.reset();
       // LiveKit and the recognizer share one audio session: the wake word
@@ -439,6 +501,8 @@ export function useDrivingAgent() {
     stopGpsWatch,
     clearPlanWatchdog,
     clearAgentAbsentTimer,
+    stopPlanningHoldSound,
+    updateAgentState,
     disarmWakeWord,
     markVoicePassive,
     evaluateWakeWord,
@@ -543,7 +607,8 @@ export function useDrivingAgent() {
       // auto-reconnect and move the UI back to passive navigation.
       blockAutoVoiceRestartRef.current = true;
       sessionStartedRef.current = false;
-      await stopPlanningHoldSound();
+      // Not awaited: the fade must not hold up the disconnect.
+      void stopPlanningHoldSound();
       await disconnectRoom();
     } catch (error) {
       console.error(
@@ -566,7 +631,7 @@ export function useDrivingAgent() {
     // The drive is over; the next explicit start should be a fresh session.
     forceFreshSessionRef.current = true;
     try {
-      await stopPlanningHoldSound();
+      void stopPlanningHoldSound();
       await disconnectRoom();
       DriveSessionStore.endSession();
       // Whatever held this drive's voice passive ends with it: the next drive
@@ -584,15 +649,18 @@ export function useDrivingAgent() {
    * (polyline/spans), so the map polyline is re-fetched via Google Directions.
    */
   const ingestRoutePlanResult = useCallback(
-    (result: Record<string, any>) => {
+    (result: Record<string, any>): boolean => {
       const data = result?.data;
       const sections = data?.routes?.[0]?.sections;
       if (!result?.success || !Array.isArray(sections) || sections.length === 0) {
-        console.error(
+        // Expected (e.g. a start or destination outside the gateway's coverage)
+        // and handled: AKBA tells the driver, the header shows it briefly. A
+        // warning, so the dev overlay does not take it for a crash.
+        console.warn(
           "[useDrivingAgent] planEvRoute failed or returned no routes:",
           result?.error,
         );
-        return;
+        return false;
       }
 
       const firstSection = sections[0];
@@ -601,8 +669,9 @@ export function useDrivingAgent() {
         !firstSection?.departure?.place?.location ||
         !lastSection?.arrival?.place?.location
       ) {
+        // The gateway broke its own format: a real bug, kept as an error.
         console.error("[useDrivingAgent] Route missing location data");
-        return;
+        return false;
       }
 
       const routeOrigin = {
@@ -663,7 +732,8 @@ export function useDrivingAgent() {
           }
         })
         .catch((err) => {
-          console.error("[useDrivingAgent] ❌ fetchDirections background error:", err);
+          // Handled: the map keeps the straight-line route from step 1.
+          console.warn("[useDrivingAgent] fetchDirections background error:", err);
         });
 
       // 3. Store the route plan for the RoutePlanSheet UI. The gateway now
@@ -688,6 +758,7 @@ export function useDrivingAgent() {
       }
 
       DriveSessionStore.setAiState(DriveSessionState.CAR_SESSION_ACTIVE);
+      return true;
     },
     [],
   );
@@ -814,6 +885,8 @@ export function useDrivingAgent() {
         }
 
         if (event.name === "planEvRoute") {
+          pendingPlanStartsRef.current += 1;
+          setRoutePlanFailedAt(null);
           DriveSessionStore.setAiState(DriveSessionState.PLANNING_ROUTE);
           void startPlanningHoldSound();
           // Failsafe: if the agent never sends tool_end (e.g. it crashes mid-plan),
@@ -821,16 +894,9 @@ export function useDrivingAgent() {
           clearPlanWatchdog();
           planWatchdogRef.current = setTimeout(() => {
             console.warn("[useDrivingAgent] planEvRoute watchdog fired — unsticking UI");
-            // Takes "Rota planlanıyor…" down. A tool_end that still comes
-            // later is ingested all the same.
-            settlePendingToolCalls(
-              "error",
-              (call) => call.toolName === ATLAS_TOOL_NAME_MAP.planEvRoute,
-            );
-            void stopPlanningHoldSound();
-            if (DriveSessionStore.getState() === DriveSessionState.PLANNING_ROUTE) {
-              DriveSessionStore.setAiState(DriveSessionState.AI_LISTENING);
-            }
+            // Takes "Rota planlanıyor…" and the music down. A tool_end that
+            // still comes later is ingested all the same.
+            abandonPendingPlan();
           }, PLAN_WATCHDOG_MS);
         }
         return;
@@ -838,9 +904,11 @@ export function useDrivingAgent() {
 
       if (eventType === "tool_end") {
         const mappedName = ATLAS_TOOL_NAME_MAP[event.name] ?? event.name;
-        // A plan the driver already replaced with a newer one. The newer plan may
-        // still be running, so only resolve the oldest pending entry quietly: no
-        // error, no route change, no touching the planning state or its sound.
+        if (event.name === "planEvRoute") {
+          pendingPlanStartsRef.current = Math.max(0, pendingPlanStartsRef.current - 1);
+        }
+        // A plan the driver already replaced with a newer one: resolve the
+        // oldest pending entry quietly, with no error and no route change.
         if (event.result?.superseded === true) {
           setToolCalls((prev) => {
             const idx = prev.findIndex(
@@ -851,6 +919,12 @@ export function useDrivingAgent() {
               i === idx ? { ...tc, status: "success" as const, respondedAt: Date.now() } : tc,
             );
           });
+          // A newer plan still running keeps the planning state and its
+          // music. With none (the newer call stopped to ask about the battery
+          // and sent no tool_start), this was the last one: end it here.
+          if (event.name === "planEvRoute" && pendingPlanStartsRef.current === 0) {
+            abandonPendingPlan();
+          }
           return;
         }
         const isError = event.result?.success === false;
@@ -887,9 +961,11 @@ export function useDrivingAgent() {
 
         if (event.name === "planEvRoute") {
           clearPlanWatchdog();
+          let ingested = false;
           try {
-            ingestRoutePlanResult(event.result ?? {});
+            ingested = ingestRoutePlanResult(event.result ?? {});
           } finally {
+            setRoutePlanFailedAt(ingested ? null : Date.now());
             void stopPlanningHoldSound();
             // Ensure we don't get stuck in planning state if something goes wrong
             if (DriveSessionStore.getState() === DriveSessionState.PLANNING_ROUTE) {
@@ -943,10 +1019,10 @@ export function useDrivingAgent() {
       // usage / assistant_output_done are telemetry-only for now.
     },
     [
+      abandonPendingPlan,
       applyPreferenceUpdate,
       clearPlanWatchdog,
       ingestRoutePlanResult,
-      settlePendingToolCalls,
       startPlanningHoldSound,
       stopPlanningHoldSound,
       stopVoiceSessionPreservingDrive,
@@ -974,6 +1050,7 @@ export function useDrivingAgent() {
       setStatus("connecting");
       setToolCalls([]);
       setLastToolEvent(null);
+      setRoutePlanFailedAt(null);
 
       // 1. Get current location for Atlas.
       // Bounded on purpose: a cold fix in a garage or a tunnel can take a very
@@ -1052,7 +1129,7 @@ export function useDrivingAgent() {
         connectingRef.current = true;
         try {
           sessionStartedRef.current = false;
-          await stopPlanningHoldSound();
+          void stopPlanningHoldSound();
           await disconnectRoom();
           // A stop pressed meanwhile wins.
           if (stopGeneration !== startGenerationRef.current) return;
@@ -1091,6 +1168,9 @@ export function useDrivingAgent() {
         if (participant.identity.startsWith("agent-")) {
           const isFirstCapture = agentParticipantRef.current === null;
           const isNewAgent = agentParticipantRef.current !== participant;
+          // An agent replacing the one before it will not finish that one's
+          // plan: no music or "Rota planlanıyor…" for it.
+          if (isNewAgent && !isFirstCapture) abandonPendingPlan();
           agentParticipantRef.current = participant;
           // Only an agent in the room makes the connection a working one
           // (see watchForAgent): a room that connects without one must not
@@ -1104,7 +1184,7 @@ export function useDrivingAgent() {
           }
           // An agent already in a state fires no attribute change for it.
           const state = readAgentState(participant);
-          if (state) setAgentState(state);
+          if (state) updateAgentState(state);
           if (state === "listening") {
             // A new agent that is already listening will not finish the
             // tools of the one before it.
@@ -1133,7 +1213,9 @@ export function useDrivingAgent() {
             // Drop the frozen speaking state so the UI doesn't look stuck.
             console.warn("[useDrivingAgent] Agent participant left the room");
             agentParticipantRef.current = null;
-            setAgentState(null);
+            // Its plan will never end: no music or "Rota planlanıyor…" without it.
+            abandonPendingPlan();
+            updateAgentState(null);
             setAudioLevel(0);
             setAgentAudioTrack(null);
             VoiceLevelBus.reset();
@@ -1161,7 +1243,7 @@ export function useDrivingAgent() {
         .on(RoomEvent.ParticipantAttributesChanged, (changed, participant) => {
           if (participant !== agentParticipantRef.current) return;
           const state = readAgentState(participant);
-          if (state) setAgentState(state);
+          if (state) updateAgentState(state);
           // Back to listening, the agent is running no tool: a call whose
           // tool_end never came is over, whatever became of it.
           if (state === "listening" && "lk.agent.state" in changed) {
@@ -1197,7 +1279,7 @@ export function useDrivingAgent() {
           clearPlanWatchdog();
           stopGpsWatch();
           sessionStartedRef.current = false;
-          setAgentState(null);
+          updateAgentState(null);
           setAgentAudioTrack(null);
           VoiceLevelBus.reset();
           // Still ours means the server or the network closed it; a local stop
@@ -1358,7 +1440,7 @@ export function useDrivingAgent() {
         blockAutoVoiceRestartRef.current = true;
       }
 
-      await stopPlanningHoldSound();
+      void stopPlanningHoldSound();
       await disconnectRoom();
       setStatus("error");
       DriveSessionStore.setAiState(DriveSessionState.AI_ERROR);
@@ -1368,6 +1450,7 @@ export function useDrivingAgent() {
     }
   }, [
     user,
+    abandonPendingPlan,
     disconnectRoom,
     disarmWakeWord,
     evaluateWakeWord,
@@ -1379,6 +1462,7 @@ export function useDrivingAgent() {
     clearPlanWatchdog,
     clearAgentAbsentTimer,
     settlePendingToolCalls,
+    updateAgentState,
   ]);
   const startAgentSessionRef = useRef(startAgentSession);
   startAgentSessionRef.current = startAgentSession;
@@ -1400,7 +1484,8 @@ export function useDrivingAgent() {
     if (!room) return;
     try {
       await room.localParticipant.setMicrophoneEnabled(!muted);
-      setIsMuted(muted);
+      // A session that ended meanwhile has already been reset to unmuted.
+      if (roomRef.current === room) setIsMuted(muted);
     } catch (error) {
       console.error("[useDrivingAgent] Failed to toggle microphone:", error);
     }
@@ -1636,6 +1721,8 @@ export function useDrivingAgent() {
     agentAudioTrack,
     toolCalls,
     lastToolEvent,
+    /** When the latest route plan failed (ms), for a short note in the header; null otherwise. */
+    routePlanFailedAt,
     startSession: startAgentSession,
     stopConversation: stopVoiceSessionPreservingDrive,
     stopSession: stopAgentSession,
