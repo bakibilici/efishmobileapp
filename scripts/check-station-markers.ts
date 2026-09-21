@@ -15,6 +15,8 @@ import {
   mentionsProviderName,
   withoutProviderNames,
   withoutProviderNamesInPlan,
+  withoutProviderNamesInStationDetails,
+  withoutProviderNamesInTitle,
 } from "../services/providerNames";
 import {
   availableSockets,
@@ -25,8 +27,10 @@ import {
 } from "../services/routeStopStations";
 import {
   focusFitCoordinates,
+  focusPinsToAdd,
   parseStationsFocus,
   StationFocusBus,
+  stationFromFocus,
 } from "../services/stationFocus";
 
 let passed = 0;
@@ -264,6 +268,52 @@ check("the bus hands on the newest focus and its clear", () => {
   assert.equal(seen[2], null);
   assert.equal(StationFocusBus.get()?.stations.length, 2);
   StationFocusBus.clear();
+});
+
+check("a station detail payload loses the names in its name, address and charge points", () => {
+  const details = {
+    name: "Electrip Kadıköy",
+    address: "Moda Cd. 12, eFish otoparkı",
+    directions: "Girişte sağda",
+    charge_points: [{ id: 1, name: "EFISH-01", sockets: [] }, { id: 2, name: "CP 2" }],
+  };
+  const cleaned = withoutProviderNamesInStationDetails(details);
+  assert.equal(cleaned.name, "Kadıköy");
+  assert.equal(cleaned.address, "Moda Cd. 12, otoparkı");
+  assert.equal(cleaned.directions, "Girişte sağda");
+  assert.equal(cleaned.charge_points[0].name, "01");
+  assert.equal(cleaned.charge_points[1], details.charge_points[1]);
+  assert.equal(withoutProviderNamesInStationDetails({ name: "Electrip" }).name, "Şarj istasyonu");
+  const clean = { name: "ZES Moda", address: "Moda", charge_points: [{ name: "A" }] };
+  assert.equal(withoutProviderNamesInStationDetails(clean), clean);
+  assert.equal(withoutProviderNamesInStationDetails(null), null);
+});
+
+check("a stored session's place title loses the names; a title of only a name is none", () => {
+  const title = { title: "Electrip Kadıköy", detail: "Kadıköy, İstanbul", address: "eFish Hub, Moda" };
+  assert.deepEqual(withoutProviderNamesInTitle(title), {
+    title: "Kadıköy",
+    detail: "Kadıköy, İstanbul",
+    address: "Hub, Moda",
+  });
+  const clean = { title: "Alemdağ Cd. No:940", detail: null, address: null };
+  assert.equal(withoutProviderNamesInTitle(clean), clean);
+  assert.equal(withoutProviderNamesInTitle({ title: "Electrip", detail: null, address: null }), null);
+  assert.equal(withoutProviderNamesInTitle(null), null);
+});
+
+check("a found station the feed has not loaded is neither free nor busy", () => {
+  const built = stationFromFocus(parseStationsFocus(FOCUS)!.stations[1]);
+  assert.equal(built.status, "unknown");
+  assert.equal(built.name, "Fenerbahçe");
+  assert.equal(built.source, "electrip");
+});
+
+check("found stations the map draws are highlighted in place; only the rest get a pin", () => {
+  const found = [station({ id: "a" }), station({ id: "b" }), station({ id: "c" })];
+  assert.deepEqual(focusPinsToAdd(found, new Set(["b", "x"])).map((s) => s.id), ["a", "c"]);
+  assert.deepEqual(focusPinsToAdd(found, new Set()).map((s) => s.id), ["a", "b", "c"]);
+  assert.deepEqual(focusPinsToAdd(found, new Set(["a", "b", "c"])), []);
 });
 
 console.log(`\n${passed} checks passed`);

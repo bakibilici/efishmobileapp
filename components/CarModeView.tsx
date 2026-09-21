@@ -65,7 +65,10 @@ import { AssistantOrbRibbon } from "./AssistantOrbRibbon";
  */
 const ORB_STYLE: "ribbon" | "aurora" | "classic" = "ribbon";
 
-/** The header's "Oturumlara dön" chevron: near the 40 pt battery pill beside it, under the floating button's 44. */
+/**
+ * The header's "Oturumlara dön" chevron: near the 40 pt battery pill beside
+ * it, under the floating button's 44. Drawn at 38, tapped in 44 (GlassNavButton).
+ */
 const HEADER_BACK_BUTTON_SIZE = 38;
 
 /** A "thinking" shorter than this never reaches the screen, so it cannot flash. */
@@ -1061,7 +1064,10 @@ export function CarModeView() {
             <View style={styles.headerContent}>
               <View style={styles.headerTopRow}>
                 {canClosePreview ? (
+                  // Frosted, not Liquid Glass: the header is a material already,
+                  // and its entrance animates opacity, under which glass stops drawing.
                   <GlassNavButton
+                    material="frosted"
                     size={HEADER_BACK_BUTTON_SIZE}
                     onPress={handleClosePreview}
                     onAccessibilityEscape={handleClosePreview}

@@ -26,16 +26,27 @@ import {
   isCoordinatePair,
   originTitle,
 } from "@/services/placeTitle";
+import {
+  withoutProviderNames,
+  withoutProviderNamesInTitle,
+} from "@/services/providerNames";
 import { useUser } from "@/context/UserContext";
 import { useTheme } from "@/context/ThemeContext";
 
 /**
  * The same short destination title as the route sheet and the car-mode
  * header ("Alemdağ Cd. No:940", or the agent's "Metrogarden AVM"), from the
- * stored plan, else from the record's destination column.
+ * stored plan, else from the record's destination column. A stored record
+ * keeps the names as they were saved, so the providers' are taken out here.
  */
 const sessionDestination = (session: StoredDriveSessionRecord) =>
-  destinationTitle(session.routeContext?.routePlanData, session.destinationName);
+  withoutProviderNamesInTitle(
+    destinationTitle(session.routeContext?.routePlanData, session.destinationName),
+  );
+
+/** The origin's short title ("Konumunuz", "Kadıköy"), providers' names taken out. */
+const sessionOriginTitle = (session: StoredDriveSessionRecord) =>
+  withoutProviderNamesInTitle(originTitle(session.originName))?.title;
 
 const formatRelativeTime = (timestamp: number) => {
   const now = Date.now();
@@ -170,19 +181,23 @@ export default function SessionsScreen() {
       // Older records may hold a dropped pin's "lat,lng" as the name.
       const storedDestination =
         item.destinationName && !isCoordinatePair(item.destinationName)
-          ? item.destinationName
+          ? withoutProviderNames(item.destinationName) || null
           : null;
-      const cardTitle = destination?.title || storedDestination || item.title;
+      const cardTitle =
+        destination?.title ||
+        storedDestination ||
+        withoutProviderNames(item.title) ||
+        "Kaydedilen rota";
       // "Konumunuz → Alemdağ Cd. No:940, Ümraniye, İstanbul": short titles
       // and the destination's district, not the whole postal addresses.
       const destinationLabel = destination
         ? [destination.title, destination.detail].filter(Boolean).join(", ")
         : storedDestination;
-      const origin = originTitle(item.originName)?.title;
+      const origin = sessionOriginTitle(item);
       const routeLabel =
         origin && destinationLabel
           ? `${origin} → ${destinationLabel}`
-          : destinationLabel || item.title;
+          : destinationLabel || withoutProviderNames(item.title) || "Kaydedilen rota";
 
       return (
         <View

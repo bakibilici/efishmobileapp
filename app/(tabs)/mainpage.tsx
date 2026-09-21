@@ -54,6 +54,7 @@ import {
   Image,
   Keyboard,
   LayoutAnimation,
+  type LayoutChangeEvent,
   Platform,
   Pressable,
   StatusBar,
@@ -108,11 +109,16 @@ import {
 } from "@/services/routeStopStations";
 import {
   focusFitCoordinates,
+  focusPinsToAdd,
   STATION_FOCUS_HIGHLIGHT_MS,
   StationFocusBus,
   stationFromFocus,
   type StationFocusEvent,
 } from "@/services/stationFocus";
+import {
+  withoutProviderNames,
+  withoutProviderNamesInStationDetails,
+} from "@/services/providerNames";
 import Voice from "@react-native-voice/voice";
 
 import {
@@ -149,6 +155,8 @@ const FOCUS_FIT_DELAY_MS = 150;
 
 /** Stable while there is no route, so nothing keyed on the stops recomputes. */
 const NO_ROUTE_LOCATIONS: RoutePlanLocation[] = [];
+/** Stable while AKBA has found nothing to add to the map. */
+const NO_STATIONS: Station[] = [];
 
 const typeLightningCount: Record<StationType, number> = {
   AC: 1,
@@ -237,7 +245,13 @@ const buildElectripDetails = (station: Station) => ({
     {
       id: station.id,
       name: station.name,
-      status: station.status === "available" ? "Available" : "Busy",
+      // A station no feed has reported yet (AKBA found it first) is not called busy.
+      status:
+        station.status === "available"
+          ? "Available"
+          : station.status === "unknown"
+            ? null
+            : "Busy",
       sockets: (station.connectors || []).map((c) => ({
         id: c.id,
         uuid: undefined,
@@ -368,21 +382,20 @@ const MapPinMarker = React.memo(
     station,
     isSelected,
     isHighlighted = false,
-    availabilityUnknown = false,
     onPress,
   }: {
     station: Station;
     isSelected: boolean;
     /** One of the stations AKBA just found (stations_focus). */
     isHighlighted?: boolean;
-    /** Built from AKBA's list before the feed had it: no plug counts yet. */
-    availabilityUnknown?: boolean;
     onPress: (station: Station) => void;
   }) => {
     const typeKey = String(station.type || "DC").toUpperCase();
     const emphasized = isSelected || isHighlighted;
+    // Built from AKBA's list before the feed had it ("unknown"): no count yet.
     // A station without socket counts has always shown 0 here.
-    const availableCount = availabilityUnknown ? null : (availableSockets(station) ?? 0);
+    const availableCount =
+      station.status === "unknown" ? null : (availableSockets(station) ?? 0);
 
     // Android-only: bitmap tracking for 1.5s after visual changes
     const tracksViewChanges = useAndroidMarkerTracking(
@@ -538,6 +551,18 @@ export default function MapScreen() {
   const { top: safeTop } = useSafeAreaInsets();
   const safeTopRef = useRef(safeTop);
   safeTopRef.current = safeTop;
+  /**
+   * The map area's height, measured (the window's until then): the route
+   * sheet's snap points count from it, and the camera fits above the sheet's
+   * middle stop with the same number.
+   */
+  const [mapAreaHeight, setMapAreaHeight] = useState(0);
+  const mapAreaHeightRef = useRef(0);
+  const measureMapArea = useCallback((event: LayoutChangeEvent) => {
+    const height = Math.round(event.nativeEvent.layout.height);
+    mapAreaHeightRef.current = height;
+    setMapAreaHeight(height);
+  }, []);
   const isSwitchingMode = useRef(false);
 
   // Meter values WebSocket
@@ -685,7 +710,7 @@ export default function MapScreen() {
                   right: 60,
                   // Above the sheet at its middle stop, where a new route opens it.
                   bottom: routeSheetMiddleHeight(
-                    Dimensions.get("window").height,
+                    mapAreaHeightRef.current || Dimensions.get("window").height,
                     safeTopRef.current,
                   ),
                   left: 60,
@@ -860,7 +885,8 @@ export default function MapScreen() {
                   return {
                     id: s.id,
                     uuid: s.uuid,
-                    name: s.name,
+                    // The backend's own names can carry the providers' (providerNames.ts).
+                    name: withoutProviderNames(s.name || "") || "Şarj istasyonu",
                     latitude: lat,
                     longitude: lng,
                     type: s.type, // "AC", "HPC", etc.
@@ -886,7 +912,7 @@ export default function MapScreen() {
               if (detailData) {
                 // Convert to our app's internal format if needed, mainly lat/lng are string in JSON
                 const formattedDetail = {
-                  ...detailData,
+                  ...withoutProviderNamesInStationDetails(detailData),
                   latitude: parseFloat(detailData.lat),
                   longitude: parseFloat(detailData.lng),
                   connectors: detailData.charge_points, // Map your charge_points to connectors or keep as is? App seems to use 'connectors' in some places, but DetailView might use raw data.
@@ -1697,12 +1723,11 @@ export default function MapScreen() {
 
   // AKBA's station search (stations_focus): which pins to highlight. A found
   // station that is a route stop highlights the stop's marker; any other is
-  // drawn highlighted on top of the map's own pins (the loaded station, or
-  // one built from AKBA's list until the feed has it).
+  // the loaded station, or one built from AKBA's list until the feed has it
+  // (see focusPins below for where it is drawn).
   const focus = useMemo(() => {
     const onRoute = new Set<string>();
-    const pins: Station[] = [];
-    const unknownAvailability = new Set<string>();
+    const found: Station[] = [];
     for (const entry of stationFocus?.stations ?? []) {
       const stop = routeStops.find(
         ({ station }) =>
@@ -1712,16 +1737,9 @@ export default function MapScreen() {
         onRoute.add(stop.station.id);
         continue;
       }
-      const loaded = stationIndex.get(entry.id);
-      if (loaded) {
-        pins.push(loaded);
-      } else {
-        const built = stationFromFocus(entry);
-        pins.push(built);
-        unknownAvailability.add(built.id);
-      }
+      found.push(stationIndex.get(entry.id) ?? stationFromFocus(entry));
     }
-    return { onRoute, pins, unknownAvailability };
+    return { onRoute, found, ids: new Set(found.map((station) => station.id)) };
   }, [stationFocus, routeStops, stationIndex]);
 
   // efish stations stream in over the socket already scoped to the map's bounding
@@ -1775,6 +1793,17 @@ export default function MapScreen() {
     [filteredStations, viewport, selectedStation],
   );
 
+  // A found station the map draws as a single pin is highlighted there; only
+  // the others (clustered, filtered out, not loaded, or hidden while a route
+  // is on the map) get a pin of their own, so none is drawn twice.
+  const focusPins = useMemo(() => {
+    if (focus.found.length === 0) return NO_STATIONS;
+    const drawnIds = new Set<string>(
+      shouldShowOnlyRouteMarkers ? [] : mapMarkers.singles.map((station) => station.id),
+    );
+    return focusPinsToAdd(focus.found, drawnIds);
+  }, [focus, mapMarkers, shouldShowOnlyRouteMarkers]);
+
   /**
    * Frames AKBA's found stations and their search center in the part of the
    * map the driver can see. An open route sheet is left where it is (the
@@ -1797,7 +1826,10 @@ export default function MapScreen() {
           // The sheet's floating back button: 8 under the safe area, 44 tall.
           top: safeTopNow + 8 + 44 + 16,
           bottom:
-            routeSheetMiddleHeight(Dimensions.get("window").height, safeTopNow) + 24,
+            routeSheetMiddleHeight(
+              mapAreaHeightRef.current || Dimensions.get("window").height,
+              safeTopNow,
+            ) + 24,
           left: 36,
           right: 36,
         }
@@ -2085,7 +2117,7 @@ export default function MapScreen() {
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <View style={[styles.page, { backgroundColor: colors.background }]}>
-        <View style={styles.container}>
+        <View style={styles.container} onLayout={measureMapArea}>
           <MapView
             ref={mapRef}
             onPanDrag={() => {
@@ -2300,6 +2332,7 @@ export default function MapScreen() {
                   key={station.id}
                   station={station}
                   isSelected={selectedStation?.id === station.id}
+                  isHighlighted={focus.ids.has(station.id)}
                   onPress={handleMarkerPress}
                 />
               ))}
@@ -2312,21 +2345,18 @@ export default function MapScreen() {
                 />
               ))}
 
-            {/* The stations AKBA found, highlighted, last and on top. The list
-                above stays exactly as it was: pinning them there would move
+            {/* The stations AKBA found that the map does not draw above (the
+                ones it does are highlighted in place), last and on top. The
+                list above keeps its order: pinning them there would move
                 existing markers, and moving children is what destabilises
                 AIRMap's native child list (-[AIRMap insertReactSubview:atIndex:]).
-                Appending and removing at the end is the safe change. A found
-                station the map already shows sits under its highlighted copy,
-                at the same point and size, so it is not seen twice; a
-                clustered or filtered one shows here all the same. */}
-            {focus.pins.map((station) => (
+                Appending and removing at the end is the safe change. */}
+            {focusPins.map((station) => (
               <MapPinMarker
                 key={`focus-${station.id}`}
                 station={station}
                 isSelected={selectedStation?.id === station.id}
                 isHighlighted
-                availabilityUnknown={focus.unknownAvailability.has(station.id)}
                 onPress={handleMarkerPress}
               />
             ))}
@@ -2997,14 +3027,19 @@ export default function MapScreen() {
                                 width: 10,
                                 height: 10,
                                 borderRadius: 5,
+                                // Grey while no feed has reported it (AKBA found it first).
                                 backgroundColor:
                                   selectedStation.status === "available"
                                     ? "#0093C9"
-                                    : "#ff3b30",
+                                    : selectedStation.status === "unknown"
+                                      ? "#8E8E93"
+                                      : "#ff3b30",
                                 shadowColor:
                                   selectedStation.status === "available"
                                     ? "#0093C9"
-                                    : "#ff3b30",
+                                    : selectedStation.status === "unknown"
+                                      ? "#8E8E93"
+                                      : "#ff3b30",
                                 shadowOffset: { width: 0, height: 0 },
                                 shadowOpacity: 0.8,
                                 shadowRadius: 6,
@@ -3096,7 +3131,9 @@ export default function MapScreen() {
                             fontWeight: "700",
                           }}
                         >
-                          {selectedStation.type} {selectedStation.powerKw} kW
+                          {selectedStation.powerKw > 0
+                            ? `${selectedStation.type} ${selectedStation.powerKw} kW`
+                            : selectedStation.type}
                         </Text>
                       </View>
 
@@ -3292,7 +3329,7 @@ export default function MapScreen() {
                                 marginBottom: 8,
                               }}
                             >
-                              {cp.name} ({cp.status})
+                              {cp.status ? `${cp.name} (${cp.status})` : cp.name}
                             </Text>
                             {cp.sockets?.map((socket: any) => {
                               const status = (
@@ -3975,6 +4012,7 @@ export default function MapScreen() {
           {/* Route Plan Bottom Sheet — shown when Atlas creates a route */}
           {isDriveModeActive && (
             <RoutePlanSheet
+              containerHeight={mapAreaHeight}
               onSheetIndexChange={handleRoutePlanSheetIndexChange}
               onClosePreview={canClosePreview ? handleClosePreview : undefined}
             />

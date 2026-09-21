@@ -3,6 +3,10 @@ import axios from "axios";
 import * as Application from "expo-application";
 import * as Device from "expo-device";
 import { Platform } from "react-native";
+import {
+  withoutProviderNames,
+  withoutProviderNamesInStationDetails,
+} from "./providerNames";
 import { clearTokens, getRefreshToken, saveTokens } from "./tokenStorage";
 
 // Determing Base URL
@@ -265,7 +269,8 @@ export const getStations = async (bbox: string, types?: string[]) => {
   return results.map((item: any) => ({
     id: String(item.id),
     uuid: item.uuid,
-    name: item.name,
+    // The backend's own names can carry the providers' (providerNames.ts).
+    name: withoutProviderNames(item.name || "") || "Şarj istasyonu",
     latitude: parseFloat(item.lat),
     longitude: parseFloat(item.lng),
     type: item.type,
@@ -288,7 +293,9 @@ export const getStationDetails = async (id: string) => {
     `Station Details (${id}):`,
     JSON.stringify(response.data, null, 2),
   );
-  return response.data.data ? response.data.data : response.data;
+  return withoutProviderNamesInStationDetails(
+    response.data.data ? response.data.data : response.data,
+  );
 };
 
 // EV catalog endpoints for cascading dropdowns

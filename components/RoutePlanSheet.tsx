@@ -18,7 +18,6 @@ import {
   Text,
   useWindowDimensions,
   View,
-  type LayoutChangeEvent,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -118,9 +117,16 @@ const routeSubtitle = (origin: string | undefined, tripWithCharging: string | nu
 };
 
 export function RoutePlanSheet({
+  containerHeight,
   onSheetIndexChange,
   onClosePreview,
 }: {
+  /**
+   * The height of the view the sheet stands in (the map screen measures it
+   * and fits the camera above the middle stop with the same number); the
+   * window's height until it is known.
+   */
+  containerHeight?: number;
   /** Receives the sheet's level: -1 closed, 0 peek, 1 middle, 2 and up higher. */
   onSheetIndexChange?: (level: number) => void;
   /** Set while a stored session is only previewed and can be left: the back button goes to Oturumlar. */
@@ -130,9 +136,7 @@ export function RoutePlanSheet({
   const palette = getSheetPalette(themeScheme === "dark");
   const { top: safeTop } = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
-  /** The sheet's parent (the map screen), measured; the window until then. */
-  const [measuredScreenHeight, setMeasuredScreenHeight] = useState(0);
-  const screenHeight = measuredScreenHeight || windowHeight;
+  const screenHeight = containerHeight || windowHeight;
   const bottomSheetRef = useRef<BottomSheet>(null);
   const scrollRef = useRef<BottomSheetScrollViewMethods>(null);
   const lastHandledRouteIdRef = useRef<string | null>(null);
@@ -262,10 +266,6 @@ export function RoutePlanSheet({
       if (openTimer) clearTimeout(openTimer);
     };
   }, [onSheetIndexChange]);
-
-  const measureScreen = useCallback((event: LayoutChangeEvent) => {
-    setMeasuredScreenHeight(Math.round(event.nativeEvent.layout.height));
-  }, []);
 
   /** "Haritaya dön": the map, header and orb come back; the capsule reopens the sheet. */
   const closeSheet = useCallback(() => {
@@ -469,8 +469,6 @@ export function RoutePlanSheet({
 
   return (
     <>
-      {/* Measures the screen the sheet stands in, for the cap on its highest stop. */}
-      <View pointerEvents="none" style={StyleSheet.absoluteFill} onLayout={measureScreen} />
       <BottomSheet
         key={mounted.mode}
         ref={bottomSheetRef}

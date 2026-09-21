@@ -99,7 +99,8 @@ export function parseStationsFocus(event: unknown): StationFocus | null {
 
 /**
  * A found station the map has not loaded (its feed is still on the way), as
- * a map station: drawn with the same pin, availability unknown.
+ * a map station: drawn with the same pin, status "unknown" (no plug count on
+ * the pin, a neutral status in its details) until the feed has it.
  */
 export function stationFromFocus(entry: StationFocusStation): Station {
   return {
@@ -110,10 +111,23 @@ export function stationFromFocus(entry: StationFocusStation): Station {
     longitude: entry.longitude,
     type: entry.type,
     powerKw: 0,
-    status: "busy",
+    status: "unknown",
     isEfish: false,
     source: entry.id.startsWith("electrip-") ? "electrip" : undefined,
   };
+}
+
+/**
+ * The found stations that need a pin of their own. One the map already draws
+ * as a single pin is highlighted in place (a prop change, like selecting it),
+ * so it is not drawn twice; the rest (clustered, filtered out, not loaded,
+ * or hidden while a route is on the map) are appended after the map's pins.
+ */
+export function focusPinsToAdd(
+  found: readonly Station[],
+  drawnIds: ReadonlySet<string>,
+): Station[] {
+  return found.filter((station) => !drawnIds.has(station.id));
 }
 
 /** Half the smallest height the camera frames: ~800 m across, so one station next door is not street level. */

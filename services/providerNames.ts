@@ -80,6 +80,66 @@ export function cleanProviderText(
 /** A charging stop whose own name was only a provider's name is still a charging stop. */
 const STOP_FALLBACK_NAME = "Şarj istasyonu";
 
+/**
+ * A station's detail payload from the backend (the charge_area_detail socket
+ * message, GET charge-areas/:id): its name, address and charge point names
+ * without the providers' names. Anything else, or a payload that is not an
+ * object, comes back as it was; the same object when there was nothing to clean.
+ */
+export function withoutProviderNamesInStationDetails<T>(details: T): T {
+  if (typeof details !== "object" || details === null || Array.isArray(details)) {
+    return details;
+  }
+  const record = details as Record<string, unknown>;
+  const name =
+    typeof record.name === "string"
+      ? (cleanProviderText(record.name, STOP_FALLBACK_NAME) ?? record.name)
+      : record.name;
+  const address =
+    typeof record.address === "string" ? withoutProviderNames(record.address) : record.address;
+  let chargePoints = record.charge_points;
+  if (Array.isArray(chargePoints)) {
+    const cleaned = chargePoints.map((point: unknown) => {
+      if (typeof point !== "object" || point === null) return point;
+      const pointName = (point as Record<string, unknown>).name;
+      if (typeof pointName !== "string") return point;
+      const cleanedName = cleanProviderText(pointName, "Şarj noktası") ?? pointName;
+      return cleanedName === pointName ? point : { ...point, name: cleanedName };
+    });
+    if (cleaned.some((point, i) => point !== (chargePoints as unknown[])[i])) {
+      chargePoints = cleaned;
+    }
+  }
+  if (
+    name === record.name &&
+    address === record.address &&
+    chargePoints === record.charge_points
+  ) {
+    return details;
+  }
+  return { ...record, name, address, charge_points: chargePoints } as T;
+}
+
+/**
+ * A place title (placeTitle's destinationTitle or originTitle) without the
+ * providers' names, for titles built from stored records, which keep what
+ * the route said when it was saved. Null when the title was nothing but a
+ * provider's name, so the caller falls back as it does for no title.
+ */
+export function withoutProviderNamesInTitle<
+  T extends { title: string; detail: string | null; address: string | null },
+>(place: T | null): T | null {
+  if (!place) return null;
+  const title = withoutProviderNames(place.title);
+  if (!title) return null;
+  const detail = place.detail === null ? null : withoutProviderNames(place.detail) || null;
+  const address = place.address === null ? null : withoutProviderNames(place.address) || null;
+  if (title === place.title && detail === place.detail && address === place.address) {
+    return place;
+  }
+  return { ...place, title, detail, address };
+}
+
 /** The break suggestion's texts: its station, title and reason. */
 const cleanHighlight = (
   highlight: RoutePlanInterestHighlight,

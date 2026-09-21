@@ -16,6 +16,8 @@ import { useTheme } from "../../context/ThemeContext";
 import { IconSymbol } from "./icon-symbol";
 
 const DEFAULT_SIZE = 44;
+/** The smallest touch target (HIG): a smaller circle is tapped anywhere in a square this big around it. */
+const MIN_TOUCH_SIZE = 44;
 const GLYPH_SIZE = 18;
 const FADE_IN_MS = 180;
 const FADE_OUT_MS = 140;
@@ -50,6 +52,16 @@ export const hasLiquidGlass = LiquidGlassView !== null;
  * (regular, interactive) on iOS 26, else a frosted circle with a hairline
  * edge. Icon only, so it always needs `accessibilityLabel` ("Oturumlara dön").
  *
+ * `material="frosted"` always draws the frosted circle: for a button inside
+ * another material (a blurred header) or under an ancestor whose opacity
+ * animates, where Liquid Glass does not draw (expo/expo#41024) and glass on
+ * a blur would be a material on a material.
+ *
+ * It lays out as a `size` circle, but a smaller one is tapped anywhere in the
+ * 44 pt square around it: the touch area is the button's own frame, pulled
+ * back to `size` by negative margins. A hitSlop would not do, because the
+ * New Architecture's hit test drops touches outside a parent's bounds.
+ *
  * `visible` fades it in and out; while hidden it takes no touches and is
  * hidden from VoiceOver.
  */
@@ -60,6 +72,7 @@ function GlassNavButtonComponent({
   onAccessibilityEscape,
   visible = true,
   size = DEFAULT_SIZE,
+  material = "auto",
   style,
 }: {
   onPress: () => void;
@@ -69,10 +82,13 @@ function GlassNavButtonComponent({
   onAccessibilityEscape?: () => void;
   visible?: boolean;
   size?: number;
+  /** "auto": Liquid Glass where the system draws it, else frosted. "frosted": always frosted. */
+  material?: "auto" | "frosted";
   style?: StyleProp<ViewStyle>;
 }) {
   const { themeScheme } = useTheme();
   const isDark = themeScheme === "dark";
+  const Glass = material === "auto" ? LiquidGlassView : null;
   const opacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
 
   useEffect(() => {
@@ -89,6 +105,8 @@ function GlassNavButtonComponent({
     <IconSymbol name="chevron.left" size={GLYPH_SIZE} weight="semibold" color={glyphColor} />
   );
   const circle = { width: size, height: size, borderRadius: size / 2 };
+  const touchSize = Math.max(size, MIN_TOUCH_SIZE);
+  const touchArea = { width: touchSize, height: touchSize };
 
   return (
     <Animated.View
@@ -96,30 +114,30 @@ function GlassNavButtonComponent({
       accessibilityElementsHidden={!visible}
       importantForAccessibility={visible ? "auto" : "no-hide-descendants"}
       style={[
-        circle,
-        !LiquidGlassView && styles.fallbackShadow,
+        touchArea,
+        { margin: -(touchSize - size) / 2 },
         // A glass view under a changing opacity (or one that starts at 0)
         // stops drawing its glass (expo/expo#41024): the glass fades through
         // its own style and only the chevron through opacity.
-        !LiquidGlassView && { opacity },
+        !Glass && { opacity },
         style,
       ]}
     >
       <Pressable
         onPress={onPress}
         onAccessibilityEscape={onAccessibilityEscape}
-        hitSlop={6}
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel}
         accessibilityHint={accessibilityHint}
         style={({ pressed }) => [
-          circle,
-          // The glass answers a touch by itself; the fallback dims.
-          !LiquidGlassView && pressed && styles.pressed,
+          touchArea,
+          styles.center,
+          // The glass answers a touch by itself; the frosted circle dims.
+          !Glass && pressed && styles.pressed,
         ]}
       >
-        {LiquidGlassView ? (
-          <LiquidGlassView
+        {Glass ? (
+          <Glass
             // A theme change does not re-apply to a glass view already drawn
             // (expo/expo#43743): a new one is made instead.
             key={isDark ? "glass-dark" : "glass-light"}
@@ -134,38 +152,40 @@ function GlassNavButtonComponent({
             style={[circle, styles.center]}
           >
             <Animated.View style={{ opacity }}>{glyph}</Animated.View>
-          </LiquidGlassView>
+          </Glass>
         ) : (
-          <View
-            style={[
-              circle,
-              styles.clip,
-              {
-                borderColor: isDark ? "rgba(255,255,255,0.16)" : "rgba(0,0,0,0.10)",
-              },
-            ]}
-          >
-            <BlurView
-              tint={isDark ? "dark" : "light"}
-              intensity={Platform.OS === "ios" ? 60 : 0}
-              style={StyleSheet.absoluteFill}
-            />
+          <View style={[circle, styles.fallbackShadow]}>
             <View
               style={[
-                StyleSheet.absoluteFill,
-                styles.center,
+                circle,
+                styles.clip,
                 {
-                  backgroundColor: isDark
-                    ? Platform.OS === "ios"
-                      ? "rgba(44,44,46,0.55)"
-                      : "rgba(44,44,46,0.94)"
-                    : Platform.OS === "ios"
-                      ? "rgba(255,255,255,0.55)"
-                      : "rgba(255,255,255,0.94)",
+                  borderColor: isDark ? "rgba(255,255,255,0.16)" : "rgba(0,0,0,0.10)",
                 },
               ]}
             >
-              {glyph}
+              <BlurView
+                tint={isDark ? "dark" : "light"}
+                intensity={Platform.OS === "ios" ? 60 : 0}
+                style={StyleSheet.absoluteFill}
+              />
+              <View
+                style={[
+                  StyleSheet.absoluteFill,
+                  styles.center,
+                  {
+                    backgroundColor: isDark
+                      ? Platform.OS === "ios"
+                        ? "rgba(44,44,46,0.55)"
+                        : "rgba(44,44,46,0.94)"
+                      : Platform.OS === "ios"
+                        ? "rgba(255,255,255,0.55)"
+                        : "rgba(255,255,255,0.94)",
+                  },
+                ]}
+              >
+                {glyph}
+              </View>
             </View>
           </View>
         )}

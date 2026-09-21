@@ -11,7 +11,11 @@ export function stationTierOf(cpType?: readonly string[] | null): StationType {
   return "AC";
 }
 
-export type ConnectorStatus = "available" | "busy" | "charging" | "offline";
+/**
+ * "unknown": no feed has reported it yet (a station AKBA found before the map
+ * loaded it), so it is shown neither free nor busy.
+ */
+export type ConnectorStatus = "available" | "busy" | "charging" | "offline" | "unknown";
 
 export type Station = {
   id: string;
