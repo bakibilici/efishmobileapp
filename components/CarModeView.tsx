@@ -1,8 +1,7 @@
 import { BlurView } from "expo-blur";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { LinearGradient } from "expo-linear-gradient";
-import LottieView from "lottie-react-native";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Modal,
   Platform,
@@ -60,77 +59,33 @@ const TOOL_STATUS_COPY: Record<string, { headline: string; detail: string }> = {
   },
 };
 
-const StatusGlyph = ({
-  isAnimated,
-  isError,
-  isActive,
-}: {
-  isAnimated: boolean;
-  isError: boolean;
-  isActive: boolean;
-}) => {
-  const statusLottieRef = useRef<LottieView>(null);
+type StatusTone = "listening" | "speaking" | "busy" | "idle" | "warn" | "error";
+
+const STATUS_TONE_COLOR: Record<StatusTone, string> = {
+  listening: "#22C55E",
+  speaking: "#0A84FF",
+  busy: "#F59E0B",
+  idle: "#94A3B8",
+  warn: "#FF9F0A",
+  error: "#FF3B30",
+};
+
+/** The dot in front of the status line; it pulses while AKBA is working on something. */
+const StatusDot = ({ tone }: { tone: StatusTone }) => {
+  const pulse = useSharedValue(1);
 
   useEffect(() => {
-    if (!statusLottieRef.current) return;
-    if (isAnimated) {
-      statusLottieRef.current.play();
+    if (tone === "busy") {
+      pulse.value = withRepeat(withTiming(0.35, { duration: 700, easing: Easing.inOut(Easing.sin) }), -1, true);
     } else {
-      statusLottieRef.current.pause();
+      cancelAnimation(pulse);
+      pulse.value = withTiming(1, { duration: 200 });
     }
-  }, [isAnimated]);
+    return () => cancelAnimation(pulse);
+  }, [tone, pulse]);
 
-  if (isAnimated) {
-    return (
-      <LottieView
-        ref={statusLottieRef}
-        source={require("../assets/lotties/ai_searching.json")}
-        autoPlay
-        loop
-        style={styles.statusLottie}
-      />
-    );
-  }
-
-  return (
-    <View
-      style={[
-        styles.statusStaticGlyph,
-        {
-          backgroundColor: isError
-            ? "rgba(255,59,48,0.14)"
-            : isActive
-              ? "rgba(124,251,199,0.18)"
-              : "rgba(148,163,184,0.14)",
-        },
-      ]}
-    >
-      <LinearGradient
-        colors={
-          isError
-            ? ["#FF8A80", "#FF453A"]
-            : isActive
-              ? ["#7CFBC7", "#10B7E8"]
-              : ["#A5B4C7", "#6B7C93"]
-        }
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={styles.statusStaticGlyphInner}
-      >
-        <Ionicons
-          name={
-            isError
-              ? "alert-outline"
-              : isActive
-                ? "sparkles"
-                : "sparkles-outline"
-          }
-          size={20}
-          color="#FFFFFF"
-        />
-      </LinearGradient>
-    </View>
-  );
+  const style = useAnimatedStyle(() => ({ opacity: pulse.value }));
+  return <Animated.View style={[styles.statusDot, { backgroundColor: STATUS_TONE_COLOR[tone] }, style]} />;
 };
 
 const AssistantOrb = ({
@@ -425,6 +380,24 @@ const AssistantOrb = ({
   );
 };
 
+/** What the driver wants to see about the planned trip at a glance; null without a plan. */
+const readTripSummary = () => {
+  const plan = DriveSessionStore.getRoutePlanData();
+  if (!plan) return null;
+  const destination =
+    plan.locations?.find((location) => location.type === "destination")?.name ||
+    plan.waypoints?.destination ||
+    "Hedef";
+  const parts: string[] = [];
+  const km = plan.summary?.total_travel_length;
+  if (typeof km === "number" && km > 0) parts.push(`${km.toFixed(km >= 100 ? 0 : 1)} km`);
+  const stops = plan.summary?.total_station_count ?? 0;
+  parts.push(stops > 0 ? `${stops} şarj durağı` : "şarj durağı yok");
+  const chargeMin = plan.summary?.total_charge_duration ?? 0;
+  if (stops > 0 && chargeMin > 0) parts.push(`${chargeMin} dk şarj`);
+  return { destination, line: parts.join(" · ") };
+};
+
 export function CarModeView() {
   const { themeScheme, colors } = useTheme();
   const [sessionState, setSessionState] = useState(
@@ -433,6 +406,7 @@ export function CarModeView() {
   const [hasRoutePlan, setHasRoutePlan] = useState(
     !!DriveSessionStore.getRoutePlanData(),
   );
+  const [tripSummary, setTripSummary] = useState(readTripSummary);
   const [routePlanSheetIndex, setRoutePlanSheetIndex] = useState(
     DriveSessionStore.getRoutePlanSheetIndex() >= 0
       ? DriveSessionStore.getRoutePlanSheetIndex()
@@ -500,6 +474,7 @@ export function CarModeView() {
     const unsub = DriveSessionStore.onStateChange((newState) => {
       setSessionState(newState);
       setHasRoutePlan(!!DriveSessionStore.getRoutePlanData());
+      setTripSummary(readTripSummary());
       setRoutePlanSheetIndex(DriveSessionStore.getRoutePlanSheetIndex());
       setRouteDurationSeconds(getRouteDurationSeconds());
       setIsPreviewMode(!!DriveSessionStore.getContext()?.isPreviewMode);
@@ -596,6 +571,8 @@ export function CarModeView() {
         detail:
           TOOL_STATUS_COPY[pendingTool.toolName]?.detail ||
           "AKBA isteğinizi işliyor.",
+        stateLabel: "AKBA çalışıyor",
+        tone: "busy" as StatusTone,
         animate: true,
         hideDetailPill: true,
         isError: false,
@@ -606,6 +583,8 @@ export function CarModeView() {
       return {
         headline: "ROTA HESAPLANIYOR",
         detail: "AKBA yeni rotayı hazırlıyor.",
+        stateLabel: "Rota hazırlanıyor",
+        tone: "busy" as StatusTone,
         animate: true,
         hideDetailPill: true,
         isError: false,
@@ -616,6 +595,8 @@ export function CarModeView() {
       return {
         headline: "ROTA ÖNİZLEMEDE",
         detail: "İsterseniz sürüşü başlatabilir veya AKBA'ya yeniden bağlanabilirsiniz.",
+        stateLabel: "Rota önizlemede",
+        tone: "idle" as StatusTone,
         animate: false,
         hideDetailPill: false,
         isError: false,
@@ -626,6 +607,8 @@ export function CarModeView() {
       return {
         headline: "AKBA PASİF",
         detail: "Yeniden bağlanıp AKBA ile konuşmaya devam edebilirsiniz.",
+        stateLabel: "Konuşma kapalı",
+        tone: "idle" as StatusTone,
         animate: false,
         hideDetailPill: false,
         isError: false,
@@ -636,7 +619,9 @@ export function CarModeView() {
       // First frame of a fresh session: nothing has failed yet.
       return {
         headline: "AKBA HAZIRLANIYOR",
-        detail: "Ses bağlantısı kuruluyor.",
+        detail: "Birkaç saniye içinde sizi dinlemeye başlayacak.",
+        stateLabel: "Bağlantı kuruluyor",
+        tone: "busy" as StatusTone,
         animate: false,
         hideDetailPill: false,
         isError: false,
@@ -647,6 +632,8 @@ export function CarModeView() {
       return {
         headline: "BAĞLANTI KOPTU",
         detail: "Tekrar bağlanmak için orb'a dokunun.",
+        stateLabel: "Bağlantı yok",
+        tone: "error" as StatusTone,
         animate: false,
         hideDetailPill: false,
         isError: true,
@@ -659,7 +646,9 @@ export function CarModeView() {
     ) {
       return {
         headline: "AKBA BAĞLANIYOR",
-        detail: "Ses bağlantısı hazırlanıyor.",
+        detail: "Birkaç saniye içinde sizi dinlemeye başlayacak.",
+        stateLabel: "Bağlantı kuruluyor",
+        tone: "busy" as StatusTone,
         animate: false,
         hideDetailPill: false,
         isError: false,
@@ -675,6 +664,8 @@ export function CarModeView() {
             : hasRoutePlan
               ? "AKBA sizi dinliyor."
               : "Gitmek istediğiniz yeri söyleyin, AKBA rotayı planlasın.",
+          stateLabel: isMuted ? "Mikrofon kapalı" : "AKBA dinliyor",
+          tone: (isMuted ? "warn" : "listening") as StatusTone,
           animate: false,
           hideDetailPill: false,
           isError: false,
@@ -684,7 +675,9 @@ export function CarModeView() {
           headline: "AKBA AKTİF",
           detail: isMuted
             ? "AKBA konuşuyor. Mikrofon şu anda kapalı."
-            : "AKBA konuşuyor.",
+            : "Araya girmek için konuşmanız yeterli.",
+          stateLabel: "AKBA konuşuyor",
+          tone: "speaking" as StatusTone,
           animate: false,
           hideDetailPill: false,
           isError: false,
@@ -693,6 +686,8 @@ export function CarModeView() {
         return {
           headline: "BAĞLANTI KOPTU",
           detail: "Tekrar bağlanmak için orb'a dokunun.",
+          stateLabel: "Bağlantı yok",
+          tone: "error" as StatusTone,
           animate: false,
           hideDetailPill: false,
           isError: true,
@@ -702,6 +697,8 @@ export function CarModeView() {
         return {
           headline: "AKBA PASİF",
           detail: "Konuşmayı yeniden başlatmak için orb'a veya üstteki düğmeye dokunun.",
+          stateLabel: "Konuşma kapalı",
+          tone: "idle" as StatusTone,
           animate: false,
           hideDetailPill: false,
           isError: false,
@@ -710,6 +707,8 @@ export function CarModeView() {
         return {
           headline: "AKBA AKTİF",
           detail: "Size nasıl yardımcı olabilirim?",
+          stateLabel: "AKBA hazır",
+          tone: "listening" as StatusTone,
           animate: false,
           hideDetailPill: false,
           isError: false,
@@ -835,6 +834,11 @@ export function CarModeView() {
 
   if (!isActive) return null;
 
+  // With a route planned the header is about the trip; what AKBA is doing moves
+  // to the status line. Work in progress and errors still take the headline.
+  const showTripInHeader =
+    tripSummary !== null && !assistantStatus.animate && !assistantStatus.isError;
+
   const handleConfirmEndDrive = () => {
     setManualConfirmAction(null);
     stopSession(); // Cleans up agent, socket, and store
@@ -958,31 +962,20 @@ export function CarModeView() {
           <SafeAreaView style={styles.headerSafeArea}>
             <View style={styles.headerContent}>
               <View style={styles.headerTopRow}>
-                <View style={styles.statusBadge}>
-                  <View
-                    style={[
-                      styles.statusVisualWrap,
-                      {
-                        backgroundColor: assistantStatus.isError
-                          ? "rgba(255,59,48,0.12)"
-                          : assistantStatus.animate
-                            ? "rgba(12, 188, 223, 0.14)"
-                            : isAiActive
-                              ? "rgba(124,251,199,0.14)"
-                              : "rgba(148,163,184,0.12)",
-                      },
-                    ]}
-                  >
-                    <StatusGlyph
-                      isAnimated={assistantStatus.animate}
-                      isError={assistantStatus.isError}
-                      isActive={isAiActive}
-                    />
-                  </View>
-                  <View style={styles.statusTextStack}>
-                    <Text style={[styles.statusEyebrow, { color: subtextColor }]}>
-                      Sürüş Asistanı
+                <View style={styles.statusTextStack}>
+                  <View style={styles.statusStateRow}>
+                    <StatusDot tone={assistantStatus.tone} />
+                    <Text
+                      style={[styles.statusEyebrow, { color: subtextColor }]}
+                      numberOfLines={1}
+                    >
+                      {assistantStatus.stateLabel}
                     </Text>
+                  </View>
+                  <View style={styles.statusHeadlineRow}>
+                    {showTripInHeader && (
+                      <Ionicons name="flag" size={15} color={textColor} />
+                    )}
                     <Text
                       style={[
                         styles.statusText,
@@ -996,15 +989,15 @@ export function CarModeView() {
                       adjustsFontSizeToFit
                       minimumFontScale={0.78}
                     >
-                      {assistantStatus.headline}
-                    </Text>
-                    <Text
-                      style={[styles.statusDetailText, { color: subtextColor }]}
-                      numberOfLines={2}
-                    >
-                      {assistantStatus.detail}
+                      {showTripInHeader ? tripSummary.destination : assistantStatus.headline}
                     </Text>
                   </View>
+                  <Text
+                    style={[styles.statusDetailText, { color: subtextColor }]}
+                    numberOfLines={2}
+                  >
+                    {showTripInHeader ? tripSummary.line : assistantStatus.detail}
+                  </Text>
                 </View>
                 <TouchableOpacity
                   onPress={promptBatteryLevel}
@@ -1176,7 +1169,12 @@ export function CarModeView() {
           style={styles.orbTouchTarget}
         >
           {ORB_STYLE === "ribbon" ? (
-            <AssistantOrbRibbon state={sessionState} audioLevel={audioLevel} agentTrack={agentAudioTrack} />
+            <AssistantOrbRibbon
+              state={sessionState}
+              audioLevel={audioLevel}
+              agentTrack={agentAudioTrack}
+              tone={isDark ? "dark" : "light"}
+            />
           ) : ORB_STYLE === "aurora" ? (
             <AssistantOrbAurora state={sessionState} audioLevel={audioLevel} />
           ) : (
@@ -1291,57 +1289,40 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-  statusBadge: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 12,
-    flex: 1,
-    minWidth: 0,
-  },
-  statusVisualWrap: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
-  },
-  statusLottie: {
-    width: 68,
-    height: 68,
-  },
-  statusStaticGlyph: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  statusStaticGlyphInner: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   statusTextStack: {
     flex: 1,
     minWidth: 0,
     gap: 2,
   },
+  statusStateRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  statusHeadlineRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
   statusEyebrow: {
     fontSize: 12,
-    fontWeight: "600",
-    letterSpacing: 0.4,
+    fontWeight: "700",
+    letterSpacing: 0.3,
   },
   statusText: {
-    fontSize: 17,
+    flexShrink: 1,
+    fontSize: 19,
     fontWeight: "800",
     letterSpacing: 0.1,
   },
   statusDetailText: {
-    fontSize: 12,
-    lineHeight: 16,
+    fontSize: 13,
+    lineHeight: 17,
     fontWeight: "600",
   },
   headerActionsRow: {
