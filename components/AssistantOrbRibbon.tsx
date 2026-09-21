@@ -1,8 +1,8 @@
 /**
  * The assistant orb, "ribbon" style: a glass sphere with a band of light
- * across its middle. The band lies almost flat while nobody talks and turns
- * into a travelling, twisting wave with the voice — the driver's while AKBA
- * listens, AKBA's while it speaks.
+ * across its middle. In silence the band is a still line; a voice makes it
+ * swell into a lens of light whose bulges drift slowly — the driver's voice
+ * while AKBA listens, AKBA's while it speaks. Nothing moves on its own.
  *
  * The glass follows the app's theme: frosted and bright over the map in the
  * light theme, smoked in the dark one.
@@ -60,31 +60,32 @@ const pushLevel = (target: SharedValue<number>, level: number) => {
 };
 
 interface RibbonShape {
-  /** Spatial frequency of the upper and lower edge, in radians across the band. */
-  kTop: number;
-  kBottom: number;
-  /** How fast each edge travels relative to the shared clock. */
-  speedTop: number;
-  speedBottom: number;
+  /** How many bulges fit along the band, in radians across it. */
+  k: number;
+  /** How fast the bulges drift relative to the shared clock (sign = direction). */
+  drift: number;
   offset: number;
-  /** Thickness and swing relative to the white ribbon. */
+  /** Share of the swell that rises above the centre line; the rest hangs below. */
+  up: number;
+  /** Reach relative to the other ribbons. */
   weight: number;
-  /** Vertical shift away from the centre, grows with the voice. */
-  lift: number;
 }
 
-const WARM: RibbonShape = { kTop: 2.5, kBottom: 3.3, speedTop: 1.0, speedBottom: 1.31, offset: 0.9, weight: 1.15, lift: -1 };
-const COOL: RibbonShape = { kTop: 3.1, kBottom: 2.3, speedTop: 1.17, speedBottom: 0.88, offset: 2.6, weight: 1.15, lift: 1 };
-const WHITE: RibbonShape = { kTop: 2.8, kBottom: 2.8, speedTop: 1.08, speedBottom: 1.12, offset: 0.0, weight: 0.62, lift: 0 };
+// Warm light rises, cool light hangs, the white core stays between them.
+const WARM: RibbonShape = { k: 2.3, drift: 1.0, offset: 0.6, up: 0.86, weight: 1.12 };
+const COOL: RibbonShape = { k: 2.7, drift: -0.8, offset: 2.4, up: 0.14, weight: 1.12 };
+const WHITE: RibbonShape = { k: 2.0, drift: 0.55, offset: 4.1, up: 0.5, weight: 0.56 };
 
-/** The closed outline of one ribbon: upper edge left to right, lower edge back. */
+/**
+ * The closed outline of one ribbon: upper edge left to right, lower edge back.
+ * The edges only ever move away from the centre line, so the ribbon swells and
+ * settles like a lens instead of wriggling.
+ */
 function ribbonOutline(shape: RibbonShape, clock: number, energy: number): string {
   "worklet";
-  const swing = (1.6 + 17 * energy) * shape.weight * (1 + 0.22 * energy * Math.sin(clock * 2.7) * Math.sin(clock * 1.3 + 1));
-  const half = (0.9 + 5.2 * energy) * shape.weight;
-  const centre = MID + shape.lift * (0.8 + 3.4 * energy);
-  const phaseTop = clock * shape.speedTop + shape.offset;
-  const phaseBottom = clock * shape.speedBottom + shape.offset + 1.1;
+  const half = (0.8 + 2.4 * energy) * shape.weight;
+  const swell = 22 * energy * shape.weight;
+  const phase = clock * shape.drift + shape.offset;
 
   const xs: number[] = [];
   const top: number[] = [];
@@ -92,12 +93,11 @@ function ribbonOutline(shape: RibbonShape, clock: number, energy: number): strin
   for (let i = 0; i <= SEGMENTS; i++) {
     const u = (i / SEGMENTS) * 2 - 1;
     const taper = Math.pow(1 - u * u, 1.35);
-    const waveTop = 0.76 * Math.sin(shape.kTop * u + phaseTop) + 0.24 * Math.sin(2.3 * shape.kTop * u - 1.7 * phaseTop);
-    const waveBottom =
-      0.76 * Math.sin(shape.kBottom * u + phaseBottom) + 0.24 * Math.sin(1.9 * shape.kBottom * u + 1.3 * phaseBottom);
+    const bulgeTop = 0.58 + 0.42 * Math.sin(shape.k * u + phase);
+    const bulgeBottom = 0.58 + 0.42 * Math.sin(shape.k * u + phase + 1.7);
     xs.push(MID + u * SPAN);
-    top.push(centre + taper * (swing * waveTop - half));
-    bottom.push(centre + taper * (swing * waveBottom + half));
+    top.push(MID - taper * (half + swell * shape.up * bulgeTop));
+    bottom.push(MID + taper * (half + swell * (1 - shape.up) * bulgeBottom));
   }
 
   const r = (v: number) => Math.round(v * 10) / 10;
@@ -363,32 +363,14 @@ export const AssistantOrbRibbon = ({
   tone?: Tone;
 }) => {
   const palette = PALETTES[tone];
-  const clock = useSharedValue(0); // radians, runs faster with the voice
-  const energy = useSharedValue(0.04); // 0..1, what the band actually shows
-  const rest = useSharedValue(0.04); // the floor each state keeps without a voice
-  const pace = useSharedValue(1);
+  const clock = useSharedValue(0); // radians; only a voice moves it
+  const energy = useSharedValue(0.02); // 0..1, what the band actually shows
+  const rest = useSharedValue(0.02); // how open the band sits without a voice
   const mic = useSharedValue(0);
   const agent = useSharedValue(0);
   const listenTo = useSharedValue(0); // 0 nobody, 1 the driver, 2 AKBA
   const presence = useSharedValue(0.55); // dim when AKBA is not connected
-  const breath = useSharedValue(0);
-  const floatY = useSharedValue(0);
-
-  useEffect(() => {
-    breath.value = withRepeat(withTiming(1, { duration: 1900, easing: Easing.inOut(Easing.sin) }), -1, true);
-    floatY.value = withRepeat(
-      withSequence(
-        withTiming(-3, { duration: 2100, easing: Easing.inOut(Easing.sin) }),
-        withTiming(3, { duration: 2100, easing: Easing.inOut(Easing.sin) }),
-      ),
-      -1,
-      true,
-    );
-    return () => {
-      cancelAnimation(breath);
-      cancelAnimation(floatY);
-    };
-  }, [breath, floatY]);
+  const glow = useSharedValue(1); // fades in and out while connecting, steady otherwise
 
   useEffect(() => {
     const connecting = state === DriveSessionState.AI_CONNECTING;
@@ -398,9 +380,15 @@ export const AssistantOrbRibbon = ({
 
     listenTo.value = listening ? 1 : speaking ? 2 : 0;
     presence.value = withTiming(active ? 1 : 0.55, { duration: 450 });
-    pace.value = withTiming(connecting ? 2.6 : 1, { duration: 450 });
-    rest.value = withTiming(connecting ? 0.3 : speaking ? 0.16 : listening ? 0.09 : 0.04, { duration: 450 });
-  }, [state, listenTo, presence, pace, rest]);
+    rest.value = withTiming(connecting ? 0.1 : speaking ? 0.08 : listening ? 0.05 : 0.02, { duration: 600 });
+
+    // Waiting is shown by light, not by motion.
+    cancelAnimation(glow);
+    glow.value = connecting
+      ? withRepeat(withTiming(0.45, { duration: 1100, easing: Easing.inOut(Easing.sin) }), -1, true)
+      : withTiming(1, { duration: 400 });
+    return () => cancelAnimation(glow);
+  }, [state, listenTo, presence, rest, glow]);
 
   // The room's speaker levels: the only source for the driver's voice, and the
   // fallback for AKBA's when its track is not available.
@@ -421,29 +409,25 @@ export const AssistantOrbRibbon = ({
   useFrameCallback((frame) => {
     const dt = Math.min(frame.timeSincePreviousFrame ?? 16, 50) / 1000;
     const voice = listenTo.value === 1 ? mic.value : listenTo.value === 2 ? agent.value : 0;
-    const floor = rest.value * (1 + 0.35 * (breath.value - 0.5));
-    const target = Math.max(floor, floor + (1 - floor) * voice);
-    // Rise with the syllable, fall more slowly, the way a meter does.
-    const rate = target > energy.value ? 16 : 4.2;
+    const target = rest.value + (1 - rest.value) * voice;
+    // Rise with the syllable, settle slowly: a swell, not a flicker.
+    const rate = target > energy.value ? 11 : 2.4;
     energy.value += (target - energy.value) * Math.min(1, rate * dt);
-    clock.value += dt * (0.75 + 3.4 * energy.value) * pace.value;
+    // The bulges drift only while there is a voice; in silence the band is still.
+    clock.value += dt * 2.4 * Math.max(0, energy.value - rest.value);
   });
 
   const bloom = palette.bloom;
   const aura = palette.aura;
 
-  const floatStyle = useAnimatedStyle(() => ({ transform: [{ translateY: floatY.value }] }));
-
-  const sphereStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: 1 + 0.02 * breath.value + 0.07 * energy.value }],
-  }));
+  const sphereStyle = useAnimatedStyle(() => ({ transform: [{ scale: 1 + 0.04 * energy.value }] }));
 
   const auraStyle = useAnimatedStyle(() => ({
     opacity: aura * presence.value * (0.18 + 0.6 * energy.value),
     transform: [{ scale: 1 + 0.16 * energy.value }],
   }));
 
-  const bandStyle = useAnimatedStyle(() => ({ opacity: 0.35 + 0.65 * presence.value }));
+  const bandStyle = useAnimatedStyle(() => ({ opacity: (0.35 + 0.65 * presence.value) * glow.value }));
 
   // Bright glass needs a shade behind the band for the white ribbon to read.
   const shadeStyle = useAnimatedStyle(() => ({
@@ -485,7 +469,7 @@ export const AssistantOrbRibbon = ({
   return (
     <View style={styles.box} pointerEvents="none">
       {agentTrack ? <TrackLevelProbe track={agentTrack} target={agent} /> : null}
-      <Animated.View style={[styles.fill, styles.center, floatStyle]}>
+      <View style={[styles.fill, styles.center]}>
         {/* The sphere clips its own content, so its shadow is a layer of its own */}
         <View style={[styles.shadow, { opacity: palette.shadow.opacity }]}>
           <Glow id="ribbon-shadow" color={palette.shadow.color} size={132} core={0.8} />
@@ -548,7 +532,7 @@ export const AssistantOrbRibbon = ({
             <GlassFront tone={tone} />
           </Animated.View>
         </Animated.View>
-      </Animated.View>
+      </View>
     </View>
   );
 };
