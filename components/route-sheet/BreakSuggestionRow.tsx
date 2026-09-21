@@ -1,77 +1,90 @@
-import Ionicons from "@expo/vector-icons/Ionicons";
 import React, { memo, useSyncExternalStore } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
 import { BreakExclusions } from "../../services/breakExclusions";
 import type { RoutePlanInterestHighlight } from "../../services/DriveSessionStore";
 import {
-  breakIconName,
-  breakTone,
+  breakTile,
   formatAlternatives,
-  formatPlaceLine,
+  placeName,
+  shortWalkDistance,
 } from "./breakSuggestion";
+import { IconTile, TABULAR } from "./Grouped";
+import { spoken } from "./routeFormat";
 import type { SheetPalette } from "./sheetPalette";
 
-type Props = {
+/**
+ * One break suggestion as a Settings-style row: category tile, the title,
+ * "place · distance · stop", the ranker's reason and the other options.
+ * The separator sits on the text column, so it starts where the text does.
+ */
+function BreakSuggestionRowComponent({
+  highlight,
+  palette,
+  divided,
+}: {
   highlight: RoutePlanInterestHighlight;
   palette: SheetPalette;
-  /** Small line above the title: "Mola önerisi" inside a stop, the stop's name in a list. */
-  caption?: string;
-};
-
-/**
- * One break suggestion: category icon in a softly tinted circle, the title,
- * the real place and its distance when there is one, then the ranker's reason.
- */
-function BreakSuggestionRowComponent({ highlight, palette, caption }: Props) {
-  const tone = breakTone(highlight);
-  const iconColor =
-    tone === "warm" ? palette.warm : tone === "cool" ? palette.cool : palette.neutral;
-  const iconBackground =
-    tone === "warm"
-      ? palette.warmSoft
-      : tone === "cool"
-        ? palette.coolSoft
-        : palette.neutralSoft;
-  const placeLine = formatPlaceLine(highlight);
+  /** Draws the hairline above the row; false for the first row of a group. */
+  divided: boolean;
+}) {
+  const tile = breakTile(highlight, palette);
   // Also covers a plan that was stored before the driver ruled a kind out.
   const excludedKinds = useSyncExternalStore(BreakExclusions.subscribe, BreakExclusions.get);
-  const alternativesLine = formatAlternatives(highlight, excludedKinds);
+  const alternatives = formatAlternatives(highlight, excludedKinds);
+  const place = placeName(highlight);
+  const where = [
+    place,
+    place ? shortWalkDistance(highlight.distanceM) : null,
+    highlight.stationName?.trim(),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const reason = highlight.message?.trim();
+  const title = highlight.title || "Mola önerisi";
+  const accessibilityLabel = [title, where ? spoken(where) : null, reason, alternatives]
+    .filter(Boolean)
+    .join(", ");
 
   return (
-    <View style={styles.row}>
-      <View style={[styles.iconCircle, { backgroundColor: iconBackground }]}>
-        <Ionicons name={breakIconName(highlight.icon)} size={16} color={iconColor} />
+    <View style={styles.row} accessible accessibilityLabel={accessibilityLabel}>
+      <View style={styles.tileSlot}>
+        <IconTile glyph={tile.glyph} color={tile.color} />
       </View>
-      <View style={styles.copy}>
-        {caption ? (
+      <View
+        style={[
+          styles.copy,
+          divided && {
+            borderTopWidth: StyleSheet.hairlineWidth,
+            borderTopColor: palette.separator,
+          },
+        ]}
+      >
+        <Text style={[styles.title, { color: palette.label }]} numberOfLines={1}>
+          {title}
+        </Text>
+        {where ? (
           <Text
-            style={[styles.caption, { color: palette.textSecondary }]}
+            style={[styles.line, TABULAR, { color: palette.secondaryLabel }]}
             numberOfLines={1}
           >
-            {caption}
-          </Text>
-        ) : null}
-        <Text style={[styles.title, { color: palette.text }]}>
-          {highlight.title || "Mola önerisi"}
-        </Text>
-        {placeLine ? (
-          <Text style={[styles.place, { color: palette.text }]} numberOfLines={1}>
-            {placeLine}
+            {where}
           </Text>
         ) : null}
         {reason ? (
-          <Text style={[styles.reason, { color: palette.textSecondary }]}>
+          <Text
+            style={[styles.line, { color: palette.secondaryLabel }]}
+            numberOfLines={2}
+          >
             {reason}
           </Text>
         ) : null}
-        {alternativesLine ? (
+        {alternatives ? (
           <Text
-            style={[styles.alternatives, { color: palette.textSecondary }]}
-            numberOfLines={2}
+            style={[styles.line, { color: palette.secondaryLabel }]}
+            numberOfLines={1}
           >
-            {alternativesLine}
+            {alternatives}
           </Text>
         ) : null}
       </View>
@@ -81,48 +94,71 @@ function BreakSuggestionRowComponent({ highlight, palette, caption }: Props) {
 
 export const BreakSuggestionRow = memo(BreakSuggestionRowComponent);
 
+/** The same suggestion folded into a stop's row: small tile, "Kahve molası · Keddy's Cafe". */
+function BreakSuggestionInlineComponent({
+  highlight,
+  palette,
+}: {
+  highlight: RoutePlanInterestHighlight;
+  palette: SheetPalette;
+}) {
+  const tile = breakTile(highlight, palette);
+  const place = placeName(highlight);
+
+  return (
+    <View style={styles.inline}>
+      <IconTile glyph={tile.glyph} color={tile.color} size={20} />
+      <Text style={[styles.inlineText, { color: palette.label }]} numberOfLines={1}>
+        {highlight.title || "Mola önerisi"}
+        {place ? (
+          <Text style={{ color: palette.secondaryLabel }}>{` · ${place}`}</Text>
+        ) : null}
+      </Text>
+    </View>
+  );
+}
+
+export const BreakSuggestionInline = memo(BreakSuggestionInlineComponent);
+
 const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: 12,
+    paddingLeft: 16,
   },
-  iconCircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: "center",
-    justifyContent: "center",
+  // Centres the 30 pt tile on the title's first line.
+  tileSlot: {
+    paddingTop: 7,
+    marginRight: 12,
   },
   copy: {
     flex: 1,
-    gap: 3,
-  },
-  caption: {
-    fontSize: 11,
-    fontWeight: "600",
-    letterSpacing: 0.2,
+    paddingTop: 12,
+    paddingBottom: 12,
+    paddingRight: 16,
+    gap: 2,
   },
   title: {
-    fontSize: 14,
-    fontWeight: "700",
-    letterSpacing: -0.1,
-  },
-  place: {
-    fontSize: 13,
+    fontSize: 15,
+    lineHeight: 20,
     fontWeight: "600",
-    opacity: 0.88,
+    letterSpacing: -0.2,
   },
-  reason: {
-    fontSize: 12.5,
+  line: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "400",
+  },
+  inline: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 7,
+  },
+  inlineText: {
+    flex: 1,
+    fontSize: 13,
     lineHeight: 18,
     fontWeight: "500",
-  },
-  alternatives: {
-    marginTop: 2,
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: "500",
-    opacity: 0.85,
   },
 });

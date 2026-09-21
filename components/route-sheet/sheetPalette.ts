@@ -3,22 +3,20 @@ import { Platform } from "react-native";
 import { Colors } from "../../constants/theme";
 
 /**
- * Colours for the frosted route sheet. Text and accent come from the app
- * theme; the warm and cool accents are the assistant orb's ribbons, used at
- * low opacity so the sheet stays calm. Both palettes are module constants, so
- * memoised rows receive the same object on every render.
+ * Colours for the frosted route sheet. The chrome (glass, handle, preview
+ * bar) keeps the app theme; the content uses iOS semantic colours so it reads
+ * like a grouped inset list. Both palettes are module constants, so memoised
+ * rows receive the same object on every render.
  */
 export type SheetPalette = {
   isDark: boolean;
+
+  // Chrome: the preview bar, the handle and the one blur behind everything.
   text: string;
   textSecondary: string;
   textTertiary: string;
-  accent: string;
-  accentSoft: string;
-  /** Card surface over the blurred sheet. */
+  /** The back pills' surface. */
   surface: string;
-  /** Tiles nested inside a card. */
-  surfaceMuted: string;
   hairline: string;
   handle: string;
   blurTint: "light" | "dark";
@@ -26,52 +24,67 @@ export type SheetPalette = {
   /** Colour laid over the blur; near-opaque on Android, where expo-blur does not blur. */
   wash: string;
   sheetEdge: string;
-  warm: string;
-  warmSoft: string;
-  cool: string;
-  coolSoft: string;
-  neutral: string;
-  neutralSoft: string;
-  energyHigh: string;
-  energyLow: string;
-  energyCharge: string;
-  track: string;
-  timeline: string;
-  stationDot: string;
+
+  // Content: iOS semantic colours.
+  label: string;
+  secondaryLabel: string;
+  tertiaryLabel: string;
+  separator: string;
+  /** Grouped cell over the blur. */
+  cell: string;
+  cellPressed: string;
+  /** Unfilled capsule track, chart baseline. */
+  fill: string;
+  /** The route list's connecting line. */
+  rail: string;
+
+  blue: string;
+  green: string;
+  orange: string;
+  red: string;
+  teal: string;
+  indigo: string;
+  brown: string;
+  pink: string;
+  gray: string;
+  /** Charging stops, matching the map's station markers. */
+  station: string;
 };
 
 const isAndroid = Platform.OS === "android";
-
-export const ORB_WARM = "#F5A25D";
-export const ORB_COOL = "#6FA8FF";
 
 const LIGHT: SheetPalette = {
   isDark: false,
   text: Colors.light.text,
   textSecondary: Colors.light.textSecondary,
   textTertiary: Colors.light.textTertiary,
-  accent: Colors.light.primary,
-  accentSoft: "rgba(0,147,201,0.10)",
   surface: isAndroid ? "rgba(255,255,255,0.78)" : "rgba(255,255,255,0.62)",
-  surfaceMuted: "rgba(0,35,49,0.035)",
   hairline: "rgba(0,35,49,0.08)",
   handle: "rgba(0,35,49,0.18)",
   blurTint: "light",
   blurIntensity: 80,
   wash: isAndroid ? "rgba(246,248,251,0.97)" : "rgba(248,250,252,0.72)",
   sheetEdge: "rgba(0,35,49,0.10)",
-  warm: "#C8712C",
-  warmSoft: "rgba(245,162,93,0.18)",
-  cool: "#3D7FE0",
-  coolSoft: "rgba(111,168,255,0.18)",
-  neutral: Colors.light.textSecondary,
-  neutralSoft: "rgba(88,122,153,0.12)",
-  energyHigh: "#1F9D6B",
-  energyLow: "#D9793A",
-  energyCharge: Colors.light.primary,
-  track: "rgba(0,35,49,0.07)",
-  timeline: "rgba(0,35,49,0.16)",
-  stationDot: "#E3894A",
+
+  label: "#1C1C1E",
+  secondaryLabel: "rgba(60,60,67,0.6)",
+  tertiaryLabel: "rgba(60,60,67,0.3)",
+  separator: "rgba(60,60,67,0.18)",
+  cell: isAndroid ? "rgba(255,255,255,0.92)" : "rgba(255,255,255,0.72)",
+  cellPressed: "rgba(120,120,128,0.16)",
+  fill: "rgba(120,120,128,0.16)",
+  rail: "rgba(60,60,67,0.2)",
+
+  blue: "#007AFF",
+  green: "#34C759",
+  orange: "#FF9500",
+  red: "#FF3B30",
+  teal: "#30B0C7",
+  indigo: "#5856D6",
+  brown: "#A2845E",
+  pink: "#FF2D55",
+  gray: "#8E8E93",
+  station: "#FF6B35",
 };
 
 const DARK: SheetPalette = {
@@ -79,28 +92,33 @@ const DARK: SheetPalette = {
   text: Colors.dark.text,
   textSecondary: Colors.dark.textSecondary,
   textTertiary: Colors.dark.textTertiary,
-  accent: Colors.dark.primary,
-  accentSoft: "rgba(0,147,201,0.18)",
   surface: isAndroid ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.06)",
-  surfaceMuted: "rgba(255,255,255,0.045)",
   hairline: "rgba(255,255,255,0.09)",
   handle: "rgba(255,255,255,0.24)",
   blurTint: "dark",
   blurIntensity: 70,
   wash: isAndroid ? "rgba(13,19,32,0.97)" : "rgba(13,19,32,0.72)",
   sheetEdge: "rgba(255,255,255,0.10)",
-  warm: "#F5B27A",
-  warmSoft: "rgba(245,162,93,0.16)",
-  cool: "#9CC3FF",
-  coolSoft: "rgba(111,168,255,0.16)",
-  neutral: Colors.dark.textSecondary,
-  neutralSoft: "rgba(155,161,166,0.14)",
-  energyHigh: "#4ACB93",
-  energyLow: ORB_WARM,
-  energyCharge: ORB_COOL,
-  track: "rgba(255,255,255,0.08)",
-  timeline: "rgba(255,255,255,0.18)",
-  stationDot: "#E3894A",
+
+  label: "#FFFFFF",
+  secondaryLabel: "rgba(235,235,245,0.6)",
+  tertiaryLabel: "rgba(235,235,245,0.3)",
+  separator: "rgba(84,84,88,0.55)",
+  cell: isAndroid ? "rgba(44,44,46,0.92)" : "rgba(44,44,46,0.62)",
+  cellPressed: "rgba(120,120,128,0.32)",
+  fill: "rgba(118,118,128,0.24)",
+  rail: "rgba(235,235,245,0.2)",
+
+  blue: "#0A84FF",
+  green: "#30D158",
+  orange: "#FF9F0A",
+  red: "#FF453A",
+  teal: "#40C8E0",
+  indigo: "#5E5CE6",
+  brown: "#AC8E68",
+  pink: "#FF375F",
+  gray: "#8E8E93",
+  station: "#FF6B35",
 };
 
 export const getSheetPalette = (isDark: boolean): SheetPalette =>
