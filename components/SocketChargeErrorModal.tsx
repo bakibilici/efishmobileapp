@@ -6,9 +6,11 @@ import { Animated, Modal, Pressable, StyleSheet, Text, View } from 'react-native
 type SocketChargeErrorModalProps = {
     visible: boolean;
     onClose: () => void;
+    /** Reports that the Modal is on screen (iOS 26's route sheet: useModalOverRouteSheet). */
+    onShow?: () => void;
 };
 
-export default function SocketChargeErrorModal({ visible, onClose }: SocketChargeErrorModalProps) {
+export default function SocketChargeErrorModal({ visible, onClose, onShow }: SocketChargeErrorModalProps) {
     const { colors, themeScheme } = useTheme();
     const fadeAnim = useRef(new Animated.Value(0)).current;
 
@@ -31,7 +33,7 @@ export default function SocketChargeErrorModal({ visible, onClose }: SocketCharg
     if (!visible) return null;
 
     return (
-        <Modal transparent visible={visible} animationType="none" onRequestClose={onClose}>
+        <Modal transparent visible={visible} animationType="none" onRequestClose={onClose} onShow={onShow}>
             <View style={styles.overlay}>
                 <Animated.View style={[styles.backdrop, { opacity: fadeAnim }]} />
 

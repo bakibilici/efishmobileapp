@@ -24,6 +24,7 @@ import { startNetworkLogging } from "react-native-network-logger";
 import "react-native-reanimated";
 
 import { CarModeView } from "@/components/CarModeView";
+import { routeSheetScreenOptions } from "@/components/route-sheet/nativeRouteSheet";
 import { DailyStepStore } from "@/services/sensors/DailyStepStore";
 
 import {
@@ -296,6 +297,7 @@ function RootLayoutNav() {
               name="route-plan"
               options={{ headerShown: false }}
             />
+            <Stack.Screen name="route-sheet" options={routeSheetScreenOptions} />
           </Stack>
           <StatusBar style={themeScheme === "dark" ? "light" : "dark"} />
           {user && (

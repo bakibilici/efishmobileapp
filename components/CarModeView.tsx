@@ -35,7 +35,12 @@ import {
   DriveSessionStore,
 } from "../services/DriveSessionStore";
 import { destinationTitle } from "../services/placeTitle";
+import { supportsNativeRouteSheet } from "./route-sheet/nativeRouteSheet";
 import { formatMinutes } from "./route-sheet/routeFormat";
+import {
+  routeSheetBridge,
+  useModalOverRouteSheet,
+} from "./route-sheet/routeSheetBridge";
 
 import { useDrivingAgent } from "../hooks/useDrivingAgent";
 import { showMicModePicker } from "../modules/mic-mode";
@@ -70,6 +75,15 @@ const ORB_STYLE: "ribbon" | "aurora" | "classic" = "ribbon";
  * it, under the floating button's 44. Drawn at 38, tapped in 44 (GlassNavButton).
  */
 const HEADER_BACK_BUTTON_SIZE = 38;
+
+/**
+ * iOS 26's system route sheet is presented over this view: its peek covers
+ * the orb (hidden there, AKBA live or not), and a confirmation <Modal>
+ * cannot show while it is up (useModalOverRouteSheet).
+ */
+const NATIVE_ROUTE_SHEET = supportsNativeRouteSheet();
+/** Keeps the system route sheet away while a confirmation is open. */
+const CONFIRMATION_HOLD = "car-mode-confirmation";
 
 /** A "thinking" shorter than this never reaches the screen, so it cannot flash. */
 const THINKING_LINE_DELAY_MS = 400;
@@ -732,7 +746,7 @@ export function CarModeView() {
     const isRouteSheetOnScreen = hasRoutePlan && routePlanSheetIndex >= 0;
     const shouldHideAssistant =
       shouldYieldToRoutePlanSheet ||
-      (isVisible && isRouteSheetOnScreen && !isAiActive);
+      (isVisible && isRouteSheetOnScreen && (!isAiActive || NATIVE_ROUTE_SHEET));
 
     if (isVisible) {
       entranceAnim.value = withTiming(1, {
@@ -799,6 +813,14 @@ export function CarModeView() {
     transform: [{ translateY: assistantY.value }],
     opacity: entranceAnim.value,
   }));
+
+  // The confirmation below, as it may show over iOS 26's system route sheet
+  // (held away first); on the gorhom path exactly the confirmation's state.
+  const confirmModal = useModalOverRouteSheet(
+    CONFIRMATION_HOLD,
+    !!manualConfirmAction ||
+      sessionState === DriveSessionState.ENDING_DRIVE_CONFIRMATION,
+  );
 
   const isActive =
     sessionState !== DriveSessionState.IDLE &&
@@ -897,7 +919,6 @@ export function CarModeView() {
 
   const isAutomaticEndConfirm =
     sessionState === DriveSessionState.ENDING_DRIVE_CONFIRMATION;
-  const isEndConfirmVisible = !!manualConfirmAction || isAutomaticEndConfirm;
 
   // The header button used to be inert until a route existed; now it also
   // (re)connects AKBA before the first route.
@@ -915,6 +936,9 @@ export function CarModeView() {
   const canClosePreview =
     isPreviewMode && sessionState === DriveSessionState.NAVIGATION_ONLY;
   const handleClosePreview = () => {
+    // iOS 26's system sheet goes first: navigating with it on top would
+    // stack a second tab navigator. A no-op for the gorhom sheet.
+    routeSheetBridge.requestDismiss("leave");
     DriveSessionStore.closePreview();
     router.navigate("/(tabs)/sessions");
   };
@@ -1308,7 +1332,13 @@ export function CarModeView() {
       </Animated.View>
 
       {/* End Drive Confirmation Modal */}
-      <Modal transparent visible={isEndConfirmVisible} animationType="fade">
+      <Modal
+        key={confirmModal.key}
+        transparent
+        visible={confirmModal.visible}
+        onShow={confirmModal.onShow}
+        animationType="fade"
+      >
         <View style={styles.modalOverlay}>
           <BlurView
             intensity={30}

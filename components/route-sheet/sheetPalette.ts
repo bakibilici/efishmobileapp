@@ -117,3 +117,26 @@ const DARK: SheetPalette = {
 
 export const getSheetPalette = (isDark: boolean): SheetPalette =>
   isDark ? DARK : LIGHT;
+
+/**
+ * The same content on the system sheet (iOS 26, app/route-sheet.tsx), which
+ * draws its own material: Liquid Glass at the lower stops, opaque white
+ * (#1C1C1E in dark) at the full height. White cells vanished on that white,
+ * so the grouped cells are the system's translucent grey fill instead,
+ * readable on the glass and on the opaque top alike. The chrome fields
+ * (handle, blur, wash, topFill, edge) are unused there.
+ */
+const NATIVE_LIGHT: SheetPalette = {
+  ...LIGHT,
+  cell: "rgba(118,118,128,0.12)",
+  cellPressed: "rgba(118,118,128,0.24)",
+};
+
+const NATIVE_DARK: SheetPalette = {
+  ...DARK,
+  cell: "rgba(118,118,128,0.24)",
+  cellPressed: "rgba(118,118,128,0.36)",
+};
+
+export const getNativeSheetPalette = (isDark: boolean): SheetPalette =>
+  isDark ? NATIVE_DARK : NATIVE_LIGHT;

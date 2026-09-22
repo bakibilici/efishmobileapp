@@ -86,7 +86,13 @@ import {
   breakIconName,
   formatPlaceLine,
 } from "@/components/route-sheet/breakSuggestion";
+import { supportsNativeRouteSheet } from "@/components/route-sheet/nativeRouteSheet";
 import { stationHardware } from "@/components/route-sheet/routeFormat";
+import {
+  routeSheetBridge,
+  useModalOverRouteSheet,
+} from "@/components/route-sheet/routeSheetBridge";
+import { RouteSheetPresenter } from "@/components/route-sheet/RouteSheetPresenter";
 import { Station, StationType } from "@/constants/stations";
 import { Colors } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
@@ -521,6 +527,13 @@ const RouteStationMarker = React.memo(
 
 RouteStationMarker.displayName = "RouteStationMarker";
 
+/** iOS 26: the route panel is the system's sheet (RouteSheetPresenter), else the gorhom one. */
+const NATIVE_ROUTE_SHEET = supportsNativeRouteSheet();
+/** Keeps the system sheet away while a station's details are open. */
+const STATION_DETAIL_HOLD = "station-detail";
+/** Keeps the system sheet away while the charge error is up. */
+const CHARGE_ERROR_HOLD = "charge-error";
+
 export default function MapScreen() {
   const router = useRouter();
   const navigation = useNavigation<any>();
@@ -579,6 +592,13 @@ export default function MapScreen() {
   // Charging Simulation
   const charging = useChargingSimulation();
   const chargingIsActiveRef = useRef(false);
+  // The charge error can come at any time: on iOS 26 its <Modal> waits for
+  // the system route sheet to step aside (useModalOverRouteSheet); on the
+  // gorhom path it is exactly charging.hasError.
+  const chargeErrorModal = useModalOverRouteSheet(
+    CHARGE_ERROR_HOLD,
+    !!charging.hasError,
+  );
 
   // Drive Mode: hide header when drive session is active and observe route changes
   const [driveStateObj, setDriveStateObj] = useState({
@@ -621,8 +641,14 @@ export default function MapScreen() {
   // is no sheet to take it.
   const hasActiveRoutePlanSheet =
     isDriveModeActive && hasRouteSheet(routePlanData);
+  // iOS 26's system sheet reports its level to the store (the gorhom sheet
+  // through handleRoutePlanSheetIndexChange); every store change re-renders
+  // this screen (driveStateObj), so it is read from there.
+  const routeSheetLevel = NATIVE_ROUTE_SHEET
+    ? DriveSessionStore.getRoutePlanSheetIndex()
+    : routePlanSheetIndex;
   const shouldHideMapActionButtons =
-    hasActiveRoutePlanSheet && routePlanSheetIndex > 0;
+    hasActiveRoutePlanSheet && routeSheetLevel > 0;
   const mapActionButtonBottom = isDriveModeActive ? 132 : 120;
   const mapActionButtonZIndex = hasActiveRoutePlanSheet ? 10 : 2500;
   const handleRoutePlanSheetIndexChange = useCallback((index: number) => {
@@ -638,6 +664,9 @@ export default function MapScreen() {
     driveState === DriveSessionState.NAVIGATION_ONLY &&
     !!DriveSessionStore.getContext()?.isPreviewMode;
   const handleClosePreview = useCallback(() => {
+    // iOS 26's system sheet goes first: navigating with it on top would
+    // stack a second tab navigator. A no-op for the gorhom sheet.
+    routeSheetBridge.requestDismiss("leave");
     DriveSessionStore.closePreview();
     router.navigate("/(tabs)/sessions");
   }, [router]);
@@ -724,6 +753,14 @@ export default function MapScreen() {
   useEffect(() => {
     chargingIsActiveRef.current = charging.isActive;
   }, [charging.isActive]);
+
+  // The system sheet held off by a station's details comes back once the
+  // details close (a live one only if the driver has not put it away).
+  useEffect(() => {
+    if (NATIVE_ROUTE_SHEET && !selectedStation) {
+      routeSheetBridge.releaseHold(STATION_DETAIL_HOLD);
+    }
+  }, [selectedStation]);
 
   const handleStartPress = async (socketUuid: string) => {
     // Guarded here rather than at each status branch: the sheet has several entry
@@ -1819,8 +1856,9 @@ export default function MapScreen() {
     const safeTopNow = safeTopRef.current;
     const edgePadding = sheetCoversMap
       ? {
-          // The sheet's floating back button: 8 under the safe area, 44 tall.
-          top: safeTopNow + 8 + 44 + 16,
+          // The gorhom sheet's floating back button: 8 under the safe area,
+          // 44 tall. iOS 26's system sheet keeps its button inside itself.
+          top: NATIVE_ROUTE_SHEET ? safeTopNow + 16 : safeTopNow + 8 + 44 + 16,
           bottom:
             routeSheetMiddleHeight(
               mapAreaHeightRef.current || Dimensions.get("window").height,
@@ -1986,6 +2024,19 @@ export default function MapScreen() {
 
   const handleMarkerPress = (station: Station) => {
     Keyboard.dismiss();
+    // iOS 26's system sheet is presented over the whole window: the
+    // station's details would open under it. A live route's sheet is put
+    // away as the driver would (the capsule brings it back); a preview's
+    // steps aside. Either way it stays away until the details close, also
+    // when AKBA sends a new route meanwhile (it comes up then, not over
+    // the details). "user" goes first, so the hold's "yield" keeps it.
+    if (NATIVE_ROUTE_SHEET) {
+      const routeSheet = routeSheetBridge.getSnapshot();
+      if ((routeSheet.presenting || routeSheet.presented) && routeSheet.mode === "live") {
+        routeSheetBridge.requestDismiss("user");
+      }
+      routeSheetBridge.addHold(STATION_DETAIL_HOLD);
+    }
     setSelectedStation(station);
     setStationDetails(null); // Reset details
     setBottomSheetMode("details"); // Ensure we start in details mode
@@ -3674,7 +3725,9 @@ export default function MapScreen() {
             onRepair={handleSocketRepair}
           />
           <SocketChargeErrorModal
-            visible={!!charging.hasError}
+            key={chargeErrorModal.key}
+            visible={chargeErrorModal.visible}
+            onShow={chargeErrorModal.onShow}
             onClose={() => {
               // Note: the socket will likely still be sending SUSPENDED
               // We just clear the error modal. We DO NOT stop simulation here,
@@ -4006,12 +4059,17 @@ export default function MapScreen() {
             </View>
           </BottomSheetModal>
 
-          {/* Route Plan Bottom Sheet — shown when Atlas creates a route */}
-          {isDriveModeActive && (
-            <RoutePlanSheet
-              onSheetIndexChange={handleRoutePlanSheetIndexChange}
-              onClosePreview={canClosePreview ? handleClosePreview : undefined}
-            />
+          {/* Route Plan Bottom Sheet — shown when Atlas creates a route.
+              iOS 26: the system sheet, presented over the window (app/route-sheet). */}
+          {NATIVE_ROUTE_SHEET ? (
+            <RouteSheetPresenter />
+          ) : (
+            isDriveModeActive && (
+              <RoutePlanSheet
+                onSheetIndexChange={handleRoutePlanSheetIndexChange}
+                onClosePreview={canClosePreview ? handleClosePreview : undefined}
+              />
+            )
           )}
         </View>
       </View>
