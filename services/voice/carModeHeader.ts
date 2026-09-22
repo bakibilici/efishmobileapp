@@ -69,6 +69,12 @@ export interface HeaderInput {
   hasRoute: boolean;
   /** The voice connected at least once during this drive. */
   hasEverConnected: boolean;
+  /**
+   * AKBA ended the conversation itself (session_ended: a goodbye, or the
+   * inactivity watchdog). The voice is gone because the conversation is
+   * over, not because the connection broke.
+   */
+  conversationEnded: boolean;
   wakeWordArmed: boolean;
   /** AKBA has been thinking long enough to say so. */
   thinking: boolean;
@@ -88,6 +94,14 @@ export function resolveHeaderLine(input: HeaderInput): HeaderLine {
   // connection. With a trip on screen the trip is enough.
   if (input.wakeWordArmed && !transportActive) {
     return hasRoute ? { kind: "trip" } : { kind: "prompt", prompt: "wake" };
+  }
+  // A conversation AKBA ended is not a lost one: after its goodbye the row
+  // says how to start talking again (or shows the trip), never "Bağlantı
+  // koptu". A later real failure clears it — the next start does too.
+  if (input.conversationEnded && !transportActive && !input.aiError) {
+    return hasRoute
+      ? { kind: "trip" }
+      : { kind: "prompt", prompt: input.wakeWordArmed ? "wake" : "tap" };
   }
   if (
     input.aiError ||

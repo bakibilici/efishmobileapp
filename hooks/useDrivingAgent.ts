@@ -39,11 +39,6 @@ import {
 import { normalizeRoutePlanFromGateway } from "../services/routePlanGateway";
 import { SpeedStore } from "../services/sensors/SpeedStore";
 import { parseStationsFocus, StationFocusBus } from "../services/stationFocus";
-import {
-  playListenEnd,
-  playListenStart,
-  preloadEarcons,
-} from "../services/voice/Earcons";
 import { PlanningHoldSound } from "../services/voice/PlanningHoldSound";
 import {
   holdGateDecision,
@@ -163,13 +158,16 @@ function readAgentState(participant: RemoteParticipant): AgentState | null {
  * Where a drive rests while AKBA is not live: following its route
  * (NAVIGATION_ONLY); a drive whose route the driver removed ("Rotayı
  * kaldır") stays an ordinary drive (CAR_SESSION_ACTIVE, as clearRoute leaves
- * it), so car mode keeps "Sürüşü Bitir" and the record gets its endedAt.
- * Only a drive that never had a route goes back to IDLE.
+ * it), so car mode keeps "Sürüşü Bitir" and the record gets its endedAt. A
+ * drive the driver started themselves stays the same way even before its
+ * first route: "Konuşmayı Bitir" promises the drive goes on, and only AKBA's
+ * own session — the one it opens to hold a route plan — goes back to IDLE
+ * with the conversation.
  */
 const passiveDriveState = (): DriveSessionState =>
   DriveSessionStore.getRoutePlanData()
     ? DriveSessionState.NAVIGATION_ONLY
-    : DriveSessionStore.hasRemovedRoute()
+    : DriveSessionStore.hasRemovedRoute() || DriveSessionStore.isDriverStarted()
       ? DriveSessionState.CAR_SESSION_ACTIVE
       : DriveSessionState.IDLE;
 
@@ -199,6 +197,14 @@ export function useDrivingAgent() {
   const manuallyEndedRef = useRef(false);
   /** When true, agent ended the voice session (e.g. farewell); do not auto-start or reconnect. */
   const blockAutoVoiceRestartRef = useRef(false);
+  /**
+   * AKBA itself ended the conversation (session_ended: a goodbye or the
+   * inactivity watchdog). The voice session goes passive like any other end,
+   * but this is not a lost connection: nothing reconnects, and the header
+   * says how to start talking again instead of "Bağlantı koptu". Cleared by
+   * the next start.
+   */
+  const [conversationEnded, setConversationEnded] = useState(false);
   /** When true, the next session is started with new_session=true (fresh, no resume). */
   const forceFreshSessionRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
@@ -273,28 +279,25 @@ export function useDrivingAgent() {
   const unmountingRef = useRef(false);
 
   /**
-   * The rising cue means "AKBA hears you now": only for a session that is
-   * live (mic published), never for a connect that may still fail.
+   * "AKBA hears you now", as a tap you feel: only for a session that is live
+   * (mic published), never for a connect that may still fail. There is no
+   * sound cue any more; the owner asked for the listening earcons to go.
    */
   const playStartCueOnce = useCallback(() => {
     if (!voiceLiveRef.current || startCuePlayedRef.current) return;
     startCuePlayedRef.current = true;
-    void playListenStart();
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
   }, []);
 
   /**
    * Every end of a voice session funnels through disconnectRoom, which calls
-   * this after the audio session is released (releasing it later would cut
-   * the cue off). The falling cue plays only for a session that was live: not
-   * for a failed connect, not for a retry, not for app teardown.
+   * this after the audio session is released. It only marks the session as no
+   * longer live now: the falling earcon it used to play is gone.
    */
   const markVoicePassive = useCallback(() => {
     startCuePlayedRef.current = false;
     if (!voiceLiveRef.current) return;
     voiceLiveRef.current = false;
-    if (unmountingRef.current) return;
-    void playListenEnd();
   }, []);
 
   // ── Wake word ───────────────────────────────────────────────────────────
@@ -652,6 +655,8 @@ export function useDrivingAgent() {
     if (connectingRef.current) setStatus("disconnected");
     sessionStartedRef.current = false;
     manuallyEndedRef.current = true;
+    // Whatever ended this drive's last conversation ends with the drive.
+    setConversationEnded(false);
     // The drive is over; the next explicit start should be a fresh session.
     forceFreshSessionRef.current = true;
     // Nor may this drive's destination title the next drive's route.
@@ -756,7 +761,9 @@ export function useDrivingAgent() {
       // Stored before the new route (step 2), so the route's new id reaches
       // the sheet and the map fit together with this plan, not the previous one.
       if (!DriveSessionStore.getContext()) {
-        DriveSessionStore.startSession();
+        // AKBA's own session, opened to hold this plan: without a route it is
+        // nothing the driver asked for, so it ends with the conversation.
+        DriveSessionStore.startSession(undefined, { startedByDriver: false });
       }
       if (personalized.locations && personalized.summary) {
         DriveSessionStore.setRoutePlanData(
@@ -1051,7 +1058,25 @@ export function useDrivingAgent() {
 
       if (eventType === "session_ended") {
         console.log("[useDrivingAgent] Agent ended the session:", event.reason);
-        if (sessionStartedRef.current) {
+        // AKBA has finished its goodbye and is about to leave the room. End
+        // the conversation here, in one render: waiting for the participant
+        // to vanish left the header, the orb and the voice buttons looking
+        // live until the agent-absent timeout noticed, long after the driver
+        // had. A session still connecting counts too — the agent is leaving
+        // either way. The drive itself is untouched (see passiveDriveState).
+        if (roomRef.current || sessionStartedRef.current) {
+          setConversationEnded(true);
+          // Said here, not left to the room's ConnectionStateChanged: the
+          // teardown below drops the agent state and then awaits the audio
+          // session, and a render lands in between. With the status still
+          // "connected" that render reads as a live session with no agent —
+          // "Bağlanıyor…", hang-up and mic still lit, the orb not tappable —
+          // a flash of exactly the state the goodbye just left. It also
+          // overrides the "connecting" a ParticipantDisconnected that beat
+          // the packet here would have set. The reconnect ladder cannot fire
+          // on it: stopVoiceSessionPreservingDrive blocks it in the same
+          // synchronous block, before any effect runs.
+          setStatus("disconnected");
           void stopVoiceSessionPreservingDrive();
         }
         return;
@@ -1121,6 +1146,9 @@ export function useDrivingAgent() {
     blockAutoVoiceRestartRef.current = false;
 
     if (sessionStartedRef.current || connectingRef.current || !user) return;
+    // Talking again is a new conversation: the last one's ending stops
+    // colouring the header.
+    setConversationEnded(false);
     connectingRef.current = true;
     // Started now, awaited before the audio session: the recognizer lets go
     // of the microphone while the GPS fix and the token are fetched.
@@ -1258,6 +1286,9 @@ export function useDrivingAgent() {
           // plan: no music or "Rota planlanıyor…" for it.
           if (isNewAgent && !isFirstCapture) abandonPendingPlan();
           agentParticipantRef.current = participant;
+          // An agent is here again after one left (see ParticipantDisconnected):
+          // the connection is live, not "Bağlanıyor…".
+          if (room.state === ConnectionState.Connected) setStatus("connected");
           // Only an agent in the room makes the connection a working one
           // (see watchForAgent): a room that connects without one must not
           // reset the reconnect ladder, or it would retry forever.
@@ -1305,6 +1336,17 @@ export function useDrivingAgent() {
             setAudioLevel(0);
             setAgentAudioTrack(null);
             VoiceLevelBus.reset();
+            // A room with nobody to talk to is not a live conversation, even
+            // though the transport is up. Saying so at once keeps the orb and
+            // the buttons honest while watchForAgent waits for a replacement
+            // — and it is the state a graceful end whose session_ended never
+            // arrived (an older agent build, a lost packet) settles through,
+            // instead of looking connected until the timeout. captureAgent
+            // puts it back when an agent returns; the timeout ends it when
+            // none does.
+            if (sessionStartedRef.current && room.state === ConnectionState.Connected) {
+              setStatus("connecting");
+            }
             watchForAgent();
           }
         })
@@ -1732,7 +1774,6 @@ export function useDrivingAgent() {
 
   useEffect(() => {
     unmountingRef.current = false;
-    void preloadEarcons();
     return () => {
       unmountingRef.current = true;
       // A start still in flight must not finish into an unmounted hook.
@@ -1830,6 +1871,8 @@ export function useDrivingAgent() {
     lastToolEvent,
     /** When the latest route plan failed (ms), for a short note in the header; null otherwise. */
     routePlanFailedAt,
+    /** AKBA ended the conversation itself (session_ended); not a lost connection. */
+    conversationEnded,
     startSession: startAgentSession,
     stopConversation: stopVoiceSessionPreservingDrive,
     stopSession: stopAgentSession,
