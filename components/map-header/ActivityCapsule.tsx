@@ -69,6 +69,7 @@ export function ActivityCapsule({
       <GlassSurface
         radius={22}
         interactive
+        material="frosted"
         style={[styles.capsule, { paddingRight: showCta ? 7 : 14 }]}
       >
         <Pressable
@@ -76,7 +77,7 @@ export function ActivityCapsule({
           accessibilityRole={compact ? "button" : undefined}
           accessibilityLabel={accessibilityLabel}
           accessibilityHint={compact ? "Arama ve filtreleri gösterir" : undefined}
-          style={styles.status}
+          style={({ pressed }) => [styles.status, pressed && styles.pressed]}
         >
           <ActivityIcon
             state={status.iconState}
@@ -129,7 +130,7 @@ export function ActivityCapsule({
             accessibilityRole="button"
             accessibilityLabel="Sürüşe Geç"
             accessibilityHint="Sürüş modunu başlatır"
-            style={styles.ctaTouch}
+            style={({ pressed }) => [styles.ctaTouch, pressed && styles.pressed]}
           >
             <View style={[styles.cta, { backgroundColor: palette.accent }]}>
               <Text maxFontSizeMultiplier={1.4} style={styles.ctaText}>
@@ -144,6 +145,10 @@ export function ActivityCapsule({
 }
 
 const styles = StyleSheet.create({
+  // Frosted glass does not answer a touch by itself.
+  pressed: {
+    opacity: 0.6,
+  },
   wrapper: {
     alignSelf: "center",
   },

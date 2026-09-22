@@ -41,9 +41,20 @@ export const isIOS26 =
   Platform.OS === "ios" && parseInt(String(Platform.Version), 10) >= 26;
 
 /**
+ * A glass surface decides its look: real Liquid Glass (clear, where the
+ * system has it), or frosted: a blur under a mostly opaque wash. Frosted
+ * suits controls that sit on busy content, such as the map header, where
+ * clear glass lets pins and labels show through the text.
+ */
+export type GlassMaterial = "glass" | "frosted";
+
+/**
  * A Liquid Glass shape for the control layer only (tab bar, floating
  * actions, a sheet's close button), never for content. Children sit inside
  * the glass.
+ *
+ * With `material="frosted"` it is the frosted shape on every iOS version,
+ * with a more opaque wash than the fallback below.
  *
  * Where the system has no Liquid Glass it falls back: on older iOS a blur
  * with a light or dark wash and a hairline edge; on Android, where expo-blur
@@ -58,17 +69,20 @@ export function GlassSurface({
   style,
   tintColor,
   interactive = false,
+  material = "glass",
   children,
 }: {
   radius: number;
   style?: StyleProp<ViewStyle>;
   tintColor?: string;
   interactive?: boolean;
+  material?: GlassMaterial;
   children?: ReactNode;
 }) {
   const { themeScheme } = useTheme();
   const isDark = themeScheme === "dark";
-  const Glass = LiquidGlassView;
+  const frosted = material === "frosted";
+  const Glass = frosted ? null : LiquidGlassView;
 
   if (Glass) {
     return (
@@ -131,7 +145,10 @@ export function GlassSurface({
             StyleSheet.absoluteFill,
             {
               backgroundColor:
-                tintColor ?? (isDark ? "rgba(28,28,30,0.6)" : "rgba(255,255,255,0.6)"),
+                tintColor ??
+                (frosted
+                  ? isDark ? "rgba(28,28,30,0.84)" : "rgba(255,255,255,0.86)"
+                  : isDark ? "rgba(28,28,30,0.6)" : "rgba(255,255,255,0.6)"),
             },
           ]}
         />

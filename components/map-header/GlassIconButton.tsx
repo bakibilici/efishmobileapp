@@ -6,7 +6,7 @@ import {
   type ViewStyle,
 } from "react-native";
 
-import { GlassSurface, hasLiquidGlass } from "../ui/glass";
+import { GlassSurface, hasLiquidGlass, type GlassMaterial } from "../ui/glass";
 import { IconSymbol, type IconSymbolName } from "../ui/icon-symbol";
 import { usePagePalette } from "../ui/pagePalette";
 
@@ -26,6 +26,7 @@ export function GlassIconButton({
   tintColor,
   glyphColor,
   glyphSize = 20,
+  material = "glass",
   style,
 }: {
   symbol: IconSymbolName;
@@ -39,6 +40,8 @@ export function GlassIconButton({
   /** The glyph's colour: the label colour by default. */
   glyphColor?: string;
   glyphSize?: number;
+  /** "frosted" for the header over the map (see GlassMaterial). */
+  material?: GlassMaterial;
   style?: StyleProp<ViewStyle>;
 }) {
   const palette = usePagePalette();
@@ -53,14 +56,15 @@ export function GlassIconButton({
       accessibilityState={accessibilityState}
       style={({ pressed }) => [
         { width: size, height: size },
-        // Liquid Glass answers a touch by itself; the fallback dims.
-        !hasLiquidGlass && pressed && { opacity: 0.6 },
+        // Liquid Glass answers a touch by itself; frosted and the fallback dim.
+        (!hasLiquidGlass || material === "frosted") && pressed && { opacity: 0.6 },
         style,
       ]}
     >
       <GlassSurface
         radius={size / 2}
         interactive
+        material={material}
         tintColor={tintColor}
         style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
       >

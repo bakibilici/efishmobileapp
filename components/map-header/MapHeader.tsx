@@ -190,12 +190,14 @@ export function MapHeader({
             />
             {searchActive ? (
               <GlassIconButton
+                material="frosted"
                 symbol="xmark"
                 accessibilityLabel="Aramayı kapat"
                 onPress={() => searchRef.current?.dismiss()}
               />
             ) : (
               <GlassIconButton
+                material="frosted"
                 symbol="line.3.horizontal.decrease"
                 accessibilityLabel="Filtreler"
                 accessibilityHint="Filtreleri ve istasyon listelerini açar"
@@ -211,6 +213,7 @@ export function MapHeader({
             )}
             {isSignedIn ? null : (
               <GlassIconButton
+                material="frosted"
                 symbol="person.crop.circle.fill"
                 accessibilityLabel="Giriş yap"
                 accessibilityHint="Giriş ekranını açar"

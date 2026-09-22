@@ -32,6 +32,7 @@ export function FilterPopover({
   return (
     <GlassSurface
       radius={22}
+      material="frosted"
       style={[styles.popover, { width: Math.min(width - 32, MAX_WIDTH) }]}
     >
       {showOnlyAkba ? (

@@ -214,7 +214,7 @@ export function MapSearchField({
 
   return (
     <View style={styles.field} pointerEvents="box-none">
-      {Platform.OS === "ios" ? <GlassSurface radius={24} style={styles.glass} /> : null}
+      {Platform.OS === "ios" ? <GlassSurface radius={24} material="frosted" style={styles.glass} /> : null}
       <GooglePlacesAutocomplete
         ref={placesRef}
         placeholder="İstasyon veya yer ara"

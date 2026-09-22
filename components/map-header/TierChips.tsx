@@ -9,7 +9,7 @@ import {
 } from "react-native";
 
 import type { StationType } from "../../constants/stations";
-import { GlassSurface, hasLiquidGlass } from "../ui/glass";
+import { GlassSurface } from "../ui/glass";
 import { IconSymbol } from "../ui/icon-symbol";
 import { usePagePalette } from "../ui/pagePalette";
 import { TIER_BOLTS, TIER_COLORS, TIERS } from "./tiers";
@@ -46,12 +46,14 @@ export function TierChips({
             accessibilityHint="Haritada yalnızca seçtiğiniz türler gösterilir."
             style={({ pressed }) => [
               styles.touch,
-              !hasLiquidGlass && pressed && styles.pressed,
+              // Frosted chips do not answer a touch by themselves: they dim.
+              pressed && styles.pressed,
             ]}
           >
             <GlassSurface
               radius={18}
               interactive
+              material="frosted"
               tintColor={isSelected ? TIER_COLORS[tier] : undefined}
               style={styles.chip}
             >
