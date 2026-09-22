@@ -1,110 +1,83 @@
-import Ionicons from "@expo/vector-icons/Ionicons";
 import { Tabs, useRouter } from "expo-router";
-import React, { useEffect, useRef } from "react";
-import {
-  Animated,
-  DeviceEventEmitter,
-  Image,
-  Platform,
-  Pressable,
-  View,
-} from "react-native";
+import React, { useEffect, useRef, useState } from "react";
+import { Animated, DeviceEventEmitter, Keyboard, Platform } from "react-native";
 
-import { HapticTab } from "@/components/haptic-tab";
-import { useTheme } from "@/context/ThemeContext";
-import { Profile, SmartCar } from "iconsax-react-native";
-
+import { GlassTabBar } from "@/components/navigation/GlassTabBar";
 import { DriveSessionStore, DriveSessionState } from "@/services/DriveSessionStore";
 
+/** Car mode covers the map from the start of a drive; the bar goes further down to stay out of it. */
+const DRIVING_OFFSET = 200;
+const COVERED_OFFSET = 150;
+const DRIVING_SLIDE_MS = 500;
+const COVERED_SLIDE_MS = 350;
+
+const isDriving = (state: DriveSessionState) =>
+  state !== DriveSessionState.IDLE && state !== DriveSessionState.PROMPTING;
+
 export default function TabLayout() {
-  const { colors, themeScheme } = useTheme();
   const router = useRouter();
 
-  const isDark = themeScheme === "dark";
+  // Why the bar is away, kept apart so one reason ending (a sheet closing)
+  // cannot bring the bar back while another (a drive) still holds.
+  const [driving, setDriving] = useState(() => isDriving(DriveSessionStore.getState()));
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [keyboardUp, setKeyboardUp] = useState(false);
 
-  const tabBarAnim = useRef(new Animated.Value(0)).current;
+  const offset = driving ? DRIVING_OFFSET : sheetOpen || keyboardUp ? COVERED_OFFSET : 0;
+  const hidden = offset > 0;
+
+  const [tabBarAnim] = useState(() => new Animated.Value(offset));
+  const lastDriving = useRef(driving);
 
   useEffect(() => {
-    const sub = DeviceEventEmitter.addListener(
-      "toggleBottomSheet",
-      (isOpen: boolean) => {
-        Animated.timing(tabBarAnim, {
-          toValue: isOpen ? 150 : 0,
-          duration: 350,
-          useNativeDriver: true,
-        }).start();
-      },
+    const sheetSub = DeviceEventEmitter.addListener("toggleBottomSheet", (isOpen: boolean) =>
+      setSheetOpen(!!isOpen),
     );
-
-    const unsubDrive = DriveSessionStore.onStateChange((state) => {
-      const isCarMode = state !== DriveSessionState.IDLE && state !== DriveSessionState.PROMPTING;
-      Animated.timing(tabBarAnim, {
-        toValue: isCarMode ? 200 : 0,
-        duration: 500,
-        useNativeDriver: true,
-      }).start();
-    });
+    const unsubDrive = DriveSessionStore.onStateChange((state) => setDriving(isDriving(state)));
+    // Android: with edge-to-edge on, the window does not resize for the
+    // keyboard, so the keyboard covers the bar as on iOS. It still steps
+    // aside, as before, so TalkBack does not reach it under the keyboard.
+    const keyboardSubs =
+      Platform.OS === "android"
+        ? [
+            Keyboard.addListener("keyboardDidShow", () => setKeyboardUp(true)),
+            Keyboard.addListener("keyboardDidHide", () => setKeyboardUp(false)),
+          ]
+        : [];
 
     return () => {
-      sub.remove();
+      sheetSub.remove();
       unsubDrive();
+      keyboardSubs.forEach((sub) => sub.remove());
     };
-  }, [tabBarAnim]);
+  }, []);
+
+  useEffect(() => {
+    const drivingChanged = lastDriving.current !== driving;
+    lastDriving.current = driving;
+    Animated.timing(tabBarAnim, {
+      toValue: offset,
+      duration: drivingChanged ? DRIVING_SLIDE_MS : COVERED_SLIDE_MS,
+      useNativeDriver: true,
+    }).start();
+  }, [offset, driving, tabBarAnim]);
 
   return (
     <Tabs
       initialRouteName="mainpage"
-      screenOptions={{
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textSecondary,
-        tabBarStyle: {
-          position: "absolute",
-          bottom: 0,
-          left: 0,
-          right: 0,
-          backgroundColor: isDark
-            ? "rgba(30, 30, 30, 0.85)"
-            : "rgba(255, 255, 255, 0.95)", // Semi-transparent for glass effect
-          borderTopWidth: 0,
-          elevation: 0, // Remove heavy shadow for cleaner look
-          shadowColor: "#000",
-          shadowOffset: { width: 0, height: -2 },
-          shadowOpacity: 0.03, // Very subtle shadow
-          shadowRadius: 8,
-          height: Platform.OS === "ios" ? 106 : 96, // Taller and spacious
-          paddingTop: 10,
-          paddingBottom: Platform.OS === "ios" ? 34 : 16, // Safe area for system nav bar
-          borderTopLeftRadius: 24, // More rounded
-          borderTopRightRadius: 24,
-          transform: [{ translateY: tabBarAnim }],
-        },
-        tabBarItemStyle: { paddingVertical: 4 },
-        headerShown: false,
-        tabBarButton: HapticTab,
-        tabBarLabelStyle: { fontWeight: "600", fontSize: 12, marginTop: 16 },
-      }}
+      screenOptions={{ headerShown: false }}
+      tabBar={(props) => (
+        <GlassTabBar
+          {...props}
+          translateY={tabBarAnim}
+          hidden={hidden}
+          onStartPress={() => router.push("/qr-scanner")}
+        />
+      )}
     >
-      <Tabs.Screen
-        name="mainpage"
-        options={{
-          tabBarButton: () => null,
-          tabBarItemStyle: { width: 0, display: "none" },
-        }}
-      />
-      <Tabs.Screen
-        name="sessions"
-        options={() => ({
-          title: "Oturumlar",
-          headerShown: false,
-          tabBarIcon: ({ color, focused }) => (
-            <SmartCar
-              size={28}
-              variant={focused ? "Bold" : "Outline"}
-              color={color}
-            />
-          ),
-        })}
-      />
+      <Tabs.Screen name="mainpage" options={{ title: "Sürüş" }} />
+      <Tabs.Screen name="sessions" options={{ title: "Oturumlar" }} />
+      {/* Never drawn as a tab: the bar's QR circle starts a charge. Kept for its route. */}
       <Tabs.Screen
         name="start"
         listeners={() => ({
@@ -113,68 +86,9 @@ export default function TabLayout() {
             router.push("/qr-scanner");
           },
         })}
-        options={{
-          title: "Start",
-          tabBarIcon: ({ focused }) => (
-            <View
-              style={{
-                width: 64,
-                height: 64,
-                borderRadius: 32,
-                backgroundColor: focused ? colors.primary : colors.card,
-                alignItems: "center",
-                justifyContent: "center",
-                shadowColor: focused ? colors.primary : "#000",
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: focused ? 0.3 : 0.05,
-                shadowRadius: 8,
-                elevation: focused ? 6 : 2,
-                overflow: "visible",
-                marginTop: -20, // Make it pop out of the tab bar
-              }}
-            >
-              <Image
-                source={require("../../assets/images/app_logo.png")}
-                style={{
-                  width: 36,
-                  height: 36,
-                  tintColor: focused ? "#fff" : colors.primary,
-                }}
-                resizeMode="contain"
-              />
-            </View>
-          ),
-        }}
+        options={{ title: "Başlat" }}
       />
-      <Tabs.Screen
-        name="profile"
-        options={({ navigation }) => ({
-          title: "Profile",
-          headerShown: true,
-          headerTitle: "",
-          headerShadowVisible: false,
-          headerLeft: () => (
-            <Pressable
-              hitSlop={12}
-              onPress={() => navigation.navigate("mainpage")}
-              style={{ paddingHorizontal: 4 }}
-            >
-              <Ionicons name="chevron-back" size={24} color={colors.text} />
-            </Pressable>
-          ),
-          headerStyle: {
-            backgroundColor: colors.background,
-          },
-          headerTintColor: colors.text,
-          tabBarIcon: ({ color, focused }) => (
-            <Profile
-              size={28}
-              variant={focused ? "Bold" : "Outline"}
-              color={color}
-            />
-          ),
-        })}
-      />
+      <Tabs.Screen name="profile" options={{ title: "Hesabım" }} />
     </Tabs>
   );
 }

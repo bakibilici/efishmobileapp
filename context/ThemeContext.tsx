@@ -1,7 +1,7 @@
 import { Colors } from '@/constants/theme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { useColorScheme as _useColorScheme } from 'react-native';
+import { Appearance, useColorScheme as _useColorScheme } from 'react-native';
 
 type ThemePreference = 'system' | 'light' | 'dark';
 type ThemeScheme = 'light' | 'dark';
@@ -38,6 +38,13 @@ export const ThemeProvider = ({ children }: { children: React.ReactNode }) => {
         };
         loadPref();
     }, []);
+
+    // Native chrome (navigation and search bars, alerts, switches, the
+    // keyboard) follows the system scheme unless told otherwise: make it
+    // follow Görünüm. null hands it back to the system.
+    useEffect(() => {
+        if (loaded) Appearance.setColorScheme(themePreference === 'system' ? null : themePreference);
+    }, [loaded, themePreference]);
 
     const setTheme = async (pref: ThemePreference) => {
         setThemePreference(pref);

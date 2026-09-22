@@ -85,7 +85,44 @@ Sentry.init({
   replaysOnErrorSampleRate: 0,
   integrations: [
     Sentry.mobileReplayIntegration(),
-    Sentry.feedbackIntegration(),
+    Sentry.feedbackIntegration({
+      formTitle: "Geri bildirim gönder",
+      messageLabel: "Açıklama",
+      messagePlaceholder: "Ne oldu, ne bekliyordunuz?",
+      nameLabel: "Ad",
+      namePlaceholder: "Adınız",
+      emailLabel: "E-posta",
+      emailPlaceholder: "ornek@eposta.com",
+      isRequiredLabel: "(zorunlu)",
+      submitButtonLabel: "Gönder",
+      cancelButtonLabel: "Vazgeç",
+      successMessageText: "Teşekkürler, geri bildiriminiz alındı.",
+      addScreenshotButtonLabel: "Ekran görüntüsü ekle",
+      removeScreenshotButtonLabel: "Ekran görüntüsünü kaldır",
+      captureScreenshotButtonLabel: "Ekran görüntüsü al",
+      captureScreenshotError: "Ekran görüntüsü alınamadı.",
+      errorTitle: "Hata",
+      formError: "Lütfen zorunlu alanları doldurun.",
+      emailError: "Lütfen geçerli bir e-posta adresi girin.",
+      genericError: "Geri bildirim gönderilemedi. Lütfen tekrar deneyin.",
+      // The app's own colours, not Sentry's purple, and no Sentry logo. The
+      // form follows Görünüm (ThemeContext sets the app's colour scheme).
+      showBranding: false,
+      themeLight: {
+        accentBackground: "#0093C9",
+        accentForeground: "#FFFFFF",
+        foreground: "#000000",
+        background: "#FFFFFF",
+        border: "rgba(60,60,67,0.29)",
+      },
+      themeDark: {
+        accentBackground: "#0093C9",
+        accentForeground: "#FFFFFF",
+        foreground: "#FFFFFF",
+        background: "#1C1C1E",
+        border: "rgba(84,84,88,0.6)",
+      },
+    }),
   ],
 
   // uncomment the line below to enable Spotlight (https://spotlightjs.com)
@@ -214,17 +251,20 @@ function RootLayoutNav() {
     setDefaultsApplied(true);
   }, [fontsLoaded]);
 
-  // Handle Splash Screen hiding and initial navigation
+  // Handle Splash Screen hiding and initial navigation. Keyed on the id, not
+  // the user object: saving the profile makes a new object, and that must
+  // not send the driver back to the map from the page they are editing.
+  const userId = user?.id ?? null;
   useEffect(() => {
     if (fontsLoaded && defaultsApplied && !isUserLoading) {
       // If user is logged in, navigate to mainpage immediately
-      if (user) {
+      if (userId != null) {
         router.replace("/(tabs)/mainpage");
       }
       // Hide splash screen after checking user status
       SplashScreen.hideAsync();
     }
-  }, [fontsLoaded, defaultsApplied, isUserLoading, user, router]);
+  }, [fontsLoaded, defaultsApplied, isUserLoading, userId, router]);
 
   if (!fontsLoaded || !defaultsApplied) {
     return null;

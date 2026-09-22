@@ -1,10 +1,7 @@
 import { LEGAL_DOCUMENTS, LegalDocumentKey } from "@/constants/legalDocuments";
 import { LEGAL_CONSENT_VERSION } from "@/constants/legalTexts";
 import { LegalScrollText } from "@/components/LegalTextViewer";
-import {
-  PREDEFINED_USER_INTERESTS,
-  USER_INTERESTS_NOTE,
-} from "@/constants/userInterests";
+import { PREDEFINED_USER_INTERESTS } from "@/constants/userInterests";
 import { useTheme } from "@/context/ThemeContext";
 import { useUser } from "@/context/UserContext";
 import { LocalUserStorage } from "@/services/localUserStorage";
@@ -382,25 +379,6 @@ export default function RegisterScreen() {
               için ek bağlam oluşturur.
             </Text>
 
-            <View
-              style={[
-                styles.noteCard,
-                {
-                  backgroundColor: colors.backgroundSecondary,
-                  borderColor: colors.border,
-                },
-              ]}
-            >
-              <Ionicons
-                name="sparkles-outline"
-                size={18}
-                color={colors.primary}
-              />
-              <Text style={[styles.noteText, { color: colors.textSecondary }]}>
-                {USER_INTERESTS_NOTE}
-              </Text>
-            </View>
-
             <View style={styles.interestsGrid}>
               {PREDEFINED_USER_INTERESTS.map((interest) => {
                 const selected = selectedInterests.includes(interest);
@@ -734,19 +712,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     fontSize: 16,
     fontWeight: "500",
-  },
-  noteCard: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: 10,
-    padding: 14,
-    borderRadius: 18,
-    borderWidth: 1,
-  },
-  noteText: {
-    flex: 1,
-    fontSize: 14,
-    lineHeight: 20,
   },
   interestsGrid: {
     flexDirection: "row",

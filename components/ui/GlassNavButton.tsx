@@ -1,7 +1,5 @@
 import { BlurView } from "expo-blur";
-import { requireOptionalNativeModule } from "expo";
-import type { GlassViewProps } from "expo-glass-effect";
-import React, { memo, useEffect, useRef, type ComponentType } from "react";
+import React, { memo, useEffect, useRef } from "react";
 import {
   Animated,
   Platform,
@@ -13,6 +11,7 @@ import {
 } from "react-native";
 
 import { useTheme } from "../../context/ThemeContext";
+import { LiquidGlassView } from "./glass";
 import { IconSymbol } from "./icon-symbol";
 
 const DEFAULT_SIZE = 44;
@@ -21,30 +20,6 @@ const MIN_TOUCH_SIZE = 44;
 const GLYPH_SIZE = 18;
 const FADE_IN_MS = 180;
 const FADE_OUT_MS = 140;
-
-/**
- * iOS 26's Liquid Glass view, or null. Loaded defensively: a dev client
- * built before expo-glass-effect was added has no ExpoGlassEffect native
- * module, and importing the package there would throw, so the module is
- * only required once the native side is known to exist. Beta builds of
- * iOS 26 without the glass API (expo/expo#40911) also get null.
- */
-const LiquidGlassView: ComponentType<GlassViewProps> | null = (() => {
-  if (Platform.OS !== "ios") return null;
-  try {
-    if (!requireOptionalNativeModule("ExpoGlassEffect")) return null;
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const glass = require("expo-glass-effect") as typeof import("expo-glass-effect");
-    return glass.isGlassEffectAPIAvailable() && glass.isLiquidGlassAvailable()
-      ? glass.GlassView
-      : null;
-  } catch {
-    return null;
-  }
-})();
-
-/** Whether this build draws real Liquid Glass (false: the frosted fallback). */
-export const hasLiquidGlass = LiquidGlassView !== null;
 
 /**
  * A circular toolbar button with a chevron (44 pt unless `size` says

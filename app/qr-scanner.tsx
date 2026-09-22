@@ -99,12 +99,12 @@ export default function QRScannerModal() {
         </View>
         <View style={styles.contentContainer}>
           <Ionicons name="camera-outline" size={80} color="#002331" />
-          <Text style={styles.title}>Kamera İzni Gerekli</Text>
+          <Text style={styles.title}>Kamera izni gerekli</Text>
           <Text style={styles.subtitle}>
-            QR kod taramak için kamera erişimine izin vermen gerekiyor.
+            QR kodu okutmak için kameraya erişim izni vermeniz gerekiyor.
           </Text>
           <Pressable style={[styles.button, { backgroundColor: colors.primary }]} onPress={requestPermission}>
-            <Text style={styles.buttonText}>İzin Ver</Text>
+            <Text style={styles.buttonText}>İzin ver</Text>
           </Pressable>
         </View>
       </SafeAreaView>
@@ -130,13 +130,13 @@ export default function QRScannerModal() {
           <SafeAreaView style={styles.safeHeader}>
             <View style={styles.modalHeader}>
               <View style={{ flex: 1 }} />
-              <Text style={styles.scanTitle}>Scan QR</Text>
+              <Text style={styles.scanTitle}>QR kodu okutun</Text>
               <View style={{ flex: 1, alignItems: "flex-end" }}>
                 <Pressable
                   style={styles.closeTextButton}
                   onPress={handleClose}
                 >
-                  <Text style={[styles.closeTextWhite, { color: colors.primary }]}>Cancel</Text>
+                  <Text style={[styles.closeTextWhite, { color: colors.primary }]}>Vazgeç</Text>
                 </Pressable>
               </View>
             </View>
@@ -160,7 +160,7 @@ export default function QRScannerModal() {
         {/* Bottom Dark Overlay */}
         <View style={styles.overlayBottom}>
           <Text style={styles.instructionText}>
-            Place QR Code here.
+            Şarj soketindeki QR kodu çerçeveye yerleştirin.
           </Text>
         </View>
       </View>
