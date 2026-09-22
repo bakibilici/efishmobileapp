@@ -9,7 +9,7 @@ import {
 
 /**
  * Why the system route sheet closes, and what its close then does:
- * - "user": the driver put it away (a swipe down, "Haritaya dön"): the
+ * - "user": the driver put it away (a swipe down, Close "Kapat"): the
  *   car-mode capsule offers it back.
  * - "remove": "Rotayı kaldır" was confirmed: the route is cleared once the
  *   sheet has gone.

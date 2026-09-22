@@ -1,7 +1,8 @@
 /**
  * Asserts the helpers behind the map's station pins: a route's charging
- * stops drawn as the map's own stations, AKBA's stations_focus payload, and
- * the providers' names kept off the screen. No test runner is installed, so
+ * stops drawn as the map's own stations, AKBA's stations_focus payload, the
+ * providers' names kept off the screen, and the markers' append-only order.
+ * No test runner is installed, so
  * this runs under tsx:
  *
  *   npx tsx scripts/check-station-markers.ts
@@ -9,6 +10,7 @@
 import assert from "node:assert/strict";
 
 import { stationTierOf, type Station } from "../constants/stations";
+import { appendOnlyOrder, newAppendOrderRanks } from "../hooks/useAppendOnlyOrder";
 import type { RoutePlanData, RoutePlanLocation } from "../services/DriveSessionStore";
 import {
   cleanProviderText,
@@ -314,6 +316,34 @@ check("found stations the map draws are highlighted in place; only the rest get 
   assert.deepEqual(focusPinsToAdd(found, new Set(["b", "x"])).map((s) => s.id), ["a", "c"]);
   assert.deepEqual(focusPinsToAdd(found, new Set()).map((s) => s.id), ["a", "b", "c"]);
   assert.deepEqual(focusPinsToAdd(found, new Set(["a", "b", "c"])), []);
+});
+
+check("the map's markers change only by removals and appends", () => {
+  const keys = (list: { key: string }[]) => list.map((item) => item.key);
+  const items = (...list: string[]) => list.map((key) => ({ key }));
+  const ranks = newAppendOrderRanks();
+  assert.deepEqual(keys(appendOnlyOrder(items("a", "b", "c"), ranks)), ["a", "b", "c"]);
+  // A filter brings "x" in ahead of "a" and drops "c": "x" still goes last.
+  assert.deepEqual(keys(appendOnlyOrder(items("x", "b", "a"), ranks)), ["a", "b", "x"]);
+  // Repeating a render gives the same order.
+  assert.deepEqual(keys(appendOnlyOrder(items("x", "b", "a"), ranks)), ["a", "b", "x"]);
+  // A key that left and came back is new again.
+  assert.deepEqual(keys(appendOnlyOrder(items("c", "x", "a"), ranks)), ["a", "x", "c"]);
+
+  // Any sequence of marker sets: what stays is the old order's prefix.
+  let seed = 7;
+  const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const property = newAppendOrderRanks();
+  let previous: string[] = [];
+  for (let round = 0; round < 500; round += 1) {
+    const set = Array.from({ length: 40 }, (_, i) => `s${i}`).filter(() => random() < 0.5);
+    set.sort(() => random() - 0.5);
+    const next = keys(appendOnlyOrder(items(...set), property));
+    assert.deepEqual([...next].sort(), [...set].sort());
+    const kept = previous.filter((key) => set.includes(key));
+    assert.deepEqual(next.slice(0, kept.length), kept);
+    previous = next;
+  }
 });
 
 console.log(`\n${passed} checks passed`);

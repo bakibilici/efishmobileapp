@@ -4,7 +4,7 @@
  * search in the part of the map they leave clear. Its own module, so the map
  * screen does not import CarModeView for a few numbers.
  */
-import { Platform } from "react-native";
+import { Platform, StatusBar } from "react-native";
 
 /** The trip's two header lines at text size 100%: destination 23 + trip line 17. */
 export const TRIP_LINES_HEIGHT = 23 + 17;
@@ -15,22 +15,29 @@ export const STATUS_TEXT_STACK_GAP = 2;
 export const ORB_BOTTOM = 36;
 export const ORB_TARGET_SIZE = 132;
 /**
- * The map's locate button (mainpage `recenterBtn` in drive mode): 60 pt tall,
- * bottom 132, 20 pt from the right edge. Beside it the capsule would have to
- * be narrower than "Kızılay, Ankara · 4 sa 50 dk", so it sits just above
- * both the button and the orb, as wide as the screen allows.
+ * The map's locate button (`LocateButton` in drive mode): 48 pt tall, bottom
+ * 132, 20 pt from the right edge. Beside it the capsule would have to be
+ * narrower than "Kızılay, Ankara · 4 sa 50 dk", so it sits just above both
+ * the button and the orb, as wide as the screen allows. The 60 is the old
+ * 60 pt button's height, kept so the capsule stays where it was (22 pt
+ * above the 48 pt button).
  */
 const LOCATE_BUTTON_TOP = 132 + 60;
 export const CAPSULE_BOTTOM = Math.max(ORB_BOTTOM + ORB_TARGET_SIZE + 6, LOCATE_BUTTON_TOP + 10);
 /** The capsule's own height (`capsuleGlass` minHeight). */
 const CAPSULE_HEIGHT = 44;
 
-/** `floatingHeader` top. */
-export const HEADER_TOP = Platform.OS === "ios" ? 60 : 30;
 /**
- * The header at text size 100%: safe-area padding 6 + 6, content padding
- * 10 + 10, the top row (the trip's lines and their gap, 42), the 12 gap and
- * the 44 actions row.
+ * `floatingHeader` top. Android draws edge to edge (app.config.js), so the
+ * card also clears a status bar taller than the usual 24 dp.
+ */
+export const HEADER_TOP =
+  Platform.OS === "ios" ? 60 : Math.max(30, (StatusBar.currentHeight ?? 0) + 6);
+/**
+ * The header at text size 100%: the card's padding 6 + 6 (`headerInner`, a
+ * plain view: the card already sits below the status bar, so it adds no
+ * safe area), content padding 10 + 10, the top row (the trip's lines and
+ * their gap, 42), the 12 gap and the 44 actions row.
  */
 const HEADER_HEIGHT = 12 + 20 + (TRIP_LINES_HEIGHT + STATUS_TEXT_STACK_GAP) + 12 + 44;
 

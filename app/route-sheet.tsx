@@ -28,6 +28,7 @@ import {
   MIDDLE_LEVEL,
   routeSheetModeOf,
   supportsNativeRouteSheet,
+  TOP_LEVEL,
 } from "@/components/route-sheet/nativeRouteSheet";
 import {
   arrivalLevel,
@@ -39,10 +40,12 @@ import {
   startLevel,
 } from "@/components/route-sheet/routeFormat";
 import { routeSheetBridge } from "@/components/route-sheet/routeSheetBridge";
+import { useReportRouteSheetPanel } from "@/components/route-sheet/routeSheetPanel";
 import { RouteSteps } from "@/components/route-sheet/RouteSteps";
 import {
   SHEET_BACK_INSET,
   SHEET_BACK_SIZE,
+  SHEET_CLOSE_SIZE,
   SheetMotionContext,
   type SheetMotion,
 } from "@/components/route-sheet/sheetMotion";
@@ -70,15 +73,22 @@ import { destinationTitle, isCoordinatePair } from "@/services/placeTitle";
  * which Android and older iOS keep; this screen repeats its orchestration
  * (panels, fades, the back ladder) around the same sheet-agnostic parts.
  *
+ * The sheet's own controls, as the HIG places them: an inner panel's Back
+ * at the top-leading edge (a step inside the sheet), and on a live route
+ * the standard Close at the top-trailing corner (it puts the sheet away, as
+ * Maps and Find My do). A preview's "Oturumlara dön" leaves the sheet
+ * altogether, so it is car mode's floating button outside the sheet; only at
+ * the full height, where the sheet covers that corner, does it move in here.
+ *
  * react-native-screens 4.16 lays a form sheet's scroll view out right only
  * when it is the screen's one top-level view: a header beside it breaks
  * for good once the sheet visits a stop shorter than the header. So the
- * back button is the scroll view's first child, pinned as a sticky header.
+ * buttons are the scroll view's first child, pinned as a sticky header.
  */
 
-/** Room under the system grabber before the back button and the title's first line. */
+/** Room under the system grabber before the buttons and the title's first line. */
 const TOP_PADDING = 22;
-/** Around the button inside its sticky slot, so its 44 pt touch area stays inside the slot. */
+/** Around the buttons inside their sticky slot, so their 44 pt touch areas stay inside the slot. */
 const BACK_SLOT_SLACK = 6;
 const STICKY_BACK_SLOT = [0];
 const TITLE_SHIFT_MS = 180;
@@ -183,7 +193,7 @@ export default function RouteSheetScreen() {
     [],
   );
 
-  /** "Haritaya dön": the map, header and orb come back; the capsule reopens the sheet. */
+  /** The Close button: the map, header and orb come back; the capsule reopens the sheet. */
   const closeSheet = useCallback(() => routeSheetBridge.requestDismiss("user"), []);
 
   // A preview AKBA is not live in can be left for Oturumlar (the map
@@ -292,8 +302,10 @@ export default function RouteSheetScreen() {
     [animatePanelChange, breakBackTo],
   );
 
-  /** One level up, as in RoutePlanSheet: break → its panel, stops → overview, overview → Oturumlar or the map. */
-  const backAction =
+  /** A step back inside the sheet, as in RoutePlanSheet: a break's page → its panel, the stops → the overview. */
+  const isInnerPanel = activePanel !== "overview";
+  useReportRouteSheetPanel(isInnerPanel);
+  const panelBack =
     activePanel === "break"
       ? {
           label: breakBackTo === "stations" ? "Şarj duraklarına dön" : "Rota özetine dön",
@@ -301,11 +313,13 @@ export default function RouteSheetScreen() {
         }
       : activePanel === "stations"
         ? { label: "Rota özetine dön", onPress: openOverview }
-        : isPreviewSheet
-          ? canClosePreview
-            ? { label: "Oturumlara dön", onPress: closePreview }
-            : null
-          : { label: "Haritaya dön", onPress: closeSheet };
+        : null;
+  /** The sheet's Back: an inner panel's step, or a preview overview's way to Oturumlar. */
+  const backAction =
+    panelBack ??
+    (isPreviewSheet && canClosePreview ? { label: "Oturumlara dön", onPress: closePreview } : null);
+  /** A live route's sheet closes (a swipe down does the same); a preview's has no Close. */
+  const hasClose = !isPreviewSheet;
 
   const backPress = backAction?.onPress;
   const goBack = useCallback(() => {
@@ -313,12 +327,12 @@ export default function RouteSheetScreen() {
     backPress?.();
   }, [backPress]);
 
-  // At a preview's peek the car-mode header above the sheet holds its own
-  // "Oturumlara dön": the sheet's would be a second one, so it steps aside
-  // there, and the title slides back into its room.
+  // An inner panel's Back is a step inside the sheet: at every stop. A
+  // preview's "Oturumlara dön" leaves the sheet, so below the full height it
+  // is outside it, in car mode (the header's at the peek, the floating one
+  // above); only at the full height, which covers that corner, is it here.
   const hasBackAction = !!backAction;
-  const showBackButton =
-    hasBackAction && !(isPreviewSheet && level === 0 && activePanel === "overview");
+  const showBackButton = hasBackAction && (isInnerPanel || level >= TOP_LEVEL);
 
   // The gorhom sheet's motion at its highest stop, held there: the title
   // keeps the back button's room and sits beside it. Only the slide follows
@@ -331,8 +345,8 @@ export default function RouteSheetScreen() {
     });
   }, [showBackButton, titleShift]);
   const sheetMotion = useMemo<SheetMotion>(
-    () => ({ topProgress, hasBack: hasBackAction, titleShift }),
-    [topProgress, hasBackAction, titleShift],
+    () => ({ topProgress, hasBack: hasBackAction, hasClose, titleShift }),
+    [topProgress, hasBackAction, hasClose, titleShift],
   );
 
   const summary = routePlanData?.summary;
@@ -441,20 +455,35 @@ export default function RouteSheetScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         stickyHeaderIndices={STICKY_BACK_SLOT}
-        // VoiceOver's two-finger scrub anywhere in the sheet: the back button.
-        onAccessibilityEscape={backAction ? goBack : undefined}
+        // VoiceOver's two-finger scrub anywhere in the sheet: Back, else Close.
+        onAccessibilityEscape={backAction ? goBack : hasClose ? closeSheet : undefined}
       >
-        {/* Pinned under the grabber, left of the title's first line. */}
-        <View style={styles.backSlot} pointerEvents="box-none">
-          {backAction ? (
-            <GlassNavButton
-              visible={showBackButton}
-              size={SHEET_BACK_SIZE}
-              onPress={goBack}
-              onAccessibilityEscape={goBack}
-              accessibilityLabel={backAction.label}
-            />
-          ) : null}
+        {/* Pinned under the grabber, level with the title's first line: Back
+            at the leading edge, Close at the trailing corner. */}
+        <View style={styles.buttonSlot} pointerEvents="box-none">
+          <View style={styles.buttonRow} pointerEvents="box-none">
+            {backAction ? (
+              <GlassNavButton
+                visible={showBackButton}
+                size={SHEET_BACK_SIZE}
+                onPress={goBack}
+                onAccessibilityEscape={goBack}
+                accessibilityLabel={backAction.label}
+              />
+            ) : (
+              <View />
+            )}
+            {hasClose ? (
+              <GlassNavButton
+                symbol="xmark"
+                size={SHEET_CLOSE_SIZE}
+                onPress={closeSheet}
+                onAccessibilityEscape={closeSheet}
+                accessibilityLabel="Kapat"
+                accessibilityHint="Rota özetini gizler."
+              />
+            ) : null}
+          </View>
         </View>
 
         <Animated.View
@@ -552,21 +581,25 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingBottom: 60,
   },
-  // Only as wide as the button: the slot stays over the title's first line.
-  // Sized explicitly: the sticky header gives its child flex 1, which
-  // without a fixed size stretched the slot to the whole sheet. The sticky
-  // header also moves this style onto its own wrapper view, so pointerEvents
-  // goes here (a prop would stay on the inner view): only the button takes
+  // The sheet's width, the buttons at its two edges over the title's first
+  // line. Sized explicitly: the sticky header gives its child flex 1, which
+  // without a fixed height stretched the slot to the whole sheet. The sticky
+  // header also moves this style onto its own wrapper view (the child keeps
+  // only flex 1, so the row is a view of its own inside), and pointerEvents
+  // goes here (a prop would stay on the inner view): only the buttons take
   // touches, and rows scrolled under the slot stay tappable.
-  backSlot: {
+  buttonSlot: {
     pointerEvents: "box-none",
-    alignSelf: "flex-start",
-    width: SIDE_MARGIN + SHEET_BACK_SIZE + BACK_SLOT_SLACK,
     height: TOP_PADDING + SHEET_BACK_SIZE + BACK_SLOT_SLACK,
     paddingTop: TOP_PADDING,
-    paddingLeft: SIDE_MARGIN,
+    paddingHorizontal: SIDE_MARGIN,
   },
-  // Up beside the pinned button: the title's first line centres on it.
+  buttonRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+  },
+  // Up beside the pinned buttons: the title's first line centres on them.
   panel: {
     marginTop: -(SHEET_BACK_SIZE + BACK_SLOT_SLACK),
   },

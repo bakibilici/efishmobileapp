@@ -56,10 +56,13 @@ import {
   fromOrigin,
   startLevel,
 } from "./route-sheet/routeFormat";
+import { useReportRouteSheetPanel } from "./route-sheet/routeSheetPanel";
 import { RouteSteps } from "./route-sheet/RouteSteps";
-import { SheetBackButton } from "./route-sheet/SheetBackButton";
+import { SheetBackButton, SheetCloseButton } from "./route-sheet/SheetBackButton";
 import { SheetGlassBackground } from "./route-sheet/SheetGlassBackground";
 import {
+  FLOATING_BACK_LEFT,
+  FLOATING_BACK_TOP,
   SHEET_BACK_INSET,
   SHEET_BACK_REVEAL_START,
   SheetMotionContext,
@@ -78,9 +81,17 @@ import { GlassNavButton } from "./ui/GlassNavButton";
  *
  * The stops count from under the safe area (topInset), so the highest,
  * 100 %, reaches just under the Dynamic Island, as Find My's full-height
- * sheet: there the glass turns almost opaque and the back button moves into
- * the sheet (sheetMotion). There is no stop in between, and no stop sized to
- * the content, so the highest is always the last and the full height.
+ * sheet: there the glass turns almost opaque and a preview's "Oturumlara
+ * dön" moves into the sheet (sheetMotion). There is no stop in between, and
+ * no stop sized to the content, so the highest is always the last and the
+ * full height.
+ *
+ * The controls follow the HIG, as the system sheet's (app/route-sheet) do:
+ * an inner panel's Back is a step inside the sheet, at its top-leading edge
+ * at every stop; a live route's sheet has the standard Close at its
+ * top-trailing corner; a preview's "Oturumlara dön" leaves the sheet, so it
+ * floats outside it at the screen's top-leading corner (the car-mode
+ * header's own at the peek) until the sheet covers that corner.
  */
 /** The middle stop, in percent of the sheet's container (the screen under the safe area). */
 const MIDDLE_SNAP_PERCENT = 55;
@@ -88,10 +99,6 @@ const LIVE_SNAP_POINTS = [`${MIDDLE_SNAP_PERCENT}%`, "100%"];
 const PREVIEW_SNAP_POINTS = ["15%", `${MIDDLE_SNAP_PERCENT}%`, "100%"];
 /** Where a new route and a reopened sheet land. */
 const MIDDLE_LEVEL = 1;
-
-/** The floating back button: 44 pt, 8 pt under the safe area, 16 pt in. */
-const NAV_BUTTON_TOP = 8;
-const NAV_BUTTON_LEFT = 16;
 
 /**
  * Every panel change, the stops and a break's page alike and every way back:
@@ -247,7 +254,7 @@ export function RoutePlanSheet({
         removingRouteRef.current = false;
         DriveSessionStore.clearRoute();
       } else {
-        // The back button ("Haritaya dön") or a swipe down: the car-mode
+        // Close ("Kapat") or a swipe down: the car-mode
         // view offers it back.
         DriveSessionStore.dismissRouteSheet();
       }
@@ -297,7 +304,7 @@ export function RoutePlanSheet({
     };
   }, [onSheetIndexChange]);
 
-  /** "Haritaya dön": the map, header and orb come back; the capsule reopens the sheet. */
+  /** The Close button: the map, header and orb come back; the capsule reopens the sheet. */
   const closeSheet = useCallback(() => {
     bottomSheetRef.current?.close();
   }, []);
@@ -431,15 +438,17 @@ export function RoutePlanSheet({
   );
 
   /**
-   * The one back button, one level up as in a navigation stack: a break
-   * suggestion's page goes back to where it was opened (the overview or the
-   * stops); the stations panel back to the route overview; a preview's
-   * overview to Oturumlar; a live route's overview down to the map. A
-   * preview AKBA is live in has no way back yet (see mainpage), so its
-   * overview has none.
+   * Back, one level up as in a navigation stack: a break suggestion's page
+   * goes back to where it was opened (the overview or the stops), the
+   * stations panel back to the route overview (a step inside the sheet); a
+   * preview's overview leaves for Oturumlar. A preview AKBA is live in has
+   * no way back yet (see mainpage), so its overview has none. A live route's
+   * overview has no Back: its sheet has Close instead.
    */
   const isPreviewSheet = mounted?.mode === "preview";
-  const backAction = !mounted
+  const isInnerPanel = !!mounted && activePanel !== "overview";
+  useReportRouteSheetPanel(isInnerPanel);
+  const panelBack = !mounted
     ? null
     : activePanel === "break"
       ? {
@@ -448,11 +457,14 @@ export function RoutePlanSheet({
         }
       : activePanel === "stations"
         ? { label: "Rota özetine dön", onPress: openOverview }
-        : isPreviewSheet
-          ? onClosePreview
-            ? { label: "Oturumlara dön", onPress: onClosePreview }
-            : null
-          : { label: "Haritaya dön", onPress: closeSheet };
+        : null;
+  const backAction =
+    panelBack ??
+    (isPreviewSheet && onClosePreview
+      ? { label: "Oturumlara dön", onPress: onClosePreview }
+      : null);
+  /** A live route's sheet closes (Close, a swipe down); a preview's has no Close. */
+  const hasClose = !!mounted && !isPreviewSheet;
   const isSheetOpen = targetLevel >= 0;
 
   /**
@@ -465,13 +477,17 @@ export function RoutePlanSheet({
     if (panelTransitionRef.current) return;
     backPress?.();
   }, [backPress]);
+  /** VoiceOver's escape and Android's back key: Back, else Close. */
+  const escape = backAction ? goBack : hasClose ? closeSheet : null;
 
   /**
    * The sheet's position for the parts that follow it frame by frame, all on
    * the UI thread: the index the library animates (fractional between stops)
    * turned into 0 at the middle stop and 1 at the highest. The background
-   * fades its opaque fill with it; the title slides right for the sheet's own
-   * back button as that fades in. React hears only the handover itself.
+   * fades its opaque fill with it; the title slides right for a preview's
+   * "Oturumlara dön" as that fades into the sheet (an inner panel's Back
+   * stands there at every stop, its title beside it). React hears only the
+   * handover itself.
    */
   const sheetIndex = useSharedValue(-1);
   const topIndex =
@@ -482,21 +498,24 @@ export function RoutePlanSheet({
     [topIndex],
   );
   const hasBackAction = !!backAction;
+  const backPinned = !!panelBack;
   const titleShift = useDerivedValue(
     () =>
-      hasBackAction
-        ? interpolate(
-            topProgress.value,
-            [SHEET_BACK_REVEAL_START, 1],
-            [0, SHEET_BACK_INSET],
-            Extrapolation.CLAMP,
-          )
-        : 0,
-    [hasBackAction],
+      backPinned
+        ? SHEET_BACK_INSET
+        : hasBackAction
+          ? interpolate(
+              topProgress.value,
+              [SHEET_BACK_REVEAL_START, 1],
+              [0, SHEET_BACK_INSET],
+              Extrapolation.CLAMP,
+            )
+          : 0,
+    [hasBackAction, backPinned],
   );
   const sheetMotion = useMemo<SheetMotion>(
-    () => ({ topProgress, hasBack: hasBackAction, titleShift }),
-    [topProgress, hasBackAction, titleShift],
+    () => ({ topProgress, hasBack: hasBackAction, hasClose, titleShift }),
+    [topProgress, hasBackAction, hasClose, titleShift],
   );
   const [isNearTop, setIsNearTop] = useState(false);
   useAnimatedReaction(
@@ -507,17 +526,19 @@ export function RoutePlanSheet({
     [topProgress],
   );
 
-  // A preview's low peek leaves the top of the screen to the car-mode header
-  // (it holds "Sürüşü Başlat" and its own "Oturumlara dön" chevron), which is
-  // drawn above this screen; the header leaves as the sheet rises past it.
-  // Near the highest stop the sheet would run into the floating button: the
+  // Only a preview overview's "Oturumlara dön" floats outside the sheet. Its
+  // low peek leaves the top of the screen to the car-mode header (it holds
+  // "Sürüşü Başlat" and its own "Oturumlara dön" chevron), which is drawn
+  // above this screen; the header leaves as the sheet rises past it. Near
+  // the highest stop the sheet would run into the floating button: the
   // sheet's own button (SheetBackButton) takes over there.
-  const showBackButton = !!backAction && targetLevel >= 1 && !isNearTop;
+  const floatsBack = !!backAction && !backPinned;
+  const showFloatingBack = floatsBack && targetLevel >= 1 && !isNearTop;
 
-  // Android's back key follows the button, and also works at a preview's
+  // Android's back key follows the buttons, and also works at a preview's
   // peek. With the sheet put away it is left to the system.
   const hardwareBackRef = useRef<(() => void) | null>(null);
-  hardwareBackRef.current = backAction && isSheetOpen ? goBack : null;
+  hardwareBackRef.current = escape && isSheetOpen ? escape : null;
   useFocusEffect(
     useCallback(() => {
       const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -655,7 +676,7 @@ export function RoutePlanSheet({
           animatedIndex={sheetIndex}
           onAnimate={handleSheetAnimate}
           onChange={handleSheetChange}
-          // Swiping a live route's sheet down does what "Haritaya dön" does.
+          // Swiping a live route's sheet down does what Close ("Kapat") does.
           enablePanDownToClose={isLive}
           backgroundComponent={SheetGlassBackground}
           // The library makes its content one "Bottom Sheet" element
@@ -672,8 +693,8 @@ export function RoutePlanSheet({
             ref={scrollRef}
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
-            // VoiceOver's two-finger scrub anywhere in the sheet: the back button.
-            onAccessibilityEscape={backAction ? goBack : undefined}
+            // VoiceOver's two-finger scrub anywhere in the sheet: Back, else Close.
+            onAccessibilityEscape={escape ?? undefined}
           >
             <Animated.View
               style={{
@@ -765,21 +786,30 @@ export function RoutePlanSheet({
             </Animated.View>
           </BottomSheetScrollView>
 
-          {/* The back button at the highest stop: in the sheet, left of the title. */}
+          {/* In the sheet, left of the title: an inner panel's Back at every
+              stop, a preview's "Oturumlara dön" at the highest. */}
           {backAction ? (
-            <SheetBackButton label={backAction.label} onPress={goBack} active={isNearTop} />
+            <SheetBackButton
+              label={backAction.label}
+              onPress={goBack}
+              active={isNearTop}
+              pinned={backPinned}
+            />
           ) : null}
+          {/* A live route's Close, at the top-trailing corner. */}
+          {hasClose ? <SheetCloseButton onPress={closeSheet} visible={isSheetOpen} /> : null}
         </BottomSheet>
       </SheetMotionContext.Provider>
 
-      {/* Screen-level, over the map and above the sheet: a floating toolbar's back button. */}
-      {backAction ? (
+      {/* Screen-level, over the map and above the sheet: a floating toolbar's
+          back button, for a preview's "Oturumlara dön" only. */}
+      {floatsBack && backAction ? (
         <GlassNavButton
-          visible={showBackButton}
+          visible={showFloatingBack}
           onPress={goBack}
           onAccessibilityEscape={goBack}
           accessibilityLabel={backAction.label}
-          style={[styles.navButton, { top: safeTop + NAV_BUTTON_TOP }]}
+          style={[styles.navButton, { top: safeTop + FLOATING_BACK_TOP }]}
         />
       ) : null}
     </>
@@ -802,7 +832,7 @@ const styles = StyleSheet.create({
   },
   navButton: {
     position: "absolute",
-    left: NAV_BUTTON_LEFT,
+    left: FLOATING_BACK_LEFT,
     zIndex: 30000,
     elevation: 90,
   },

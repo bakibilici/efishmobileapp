@@ -17,15 +17,17 @@ import { IconSymbol } from "./icon-symbol";
 const DEFAULT_SIZE = 44;
 /** The smallest touch target (HIG): a smaller circle is tapped anywhere in a square this big around it. */
 const MIN_TOUCH_SIZE = 44;
-const GLYPH_SIZE = 18;
+/** The xmark is wider than the chevron at the same size: drawn a little smaller, it weighs the same. */
+const GLYPH_SIZE = { "chevron.left": 18, xmark: 15 } as const;
 const FADE_IN_MS = 180;
 const FADE_OUT_MS = 140;
 
 /**
- * A circular toolbar button with a chevron (44 pt unless `size` says
- * otherwise), the back button of a floating navigation bar: Liquid Glass
- * (regular, interactive) on iOS 26, else a frosted circle with a hairline
- * edge. Icon only, so it always needs `accessibilityLabel` ("Oturumlara dön").
+ * A circular toolbar button (44 pt unless `size` says otherwise): the
+ * standard Back (a chevron, the default) or Close (`symbol="xmark"`) of a
+ * floating navigation bar or a sheet: Liquid Glass (regular, interactive) on
+ * iOS 26, else a frosted circle with a hairline edge. Icon only, so it always
+ * needs `accessibilityLabel` ("Oturumlara dön", "Kapat").
  *
  * `material="frosted"` always draws the frosted circle: for a button inside
  * another material (a blurred header) or under an ancestor whose opacity
@@ -48,6 +50,7 @@ function GlassNavButtonComponent({
   visible = true,
   size = DEFAULT_SIZE,
   material = "auto",
+  symbol = "chevron.left",
   style,
 }: {
   onPress: () => void;
@@ -59,6 +62,8 @@ function GlassNavButtonComponent({
   size?: number;
   /** "auto": Liquid Glass where the system draws it, else frosted. "frosted": always frosted. */
   material?: "auto" | "frosted";
+  /** "chevron.left": one level back. "xmark": closes a sheet or a modal view. */
+  symbol?: "chevron.left" | "xmark";
   style?: StyleProp<ViewStyle>;
 }) {
   const { themeScheme } = useTheme();
@@ -77,7 +82,7 @@ function GlassNavButtonComponent({
   // iOS label colour: black on light glass, white on dark.
   const glyphColor = isDark ? "#FFFFFF" : "#000000";
   const glyph = (
-    <IconSymbol name="chevron.left" size={GLYPH_SIZE} weight="semibold" color={glyphColor} />
+    <IconSymbol name={symbol} size={GLYPH_SIZE[symbol]} weight="semibold" color={glyphColor} />
   );
   const circle = { width: size, height: size, borderRadius: size / 2 };
   const touchSize = Math.max(size, MIN_TOUCH_SIZE);

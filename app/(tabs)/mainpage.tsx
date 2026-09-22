@@ -21,15 +21,12 @@ import {
   stopChargingSession,
 } from "@/services/api";
 import { getAccessToken } from "@/services/tokenStorage";
-import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import {
   BottomSheetFlatList,
   BottomSheetModal,
   BottomSheetScrollView,
 } from "@gorhom/bottom-sheet";
-import * as Haptics from "expo-haptics";
-import * as Localization from "expo-localization";
 import * as Location from "expo-location";
 import {
   useFocusEffect,
@@ -57,14 +54,12 @@ import {
   type LayoutChangeEvent,
   Platform,
   Pressable,
-  StatusBar,
   StyleSheet,
   Text,
   TouchableWithoutFeedback,
   UIManager,
   View,
 } from "react-native";
-import { GooglePlacesAutocomplete } from "react-native-google-places-autocomplete";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import MapView, {
   Marker,
@@ -75,7 +70,13 @@ import MapView, {
 
 // ... existing imports ...
 
-import { ActivityContextBar } from "@/components/ActivityContextBar";
+import { MapHeader } from "@/components/map-header/MapHeader";
+import {
+  DriveModeButton,
+  LocateButton,
+} from "@/components/map-header/MapFloatingControls";
+import { stationSearchKey } from "@/components/map-header/stationSearch";
+import { TIER_BOLTS, TIER_COLORS } from "@/components/map-header/tiers";
 import { CAR_MODE_MAP_CLEAR_INSETS } from "@/components/carModeLayout";
 import {
   hasRouteSheet,
@@ -97,6 +98,7 @@ import { Station, StationType } from "@/constants/stations";
 import { Colors } from "@/constants/theme";
 import { useTheme } from "@/context/ThemeContext";
 import { useActivityState } from "@/hooks/useActivityState";
+import { useAppendOnlyOrder } from "@/hooks/useAppendOnlyOrder";
 import { useHeaderAutoCollapse } from "@/hooks/useHeaderAutoCollapse";
 import {
   DriveSessionState,
@@ -124,20 +126,8 @@ import {
   withoutProviderNames,
   withoutProviderNamesInStationDetails,
 } from "@/services/providerNames";
-import Voice from "@react-native-voice/voice";
 
-import {
-  Flash,
-  Microphone2,
-  Notification,
-  Setting4,
-} from "iconsax-react-native";
-
-const typeColors: Record<StationType, string> = {
-  HPC: "#7C4DFF",
-  DC: "#FF8A1F",
-  AC: "#4BACE4",
-};
+const typeColors: Record<StationType, string> = TIER_COLORS;
 
 const getStationColor = (type: string | null | undefined) => {
   if (!type) return "#000000";
@@ -163,11 +153,12 @@ const NO_ROUTE_LOCATIONS: RoutePlanLocation[] = [];
 /** Stable while AKBA has found nothing to add to the map. */
 const NO_STATIONS: Station[] = [];
 
-const typeLightningCount: Record<StationType, number> = {
-  AC: 1,
-  DC: 2,
-  HPC: 3,
-};
+/** A station marker on the map: a pin (`found`: added for AKBA's search) or a cluster. */
+type StationMarkerItem =
+  | { key: string; kind: "pin"; station: Station; found: boolean }
+  | { key: string; kind: "cluster"; cluster: StationCluster };
+
+const typeLightningCount: Record<StationType, number> = TIER_BOLTS;
 
 // Marker size as percentage of screen width — consistent across all resolutions.
 const SCREEN_W = Dimensions.get("window").width;
@@ -553,7 +544,6 @@ export default function MapScreen() {
   const [targetSocketUuid, setTargetSocketUuid] = useState<string | null>(null);
   const [myVehicles, setMyVehicles] = useState<any[]>([]);
   const [isLoadingVehicles, setIsLoadingVehicles] = useState(false);
-  const [measuredFilterHeight, setMeasuredFilterHeight] = useState(160); // Much smaller now
   // The route sheet's level: -1 closed, 0 peek (previews), 1 middle, 2+ higher.
   const [routePlanSheetIndex, setRoutePlanSheetIndex] = useState(() =>
     DriveSessionStore.getRoutePlanSheetIndex(),
@@ -1319,48 +1309,24 @@ export default function MapScreen() {
   const [search, setSearch] = useState("");
   const [typeFilters, setTypeFilters] = useState<StationType[]>([]);
   const [onlyEfish, setOnlyEfish] = useState(false);
-  const [showPublic, setShowPublic] = useState(false);
-  const [showFavorites, setShowFavorites] = useState(false);
   const [userLocation, setUserLocation] =
     useState<Location.LocationObject | null>(null);
   const [locationPermission, setLocationPermission] = useState<boolean>(false);
 
-  const topInset =
-    Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 24 : 60;
-
   const { colors, themeScheme } = useTheme();
   const isDark = themeScheme === "dark";
   const activityState = useActivityState();
-  const { headerMode, reportInteraction, forceExpand } =
-    useHeaderAutoCollapse(activityState);
-  const isHeaderExpanded = headerMode === "FULL";
-
-  const headerExpandAnim = useRef(
-    new Animated.Value(isHeaderExpanded ? 1 : 0),
-  ).current;
-
-  useEffect(() => {
-    Animated.spring(headerExpandAnim, {
-      toValue: isHeaderExpanded ? 1 : 0,
-      useNativeDriver: false,
-      speed: 16,
-      bounciness: 4,
-    }).start();
-  }, [isHeaderExpanded]);
-
+  // The header stays full while its filter popover is open, the search
+  // field is in use, or a pin-name filter is committed.
   const [isFiltersVisible, setIsFiltersVisible] = useState(false);
-  const filterDrawerAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.timing(filterDrawerAnim, {
-      toValue: isFiltersVisible ? 1 : 0,
-      duration: 250,
-      useNativeDriver: false, // height cannot use native driver
-    }).start();
-  }, [isFiltersVisible]);
+  const [isSearchActive, setIsSearchActive] = useState(false);
+  const headerHold = isFiltersVisible || isSearchActive || search !== "";
+  const { headerMode, reportInteraction, forceExpand } =
+    useHeaderAutoCollapse(activityState, headerHold);
 
   const toggleFilters = () => {
-    setIsFiltersVisible(!isFiltersVisible);
+    Keyboard.dismiss();
+    setIsFiltersVisible((v) => !v);
   };
 
   // Login Success Toast
@@ -1380,29 +1346,20 @@ export default function MapScreen() {
     }
   }, [charging.isActive, charging.isMinimized]);
 
-  // Header Slide Down Animation
-  const headerAnim = useRef(new Animated.Value(-200)).current;
-
+  // The full-screen charging sheet slides the header away (MapHeader's
+  // `hidden`) and hides the tab bar.
+  const isChargingSheetOpen = charging.isActive && !charging.isMinimized;
   useEffect(() => {
-    // If charging screen is full-screen (not minimized), slide header up and away
-    const isBottomSheetOpen = charging.isActive && !charging.isMinimized;
-    Animated.spring(headerAnim, {
-      toValue: isBottomSheetOpen ? -200 : 0,
-      useNativeDriver: true,
-      speed: 12,
-      bounciness: 6,
-    }).start();
-
     // Tell _layout.tsx to hide/show the tab bar
-    DeviceEventEmitter.emit("toggleBottomSheet", isBottomSheetOpen);
-  }, [charging.isActive, charging.isMinimized]);
+    DeviceEventEmitter.emit("toggleBottomSheet", isChargingSheetOpen);
+  }, [isChargingSheetOpen]);
 
   useEffect(() => {
     if (params.showLoginSuccess === "true") {
       setShowSuccessToast(true);
       // Slide Down
       Animated.spring(toastAnim, {
-        toValue: topInset + 10,
+        toValue: safeTop + 8,
         useNativeDriver: true,
         speed: 12,
         bounciness: 8,
@@ -1420,7 +1377,7 @@ export default function MapScreen() {
 
       return () => clearTimeout(timer);
     }
-  }, [params.showLoginSuccess, topInset]);
+  }, [params.showLoginSuccess, safeTop]);
 
   // Uygulama açılır açılmaz giriş yapmışsa meter-values WebSocket'e bağlan (halihazırda şarj varsa widget güncellenir)
   useEffect(() => {
@@ -1492,7 +1449,8 @@ export default function MapScreen() {
   const typeListSnapPoints = useMemo(() => ["15%", "35%", "90%"], []);
   const [bottomSheetSelectedType, setBottomSheetSelectedType] =
     useState<StationType | null>(null);
-  const [isTypeListOpen, setIsTypeListOpen] = useState(false);
+  // Still written where a list opens; nothing reads it any more.
+  const [, setIsTypeListOpen] = useState(false);
   // Stations of a tapped cluster whose members are too close to separate by
   // zooming; shown in the type-list sheet instead of a type filter.
   const [clusterList, setClusterList] = useState<Station[] | null>(null);
@@ -1508,18 +1466,6 @@ export default function MapScreen() {
       UIManager.setLayoutAnimationEnabledExperimental(true);
     }
   }, []);
-
-  // Animated value for type buttons slide in/out
-  const typeButtonsAnim = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    const shouldShow = !isFiltersVisible && !isTypeListOpen;
-    Animated.timing(typeButtonsAnim, {
-      toValue: shouldShow ? 1 : 0,
-      duration: 250,
-      useNativeDriver: false,
-    }).start();
-  }, [isFiltersVisible, isTypeListOpen]);
 
   const [showRecenter, setShowRecenter] = useState(false);
 
@@ -1586,54 +1532,6 @@ export default function MapScreen() {
       }
     };
   }, []);
-
-  const [isListening, setIsListening] = useState(false);
-
-  useEffect(() => {
-    Voice.onSpeechStart = () => setIsListening(true);
-    Voice.onSpeechEnd = () => setIsListening(false);
-    Voice.onSpeechError = (e) => {
-      // Gracefully handle "No speech detected" timeouts
-      const isNoSpeech =
-        e.error?.message?.includes("No speech detected") ||
-        e.error?.code === "7";
-      if (!isNoSpeech) {
-        console.error("Speech Error:", e);
-      }
-      setIsListening(false);
-    };
-    Voice.onSpeechResults = (e) => {
-      if (e.value && e.value.length > 0) {
-        setSearch(e.value[0]);
-      }
-    };
-    Voice.onSpeechPartialResults = (e) => {
-      if (e.value && e.value.length > 0) {
-        setSearch(e.value[0]);
-      }
-    };
-
-    return () => {
-      Voice.destroy().then(Voice.removeAllListeners);
-    };
-  }, []);
-
-  const toggleListening = async () => {
-    try {
-      if (isListening) {
-        await Haptics.notificationAsync(
-          Haptics.NotificationFeedbackType.Success,
-        );
-        await Voice.stop();
-      } else {
-        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        const locale = Localization.getLocales()[0].languageTag || "tr-TR";
-        await Voice.start(locale);
-      }
-    } catch (e) {
-      console.error("Toggle Listening Error:", e);
-    }
-  };
 
   // Keep track of current region to refetch when filters change
   const currentRegion = useRef<Region>(initialRegion);
@@ -1798,25 +1696,23 @@ export default function MapScreen() {
   }, [stationsList, electripStations, viewport, selectedStation]);
 
   // Client-side filtering for the toggles the feeds do not apply themselves.
-  const filteredStations = useMemo(
-    () =>
-      allStations.filter((station) => {
-        // A route's stop has its own marker (RouteStationMarker).
-        if (routeStopStationIds.has(station.id)) return false;
-        // The API already filters by Type (AC/DC/HPC).
-        // We might still filter by name (search) or other client-side toggles here.
-        const matchesQuery = station.name
-          .toLowerCase()
-          .includes(search.toLowerCase().trim());
-        // Now that a second network is on the map, this toggle finally has two
-        // things to choose between.
-        const matchesNetwork = !onlyEfish || station.isEfish === true;
-        // The HPC/DC/AC chips must filter the ZES pins too, not only the efish feed.
-        const matchesType = typeFilters.length === 0 || typeFilters.includes(station.type);
-        return matchesQuery && matchesNetwork && matchesType;
-      }),
-    [allStations, search, onlyEfish, showPublic, typeFilters, routeStopStationIds],
-  );
+  const filteredStations = useMemo(() => {
+    // Folded once, not per station: this runs on every pan.
+    const query = stationSearchKey(search);
+    // The AKBA switch only shows while the efish feed has stations.
+    const akbaOnly = onlyEfish && stationsList.length > 0;
+    return allStations.filter((station) => {
+      // A route's stop has its own marker (RouteStationMarker).
+      if (routeStopStationIds.has(station.id)) return false;
+      // The search field's committed text filters the pins by name.
+      const matchesQuery =
+        query === "" || stationSearchKey(station.name).includes(query);
+      const matchesNetwork = !akbaOnly || station.isEfish === true;
+      // The HPC/DC/AC chips must filter the ZES pins too, not only the efish feed.
+      const matchesType = typeFilters.length === 0 || typeFilters.includes(station.type);
+      return matchesQuery && matchesNetwork && matchesType;
+    });
+  }, [allStations, search, onlyEfish, stationsList.length, typeFilters, routeStopStationIds]);
 
   // Grid-clustered view of whatever passed the filters. Markers on the map are
   // bounded by occupied grid cells, not by station count, so a bird's-eye view
@@ -1837,11 +1733,31 @@ export default function MapScreen() {
     return focusPinsToAdd(focus.found, drawnIds);
   }, [focus, mapMarkers, shouldShowOnlyRouteMarkers]);
 
+  // Every station pin, cluster and found station in one list, in the order
+  // each first appeared, so a filter or a pan only ever appends markers to
+  // the map (see useAppendOnlyOrder: one inserted mid-list is not drawn).
+  const stationMarkerItems = useMemo(() => {
+    const items: StationMarkerItem[] = [];
+    if (!shouldShowOnlyRouteMarkers) {
+      for (const station of mapMarkers.singles) {
+        items.push({ key: station.id, kind: "pin", station, found: false });
+      }
+      for (const cluster of mapMarkers.clusters) {
+        items.push({ key: cluster.id, kind: "cluster", cluster });
+      }
+    }
+    for (const station of focusPins) {
+      items.push({ key: `focus-${station.id}`, kind: "pin", station, found: true });
+    }
+    return items;
+  }, [mapMarkers, focusPins, shouldShowOnlyRouteMarkers]);
+  const stationMarkers = useAppendOnlyOrder(stationMarkerItems);
+
   /**
    * Frames AKBA's found stations and their search center in the part of the
    * map the driver can see. An open route sheet is left where it is (the
    * calmer choice: no panel moves that the driver did not move): the camera
-   * fits above its middle stop, with room for the floating back button. With
+   * fits between the safe area and the sheet's middle stop. With
    * the sheet away, car mode's header, capsule, orb and speed column are
    * kept clear.
    */
@@ -1856,9 +1772,10 @@ export default function MapScreen() {
     const safeTopNow = safeTopRef.current;
     const edgePadding = sheetCoversMap
       ? {
-          // The gorhom sheet's floating back button: 8 under the safe area,
-          // 44 tall. iOS 26's system sheet keeps its button inside itself.
-          top: NATIVE_ROUTE_SHEET ? safeTopNow + 16 : safeTopNow + 8 + 44 + 16,
+          // Only a preview AKBA is not live in has a floating "Oturumlara
+          // dön" above the sheet (on both sheet paths), and a station focus
+          // only arrives while AKBA is live: nothing floats up here then.
+          top: safeTopNow + 16,
           bottom:
             routeSheetMiddleHeight(
               mapAreaHeightRef.current || Dimensions.get("window").height,
@@ -1964,20 +1881,7 @@ export default function MapScreen() {
     }, [navigation, selectedStation]),
   );
 
-  const withAnimation = () => {
-    try {
-      LayoutAnimation.configureNext(
-        LayoutAnimation.create(
-          220,
-          LayoutAnimation.Types.easeInEaseOut,
-          LayoutAnimation.Properties.opacity,
-        ),
-      );
-    } catch (e) {}
-  };
-
   const toggleType = (type: StationType) => {
-    withAnimation();
     setTypeFilters((prev) =>
       prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type],
     );
@@ -1996,7 +1900,6 @@ export default function MapScreen() {
       latSpread < CLUSTER_SPREAD_EPSILON &&
       lngSpread < CLUSTER_SPREAD_EPSILON
     ) {
-      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setClusterList(cluster.stations);
       setBottomSheetSelectedType(null);
       setIsTypeListOpen(true);
@@ -2101,65 +2004,68 @@ export default function MapScreen() {
   // Return null to disable backdrop and allow map interaction
   const renderBackdrop = useCallback((props: any) => null, []);
 
-  const { types, toggles } = useMemo(() => {
-    const types = (["HPC", "DC", "AC"] as StationType[]).map((type) => {
-      return {
-        key: `type-${type}`,
-        label: type,
-        color: typeColors[type],
-        active: typeFilters.includes(type),
-        kind: "type" as const,
-        lightningCount: typeLightningCount[type],
-        onPress: () => toggleType(type),
-      };
-    });
+  // The old pill handler without LayoutAnimation, reached from the filter popover.
+  const openTypeList = (type: StationType) => {
+    setIsFiltersVisible(false);
+    setClusterList(null); // a cluster list left open would win in typeSheetStations
+    setBottomSheetSelectedType(type);
+    setIsTypeListOpen(true);
+    bottomSheetRef.current?.dismiss();
+    typeListBottomSheetRef.current?.present();
+    // Provide a short timeout so BottomSheet has time to mount before we force snap
+    setTimeout(() => typeListBottomSheetRef.current?.snapToIndex(1), 50);
+    DeviceEventEmitter.emit("toggleBottomSheet", true);
+    // Zoom out the map to a wider view (delta ≈ 0.2)
+    const center = userLocation
+      ? {
+          latitude: userLocation.coords.latitude,
+          longitude: userLocation.coords.longitude,
+        }
+      : {
+          latitude: currentRegion.current.latitude,
+          longitude: currentRegion.current.longitude,
+        };
+    mapRef.current?.animateToRegion(
+      { ...center, latitudeDelta: 0.2, longitudeDelta: 0.2 },
+      500,
+    );
+  };
 
-    // "Public" and "Favorites" never did anything, and "Only efish" empties
-    // the map when the efish feed is not connected — hide them in that case.
-    const hasEfishStations = stationsList.length > 0;
-    const toggleDefs = [
-      {
-        key: "onlyEfish",
-        // The app's own network is shown under the app's name.
-        label: "Only AKBA",
-        color: "#0093C9",
-        icon: "flash",
-        active: onlyEfish,
-        kind: "toggle" as const,
-        onPress: () => {
-          withAnimation();
-          setOnlyEfish((v) => !v);
-        },
-      },
-      {
-        key: "public",
-        label: "Public",
-        color: "#007aff", // iOS Blue
-        icon: "globe",
-        active: showPublic,
-        kind: "toggle" as const,
-        onPress: () => {
-          withAnimation();
-          setShowPublic((v) => !v);
-        },
-      },
-      {
-        key: "favorites",
-        label: "Favorites",
-        color: "#ff3b30", // iOS Red for heart
-        icon: "heart",
-        active: showFavorites,
-        kind: "toggle" as const,
-        onPress: () => {
-          withAnimation();
-          setShowFavorites((v) => !v);
-        },
-      },
-    ];
+  const handleSelectPlace = (
+    coords: { latitude: number; longitude: number } | null,
+    description: string,
+  ) => {
+    if (coords) {
+      setSearch("");
+      mapRef.current?.animateToRegion(
+        { ...coords, latitudeDelta: 0.05, longitudeDelta: 0.05 },
+        1000,
+      );
+    } else {
+      // Fallback if details not provided: filter the pins by the text.
+      setSearch(description);
+    }
+  };
 
-    const toggles = hasEfishStations ? toggleDefs : [];
-    return { types, toggles };
-  }, [typeFilters, onlyEfish, showPublic, showFavorites, stationsList.length]);
+  const handleSignIn = () => {
+    if (router.canDismiss()) router.dismissAll();
+    router.replace("/");
+  };
+
+  // Searching and the popover never show together.
+  const handleSearchActiveChange = useCallback((active: boolean) => {
+    setIsSearchActive(active);
+    if (active) setIsFiltersVisible(false);
+  }, []);
+
+  // A drive unmounts the header: nothing it held open may outlive it (the
+  // hold would stick).
+  useEffect(() => {
+    if (isDriveModeActive) {
+      setIsFiltersVisible(false);
+      setIsSearchActive(false);
+    }
+  }, [isDriveModeActive]);
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
@@ -2169,6 +2075,7 @@ export default function MapScreen() {
             ref={mapRef}
             onPanDrag={() => {
               Keyboard.dismiss();
+              if (isFiltersVisible) setIsFiltersVisible(false);
               reportInteraction();
               // The driver took the map over: AKBA's highlight steps aside
               // once the map is at rest (onRegionChangeComplete).
@@ -2177,6 +2084,10 @@ export default function MapScreen() {
             }}
             onPress={() => {
               Keyboard.dismiss();
+              if (isFiltersVisible) {
+                setIsFiltersVisible(false);
+                return;
+              }
               if (headerMode === "COMPACT") {
                 forceExpand();
               } else {
@@ -2373,460 +2284,75 @@ export default function MapScreen() {
               );
             })}
 
-            {!shouldShowOnlyRouteMarkers &&
-              mapMarkers.singles.map((station) => (
-                <MapPinMarker
-                  key={station.id}
-                  station={station}
-                  isSelected={selectedStation?.id === station.id}
-                  isHighlighted={focus.ids.has(station.id)}
-                  onPress={handleMarkerPress}
-                />
-              ))}
-            {!shouldShowOnlyRouteMarkers &&
-              mapMarkers.clusters.map((cluster) => (
+            {/* The station pins and clusters, and the stations AKBA found that
+                they do not draw (the ones they do are highlighted in place),
+                last in the map's children and in the order each first
+                appeared: a change only removes markers or appends new ones.
+                Inserting or moving children mid-list is what AIRMap's native
+                child list does not follow (see useAppendOnlyOrder). */}
+            {stationMarkers.map((item) =>
+              item.kind === "cluster" ? (
                 <ClusterMarker
-                  key={cluster.id}
-                  cluster={cluster}
+                  key={item.key}
+                  cluster={item.cluster}
                   onPress={handleClusterPress}
                 />
-              ))}
-
-            {/* The stations AKBA found that the map does not draw above (the
-                ones it does are highlighted in place), last and on top. The
-                list above keeps its order: pinning them there would move
-                existing markers, and moving children is what destabilises
-                AIRMap's native child list (-[AIRMap insertReactSubview:atIndex:]).
-                Appending and removing at the end is the safe change. */}
-            {focusPins.map((station) => (
-              <MapPinMarker
-                key={`focus-${station.id}`}
-                station={station}
-                isSelected={selectedStation?.id === station.id}
-                isHighlighted
-                onPress={handleMarkerPress}
-              />
-            ))}
+              ) : (
+                <MapPinMarker
+                  key={item.key}
+                  station={item.station}
+                  isSelected={selectedStation?.id === item.station.id}
+                  isHighlighted={item.found || focus.ids.has(item.station.id)}
+                  onPress={handleMarkerPress}
+                />
+              ),
+            )}
           </MapView>
 
-          <View style={[styles.overlay, { paddingTop: topInset }]}>
-            {/* Main Header Card Container — hidden during driving mode */}
-            {!isDriveModeActive && (
-              <Animated.View
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  right: 0,
-                  paddingTop: Platform.OS === "ios" ? topInset : topInset - 15,
-                  backgroundColor: isDark
-                    ? "rgba(30, 30, 30, 0.85)"
-                    : "rgba(255, 255, 255, 0.95)", // Semi-transparent for glass effect
-                  borderBottomLeftRadius: 24,
-                  borderBottomRightRadius: 24,
-                  shadowColor: "#000",
-                  shadowOffset: { width: 0, height: 4 }, // Reduced shadow
-                  shadowOpacity: 0.1,
-                  shadowRadius: 12,
-                  elevation: 8,
-                  zIndex: 10,
-                  transform: [{ translateY: headerAnim }],
-                  // overflow: 'hidden' // Removed to allow step chip to overflow at bottom-right
-                }}
-              >
-                <Animated.View
-                  style={{
-                    overflow: "hidden",
-                    opacity: headerExpandAnim,
-                    maxHeight: headerExpandAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0, 300], // More than enough to fit the search and filters
-                    }),
-                  }}
-                >
-                  <View style={{ paddingBottom: 4 }}>
-                    {/* Row 1: Search & Bell/Login */}
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        gap: 12,
-                        paddingHorizontal: 16,
-                        marginBottom: 12,
-                        alignItems: "center",
-                      }}
-                    >
-                      <View
-                        style={{
-                          flex: 1,
-                          height: 48,
-                          zIndex: 100, // Ensure autocomplete dropdown is on top
-                        }}
-                      >
-                        <GooglePlacesAutocomplete
-                          placeholder="Search Stations or Locations"
-                          onPress={(data, details = null) => {
-                            if (details) {
-                              const { lat, lng } = details.geometry.location;
-                              mapRef.current?.animateToRegion(
-                                {
-                                  latitude: lat,
-                                  longitude: lng,
-                                  latitudeDelta: 0.05,
-                                  longitudeDelta: 0.05,
-                                },
-                                1000,
-                              );
-                            } else {
-                              // Fallback if details not provided
-                              setSearch(data.description);
-                            }
-                          }}
-                          query={{
-                            key:
-                              Platform.OS === "ios"
-                                ? process.env
-                                    .EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY
-                                : process.env
-                                    .EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY,
-                            language: "tr",
-                          }}
-                          fetchDetails={true}
-                          styles={{
-                            container: {
-                              flex: 0,
-                            },
-                            textInputContainer: {
-                              backgroundColor: "transparent",
-                              height: 48,
-                              borderTopWidth: 0,
-                              borderBottomWidth: 0,
-                            },
-                            textInput: {
-                              backgroundColor: isDark ? "#333" : "#fff",
-                              height: 48,
-                              borderRadius: 99,
-                              paddingHorizontal: 16,
-                              fontSize: 16,
-                              color: colors.text,
-                              borderWidth: 1,
-                              borderColor: isDark ? "#444" : "#e0e0e0",
-                            },
-                            predefinedPlacesDescription: {
-                              color: "#1faadb",
-                            },
-                            listView: {
-                              backgroundColor: isDark ? "#1E1E1E" : "#FFF",
-                              borderRadius: 12,
-                              marginTop: 4,
-                              borderWidth: 1,
-                              borderColor: colors.border,
-                              elevation: 5,
-                              shadowColor: "#000",
-                              shadowOffset: { width: 0, height: 4 },
-                              shadowOpacity: 0.2,
-                              shadowRadius: 8,
-                            },
-                            row: {
-                              backgroundColor: "transparent",
-                              padding: 13,
-                              height: 44,
-                              flexDirection: "row",
-                            },
-                            separator: {
-                              height: 0.5,
-                              backgroundColor: colors.border,
-                            },
-                            description: {
-                              color: colors.text,
-                            },
-                          }}
-                          textInputProps={{
-                            placeholderTextColor: colors.textTertiary,
-                            clearButtonMode: "never",
-                          }}
-                          renderRightButton={() => (
-                            <Pressable
-                              onPress={toggleListening}
-                              style={{
-                                position: "absolute",
-                                right: 12,
-                                top: 14,
-                              }}
-                            >
-                              <Microphone2
-                                size={20}
-                                color={
-                                  isListening
-                                    ? colors.primary
-                                    : colors.textTertiary
-                                }
-                                variant={isListening ? "Bold" : "Outline"}
-                              />
-                            </Pressable>
-                          )}
-                        />
-                      </View>
-                      <Pressable
-                        onPress={toggleFilters}
-                        hitSlop={8}
-                        style={{ padding: 4 }}
-                      >
-                        <Setting4
-                          size={22}
-                          color={
-                            isFiltersVisible
-                              ? colors.primary
-                              : colors.textSecondary
-                          }
-                          variant={isFiltersVisible ? "Bold" : "Outline"}
-                        />
-                      </Pressable>
-
-                      {user ? (
-                        <Pressable
-                          style={{
-                            width: 48, // Match height
-                            height: 48,
-                            borderRadius: 99,
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <Notification size={24} color={colors.text} />
-                        </Pressable>
-                      ) : (
-                        <Pressable
-                          onPress={() => {
-                            if (router.canDismiss()) {
-                              router.dismissAll();
-                            }
-                            router.replace("/");
-                          }}
-                          style={{
-                            height: 48,
-                            paddingHorizontal: 16,
-                            backgroundColor: colors.primary,
-                            borderRadius: 14,
-                            alignItems: "center",
-                            justifyContent: "center",
-                            shadowColor: colors.primary,
-                            shadowOffset: { width: 0, height: 4 },
-                            shadowOpacity: 0.3,
-                            shadowRadius: 8,
-                            elevation: 4,
-                          }}
-                        >
-                          <Text
-                            style={{
-                              color: "#fff",
-                              fontWeight: "700",
-                              fontSize: 13,
-                            }}
-                          >
-                            Log In
-                          </Text>
-                        </Pressable>
-                      )}
-                    </View>
-                    {/* Row 2: Filters (Animated Drawer) */}
-                    <Animated.View
-                      style={{
-                        height: filterDrawerAnim.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0, measuredFilterHeight], // Dynamic height
-                        }),
-                        opacity: filterDrawerAnim,
-                        overflow: "hidden",
-                        paddingHorizontal: 16,
-                        marginTop: 4,
-                        gap: 12,
-                      }}
-                    >
-                      {/* Inner wrapper View to measure actual content height */}
-                      <View
-                        onLayout={(e) => {
-                          const { height } = e.nativeEvent.layout;
-                          if (
-                            height > 0 &&
-                            Math.abs(height - measuredFilterHeight) > 1
-                          ) {
-                            setMeasuredFilterHeight(height);
-                          }
-                        }}
-                        style={{ gap: 12, paddingBottom: 8 }}
-                      >
-                        {/* Row 1: Types */}
-                        <View style={{ flexDirection: "row", gap: 10 }}>
-                          {types.map((item) => (
-                            <FilterChip
-                              key={item.key}
-                              label={item.label}
-                              color={item.color}
-                              active={item.active}
-                              lightningCount={item.lightningCount}
-                              onPress={item.onPress}
-                              colors={colors}
-                              compact
-                              style={{ flex: 1 }}
-                            />
-                          ))}
-                        </View>
-
-                        {/* Row 2: Toggles (now rendering as FilterChips) */}
-                        <View style={{ flexDirection: "row", gap: 10 }}>
-                          {toggles.map((item) => (
-                            <FilterChip
-                              key={item.key}
-                              label={item.label}
-                              color={item.color}
-                              active={item.active}
-                              icon={item.icon}
-                              onPress={item.onPress}
-                              colors={colors}
-                              compact
-                              style={{ flex: 1 }}
-                            />
-                          ))}
-                        </View>
-                      </View>
-                    </Animated.View>
-
-                    {/* Solid Type Buttons — animated slide in/out */}
-                    <Animated.View
-                      style={{
-                        overflow: "hidden",
-                        height: typeButtonsAnim.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0, 52],
-                        }),
-                        opacity: typeButtonsAnim,
-                      }}
-                    >
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          gap: 10,
-                          paddingHorizontal: 16,
-                          paddingBottom: 12,
-                          marginTop: 4,
-                        }}
-                      >
-                        {(["HPC", "DC", "AC"] as StationType[]).map((t) => (
-                          <Pressable
-                            key={t}
-                            onPress={() => {
-                              LayoutAnimation.configureNext(
-                                LayoutAnimation.Presets.easeInEaseOut,
-                              );
-                              setBottomSheetSelectedType(t);
-                              setIsTypeListOpen(true);
-                              bottomSheetRef.current?.dismiss();
-                              typeListBottomSheetRef.current?.present();
-                              // Provide a short timeout so BottomSheet has time to mount before we force snap
-                              setTimeout(() => {
-                                typeListBottomSheetRef.current?.snapToIndex(1);
-                              }, 50);
-                              DeviceEventEmitter.emit(
-                                "toggleBottomSheet",
-                                true,
-                              );
-
-                              // Zoom out the map to a wider view (delta ≈ 0.2)
-                              if (mapRef.current) {
-                                const center = userLocation
-                                  ? {
-                                      latitude: userLocation.coords.latitude,
-                                      longitude: userLocation.coords.longitude,
-                                    }
-                                  : {
-                                      latitude: currentRegion.current.latitude,
-                                      longitude:
-                                        currentRegion.current.longitude,
-                                    };
-
-                                mapRef.current.animateToRegion(
-                                  {
-                                    ...center,
-                                    latitudeDelta: 0.2,
-                                    longitudeDelta: 0.2,
-                                  },
-                                  500,
-                                );
-                              }
-                            }}
-                            style={{
-                              flex: 1,
-                              backgroundColor: typeColors[t],
-                              paddingVertical: 10,
-                              borderRadius: 99,
-                              alignItems: "center",
-                              flexDirection: "row",
-                              justifyContent: "center",
-                            }}
-                          >
-                            <View
-                              style={{
-                                flexDirection: "row",
-                                alignItems: "center",
-                                marginRight: 4,
-                              }}
-                            >
-                              {Array.from({
-                                length: typeLightningCount[t],
-                              }).map((_, i) => (
-                                <View
-                                  key={i}
-                                  style={{
-                                    marginLeft: i > 0 ? -10 : 0,
-                                    zIndex: i,
-                                  }}
-                                >
-                                  <Flash
-                                    variant="Bold"
-                                    size={16}
-                                    color="#ffffff"
-                                  />
-                                </View>
-                              ))}
-                            </View>
-                            <Text
-                              style={{
-                                color: "#ffffff",
-                                fontWeight: "700",
-                                fontSize: 13,
-                              }}
-                            >
-                              {t}
-                            </Text>
-                          </Pressable>
-                        ))}
-                      </View>
-                    </Animated.View>
-                  </View>
-                </Animated.View>
-
-                {/* The bar alone shows the activity: no banner under it
-                    announces a change the bar already reads out. */}
-                <View style={{ marginTop: 12, paddingBottom: 4 }}>
-                  <ActivityContextBar mode={headerMode} onPress={forceExpand} />
-                </View>
-              </Animated.View>
-            )}
-          </View>
-
-          {/* Manual entry into car mode. Driving detection also starts it by
-              itself once the phone moves faster than 15 km/h. */}
-          {driveState === DriveSessionState.IDLE && (
-            <Pressable
-              style={styles.manualCarModeBtn}
-              onPress={() => DriveSessionStore.startSession()}
-            >
-              <Text style={styles.manualCarModeBtnText}>Sürüş Modu</Text>
-            </Pressable>
+          {/* The header: glass controls floating over the map, gone in drive mode. */}
+          {!isDriveModeActive && (
+            <MapHeader
+              mode={headerMode}
+              hidden={isChargingSheetOpen}
+              onExpand={forceExpand}
+              isSignedIn={!!user}
+              onSignIn={handleSignIn}
+              stations={loadedStations}
+              userCoords={userLocation?.coords ?? null}
+              stationQuery={search}
+              onStationQueryChange={setSearch}
+              onSelectStation={handleMarkerPress}
+              onSelectPlace={handleSelectPlace}
+              onSearchActiveChange={handleSearchActiveChange}
+              tierFilters={typeFilters}
+              onToggleTier={toggleType}
+              filtersOpen={isFiltersVisible}
+              onToggleFilters={toggleFilters}
+              showOnlyAkba={stationsList.length > 0}
+              onlyAkba={onlyEfish}
+              onOnlyAkbaChange={setOnlyEfish}
+              onOpenTierList={openTypeList}
+              footer={
+                charging.isActive && charging.isMinimized ? (
+                  <ChargingWidget
+                    state={charging}
+                    onExpand={() => charging.toggleMinimize()}
+                  />
+                ) : null
+              }
+            />
           )}
 
-          {/* Floating Charging Widget at Bottom */}
-          {charging.isActive && charging.isMinimized && (
+          {/* Manual entry into car mode. Driving detection does not start
+              car mode by itself: this, "Sürüşe Geç", Oturumlar's "Rotayı
+              Aç" and a route from AKBA do. */}
+          {driveState === DriveSessionState.IDLE && (
+            <DriveModeButton onPress={() => DriveSessionStore.startSession()} />
+          )}
+
+          {/* The minimised charge in drive mode; on the map it sits under
+              the status capsule (MapHeader's footer). */}
+          {isDriveModeActive && charging.isActive && charging.isMinimized && (
             <View style={styles.floatingWidgetContainer}>
               <ChargingWidget
                 state={charging}
@@ -2841,32 +2367,11 @@ export default function MapScreen() {
           {showRecenter &&
             !charging.isActive &&
             !shouldHideMapActionButtons && (
-              <Animated.View
-                style={[
-                  styles.recenterBtnWrapper,
-                  {
-                    bottom: mapActionButtonBottom,
-                    zIndex: mapActionButtonZIndex,
-                  },
-                ]}
-              >
-                <Pressable
-                  onPress={handleRecenter}
-                  style={[
-                    styles.recenterBtn,
-                    {
-                      backgroundColor: colors.card,
-                      shadowColor: colors.shadow,
-                    },
-                  ]}
-                >
-                  <FontAwesome5
-                    name="location-arrow"
-                    size={22}
-                    color={colors.text}
-                  />
-                </Pressable>
-              </Animated.View>
+              <LocateButton
+                onPress={handleRecenter}
+                bottom={mapActionButtonBottom}
+                zIndex={mapActionButtonZIndex}
+              />
             )}
 
           <BottomSheetModal
@@ -2964,7 +2469,7 @@ export default function MapScreen() {
                           marginBottom: 16,
                         }}
                       >
-                        No vehicles found.
+                        Araç bulunamadı.
                       </Text>
                       <Pressable
                         onPress={() => {
@@ -3271,7 +2776,7 @@ export default function MapScreen() {
                             lineHeight: 18,
                           }}
                         >
-                          {stationDetails?.address || "Address loading..."}
+                          {stationDetails?.address || "Adres yükleniyor…"}
                         </Text>
                         {stationDetails.directions && (
                           <View
@@ -3328,7 +2833,7 @@ export default function MapScreen() {
                             fontSize: 16,
                           }}
                         >
-                          Directions
+                          Yol tarifi
                         </Text>
                       </Pressable>
                     </View>
@@ -3348,7 +2853,7 @@ export default function MapScreen() {
                         <Text
                           style={{ marginTop: 10, color: colors.textTertiary }}
                         >
-                          Loading details...
+                          Ayrıntılar yükleniyor…
                         </Text>
                       </View>
                     ) : stationDetails ? (
@@ -3713,7 +3218,7 @@ export default function MapScreen() {
               <Text
                 style={{ color: "#0b2319", fontWeight: "700", fontSize: 13 }}
               >
-                Successfully logged in!
+                Giriş yapıldı
               </Text>
             </Animated.View>
           )}
@@ -3807,7 +3312,7 @@ export default function MapScreen() {
                 >
                   {clusterList
                     ? `Bu Konumda ${clusterList.length} İstasyon`
-                    : `${bottomSheetSelectedType} Stations`}
+                    : `${bottomSheetSelectedType} istasyonları`}
                 </Text>
                 <Pressable
                   onPress={() => {
@@ -3863,7 +3368,7 @@ export default function MapScreen() {
                         textAlign: "center",
                       }}
                     >
-                      No stations found.
+                      İstasyon bulunamadı
                     </Text>
                     <Text
                       style={{
@@ -3873,8 +3378,7 @@ export default function MapScreen() {
                         marginTop: 8,
                       }}
                     >
-                      There are no stations matching the selected type in this
-                      area.
+                      Bu bölgede bu türde istasyon yok.
                     </Text>
                   </View>
                 )}
@@ -4048,7 +3552,7 @@ export default function MapScreen() {
                               color: "#fff",
                             }}
                           >
-                            Directions
+                            Yol tarifi
                           </Text>
                         </Pressable>
                       </View>
@@ -4088,6 +3592,9 @@ type FilterChipProps = {
   style?: any;
 };
 
+// Unused since the map header moved to components/map-header; kept, with
+// the old header's styles, for a later cleanup.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function FilterChip({
   label,
   color,

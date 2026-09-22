@@ -51,6 +51,13 @@ const MAPPING = {
   'arrow.triangle.turn.up.right.diamond.fill': 'directions',
   'bolt.fill': 'bolt',
   magnifyingglass: 'search',
+
+  // Map header
+  'line.3.horizontal.decrease': 'filter-list',
+  'mic.fill': 'mic',
+  'xmark.circle.fill': 'cancel',
+  'car.fill': 'directions-car',
+  'mappin.circle.fill': 'place',
 } as const satisfies Partial<IconMapping>;
 
 export type IconSymbolName = keyof typeof MAPPING;

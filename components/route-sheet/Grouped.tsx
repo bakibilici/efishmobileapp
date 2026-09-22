@@ -10,7 +10,7 @@ import {
 } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 
-import { SHEET_BACK_INSET, useSheetMotion } from "./sheetMotion";
+import { SHEET_BACK_INSET, SHEET_CLOSE_INSET, useSheetMotion } from "./sheetMotion";
 import type { SheetPalette } from "./sheetPalette";
 
 type IoniconName = keyof typeof Ionicons.glyphMap;
@@ -139,11 +139,12 @@ const TITLE_TILE_SIZE = 36;
  * groups, then an optional address line and one secondary line; `tile`
  * puts a category tile before it (a detail page's header).
  *
- * At the sheet's highest stop the sheet's own back button stands at the
- * left of this block. When the panel has a way back the block keeps the
- * button's room free at its right at every stop and slides right into it
- * with the sheet's position (sheetMotion): a translation only, so the title
- * never wraps again mid-drag.
+ * The sheet's own back button stands at the left of this block when it
+ * shows. When the panel has a way back the block keeps the button's room
+ * free at its right at every stop and slides right into it with the sheet's
+ * position (sheetMotion): a translation only, so the title never wraps again
+ * mid-drag. A sheet with a Close button at its top-trailing corner keeps
+ * that room free too.
  */
 export const TitleBlock = memo(function TitleBlock({
   title,
@@ -198,7 +199,14 @@ export const TitleBlock = memo(function TitleBlock({
 
   return (
     <Animated.View
-      style={[styles.titleBlock, motion?.hasBack && styles.titleBlockBesideBack, shiftStyle]}
+      style={[
+        styles.titleBlock,
+        {
+          paddingRight:
+            (motion?.hasBack ? SHEET_BACK_INSET : 0) + (motion?.hasClose ? SHEET_CLOSE_INSET : 0),
+        },
+        shiftStyle,
+      ]}
     >
       {tile ? (
         <View style={styles.titleRow}>
@@ -257,11 +265,6 @@ const styles = StyleSheet.create({
     marginHorizontal: SIDE_MARGIN,
     marginTop: 2,
     marginBottom: 14,
-  },
-  // The sheet's own back button's room, kept at all stops: at the top stop
-  // the block slides right into it (titleShift).
-  titleBlockBesideBack: {
-    paddingRight: SHEET_BACK_INSET,
   },
   titleCopy: {
     gap: 3,

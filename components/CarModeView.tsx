@@ -8,7 +8,6 @@ import {
   PixelRatio,
   Platform,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -35,12 +34,18 @@ import {
   DriveSessionStore,
 } from "../services/DriveSessionStore";
 import { destinationTitle } from "../services/placeTitle";
-import { supportsNativeRouteSheet } from "./route-sheet/nativeRouteSheet";
+import {
+  MIDDLE_LEVEL,
+  supportsNativeRouteSheet,
+  TOP_LEVEL,
+} from "./route-sheet/nativeRouteSheet";
+import { PreviewBackButton } from "./route-sheet/PreviewBackButton";
 import { formatMinutes } from "./route-sheet/routeFormat";
 import {
   routeSheetBridge,
   useModalOverRouteSheet,
 } from "./route-sheet/routeSheetBridge";
+import { useRouteSheetInnerPanelOpen } from "./route-sheet/routeSheetPanel";
 
 import { useDrivingAgent } from "../hooks/useDrivingAgent";
 import { showMicModePicker } from "../modules/mic-mode";
@@ -87,6 +92,13 @@ const CONFIRMATION_HOLD = "car-mode-confirmation";
 
 /** A "thinking" shorter than this never reaches the screen, so it cannot flash. */
 const THINKING_LINE_DELAY_MS = 400;
+
+/**
+ * The floating "Oturumlara dön" waits this long after the system sheet
+ * reaches its middle: the header, with its own chevron in the same corner,
+ * has slid out of sight by then, so the two never show together.
+ */
+const FLOATING_BACK_DELAY_MS = 200;
 
 const CAPSULE_SIDE_MARGIN = 20;
 
@@ -444,8 +456,9 @@ const readTripSummary = () => {
 };
 
 /**
- * Brings back a route sheet the driver put away ("Haritaya dön"): a frosted
- * capsule just above the orb, "⌃ Metrogarden AVM · 47 dk".
+ * Brings back a route sheet the driver put away (its Close, "Kapat", or a
+ * swipe down): a frosted capsule just above the orb, "⌃ Metrogarden AVM ·
+ * 47 dk".
  */
 const RouteReopenCapsule = ({
   title,
@@ -838,6 +851,28 @@ export function CarModeView() {
   const capsuleMaxWidth = windowWidth - 2 * CAPSULE_SIDE_MARGIN;
   // console.log("[CarModeView] 🎯 sessionState =", sessionState, "| isActive =", isActive, "| context =", !!DriveSessionStore.getContext());
 
+  // The way back to Oturumlar, for a preview AKBA is not live in (the map
+  // screen's rule). Exactly one shows, always at the top-leading corner: the
+  // header's at the route sheet's peek (and with no sheet); outside the
+  // sheet above it, the floating one (over the system sheet here, the gorhom
+  // sheet draws its own); inside the sheet at the full height, which covers
+  // that corner. While the sheet shows an inner panel, its own Back is the
+  // one way back, a step inside it, and neither of these shows.
+  const canClosePreview =
+    isPreviewMode && sessionState === DriveSessionState.NAVIGATION_ONLY;
+  const routeSheetInnerPanelOpen = useRouteSheetInnerPanelOpen();
+  const isRouteSheetUp = hasRoutePlan && routePlanSheetIndex >= 0;
+  const showHeaderBack = canClosePreview && !(routeSheetInnerPanelOpen && isRouteSheetUp);
+  const showFloatingBack = useHeldFor(
+    NATIVE_ROUTE_SHEET &&
+      canClosePreview &&
+      hasRoutePlan &&
+      routePlanSheetIndex >= MIDDLE_LEVEL &&
+      routePlanSheetIndex < TOP_LEVEL &&
+      !routeSheetInnerPanelOpen,
+    FLOATING_BACK_DELAY_MS,
+  );
+
   const arrivalTimeFormatted = useMemo(() => {
     if (!routeDurationSeconds) return "-";
     const arrivalDate = new Date(Date.now() + routeDurationSeconds * 1000);
@@ -929,12 +964,6 @@ export function CarModeView() {
   // applies while a call has the microphone: iOS, live session, long press.
   const canPickMicMode = Platform.OS === "ios" && status === "connected";
   const isDriveActionPreviewStart = isPreviewMode;
-  // The header's way back to Oturumlar, for a preview AKBA is not live in (the
-  // map screen's rule). The header shows while the route sheet is at its peek
-  // and leaves as it rises; the sheet's floating back button covers the
-  // heights above, so every height has one way back.
-  const canClosePreview =
-    isPreviewMode && sessionState === DriveSessionState.NAVIGATION_ONLY;
   const handleClosePreview = () => {
     // iOS 26's system sheet goes first: navigating with it on top would
     // stack a second tab navigator. A no-op for the gorhom sheet.
@@ -1071,328 +1100,349 @@ export function CarModeView() {
     );
 
   return (
-    <View
-      style={styles.container}
-      pointerEvents={shouldYieldToRoutePlanSheet ? "none" : "box-none"}
-    >
-      {/* Floating Top Panel */}
-      <Animated.View style={[styles.floatingHeader, animatedHeaderStyle]}>
-        <BlurView
-          intensity={90}
-          tint={glassTint}
-          style={[
-            styles.headerGlass,
-            { backgroundColor: isDark ? "rgba(14,18,26,0.58)" : "rgba(255,255,255,0.7)" },
-          ]}
+    <>
+      <View
+        style={styles.container}
+        pointerEvents={shouldYieldToRoutePlanSheet ? "none" : "box-none"}
+      >
+        {/* Floating Top Panel. Out of VoiceOver's reach while it has slid away
+            for the route sheet, so it never adds a second "Oturumlara dön". */}
+        <Animated.View
+          style={[styles.floatingHeader, animatedHeaderStyle]}
+          accessibilityElementsHidden={shouldYieldToRoutePlanSheet}
+          importantForAccessibility={shouldYieldToRoutePlanSheet ? "no-hide-descendants" : "auto"}
         >
-          <SafeAreaView style={styles.headerSafeArea}>
-            <View style={styles.headerContent}>
-              <View style={styles.headerTopRow}>
-                {canClosePreview ? (
-                  // Frosted, not Liquid Glass: the header is a material already,
-                  // and its entrance animates opacity, under which glass stops drawing.
-                  <GlassNavButton
-                    material="frosted"
-                    size={HEADER_BACK_BUTTON_SIZE}
-                    onPress={handleClosePreview}
-                    onAccessibilityEscape={handleClosePreview}
-                    accessibilityLabel="Oturumlara dön"
-                  />
-                ) : null}
-                {/* Stretched to the row and as tall as the trip's two lines, so no state moves the header.
-                    With the route sheet put away, a tap on the trip brings it back; otherwise it is
-                    plain text (a disabled button read as "dimmed" to VoiceOver). */}
-                {canReopenRouteSheet ? (
-                  <Pressable
-                    style={[styles.statusTextStack, { minHeight: statusTextStackMinHeight }]}
-                    onPress={() => DriveSessionStore.openRouteSheet()}
-                    accessibilityRole="button"
-                    accessibilityLabel={headerAccessibilityLabel}
-                    accessibilityHint="Rota özetini açar."
-                  >
-                    {headerTripContent}
-                  </Pressable>
-                ) : (
-                  <View
-                    style={[styles.statusTextStack, { minHeight: statusTextStackMinHeight }]}
-                    accessible
-                    accessibilityLabel={headerAccessibilityLabel}
-                  >
-                    {headerTripContent}
-                  </View>
-                )}
-                <TouchableOpacity
-                  onPress={promptBatteryLevel}
-                  activeOpacity={0.78}
-                  accessibilityLabel="Batarya seviyesini gir"
-                  style={[
-                    styles.batteryHeaderAction,
-                    {
-                      backgroundColor: isDark
-                        ? "rgba(255,255,255,0.08)"
-                        : "rgba(15,23,42,0.09)",
-                      borderColor: isDark
-                        ? "rgba(255,255,255,0.1)"
-                        : "rgba(15,23,42,0.14)",
-                    },
-                  ]}
-                >
-                  {/* The car's charge, not the phone's: SF Symbols bolt.car on iOS,
-                      Material electric-car on Android. */}
-                  <IconSymbol name="bolt.car.fill" size={19} color={textColor} />
-                  <Text style={[styles.secondaryHeaderActionText, { color: textColor }]}>
-                    {batteryPrefs.updatedAt === null ? "%?" : `%${batteryStart}`}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={styles.headerActionsRow}>
-                <TouchableOpacity
-                  onPress={handleVoiceButtonPress}
-                  activeOpacity={0.78}
-                  style={[
-                    styles.secondaryHeaderAction,
-                    {
-                      opacity: canStopConversation || canReconnectVoice ? 1 : 0.5,
-                      backgroundColor: isDark
-                        ? "rgba(255,255,255,0.08)"
-                        : "rgba(15,23,42,0.09)",
-                      borderColor: isDark
-                        ? "rgba(255,255,255,0.1)"
-                        : "rgba(15,23,42,0.14)",
-                    },
-                  ]}
-                  disabled={!canStopConversation && !canReconnectVoice}
-                >
-                  <Ionicons name={voiceActionIcon} size={18} color={textColor} />
-                  <Text
+          <BlurView
+            intensity={90}
+            tint={glassTint}
+            style={[
+              styles.headerGlass,
+              { backgroundColor: isDark ? "rgba(14,18,26,0.58)" : "rgba(255,255,255,0.7)" },
+            ]}
+          >
+            {/* A plain view, not a SafeAreaView: the card sits below the status
+                bar already (HEADER_TOP), and a safe area measured while it slid
+                in under the status bar left an empty band at its top. */}
+            <View style={styles.headerInner}>
+              <View style={styles.headerContent}>
+                <View style={styles.headerTopRow}>
+                  {showHeaderBack ? (
+                    // Frosted, not Liquid Glass: the header is a material already,
+                    // and its entrance animates opacity, under which glass stops drawing.
+                    <GlassNavButton
+                      material="frosted"
+                      size={HEADER_BACK_BUTTON_SIZE}
+                      onPress={handleClosePreview}
+                      onAccessibilityEscape={handleClosePreview}
+                      accessibilityLabel="Oturumlara dön"
+                    />
+                  ) : null}
+                  {/* Stretched to the row and as tall as the trip's two lines, so no state moves the header.
+                      With the route sheet put away, a tap on the trip brings it back; otherwise it is
+                      plain text (a disabled button read as "dimmed" to VoiceOver). */}
+                  {canReopenRouteSheet ? (
+                    <Pressable
+                      style={[styles.statusTextStack, { minHeight: statusTextStackMinHeight }]}
+                      onPress={() => DriveSessionStore.openRouteSheet()}
+                      accessibilityRole="button"
+                      accessibilityLabel={headerAccessibilityLabel}
+                      accessibilityHint="Rota özetini açar."
+                    >
+                      {headerTripContent}
+                    </Pressable>
+                  ) : (
+                    <View
+                      style={[styles.statusTextStack, { minHeight: statusTextStackMinHeight }]}
+                      accessible
+                      accessibilityLabel={headerAccessibilityLabel}
+                    >
+                      {headerTripContent}
+                    </View>
+                  )}
+                  <TouchableOpacity
+                    onPress={promptBatteryLevel}
+                    activeOpacity={0.78}
+                    accessibilityLabel="Batarya seviyesini gir"
                     style={[
-                      styles.secondaryHeaderActionText,
-                      styles.headerActionLabel,
-                      { color: textColor },
-                    ]}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.8}
-                  >
-                    {voiceActionLabel}
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={() => setMuted(!isMuted)}
-                  onLongPress={
-                    canPickMicMode ? () => void showMicModePicker() : undefined
-                  }
-                  accessibilityRole="button"
-                  accessibilityLabel={isMuted ? "Mikrofonu aç" : "Mikrofonu kapat"}
-                  accessibilityHint={
-                    canPickMicMode
-                      ? "Uzun basınca mikrofon modunu (Ses Yalıtımı) seçebilirsin."
-                      : undefined
-                  }
-                  activeOpacity={0.78}
-                  disabled={!canToggleMic}
-                  style={[
-                    styles.iconHeaderAction,
-                    {
-                      opacity: canToggleMic ? 1 : 0.45,
-                      backgroundColor: isMuted
-                        ? isDark
-                          ? "rgba(255,159,10,0.18)"
-                          : "rgba(255,159,10,0.12)"
-                        : isDark
+                      styles.batteryHeaderAction,
+                      {
+                        backgroundColor: isDark
                           ? "rgba(255,255,255,0.08)"
                           : "rgba(15,23,42,0.09)",
-                      borderColor: isMuted
-                        ? "rgba(255,159,10,0.24)"
-                        : isDark
+                        borderColor: isDark
                           ? "rgba(255,255,255,0.1)"
                           : "rgba(15,23,42,0.14)",
-                    },
-                  ]}
-                >
-                  <Ionicons
-                    name={isMuted ? "mic-off" : "mic"}
-                    size={18}
-                    color={isMuted ? "#FF9F0A" : textColor}
-                  />
-                </TouchableOpacity>
+                      },
+                    ]}
+                  >
+                    {/* The car's charge, not the phone's: SF Symbols bolt.car on iOS,
+                        Material electric-car on Android. */}
+                    <IconSymbol name="bolt.car.fill" size={19} color={textColor} />
+                    <Text style={[styles.secondaryHeaderActionText, { color: textColor }]}>
+                      {batteryPrefs.updatedAt === null ? "%?" : `%${batteryStart}`}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
 
-                <TouchableOpacity
-                  onPress={() =>
-                    isDriveActionPreviewStart
-                      ? setManualConfirmAction("start_drive")
-                      : handleEndDrivePress()
-                  }
-                  activeOpacity={0.7}
-                  style={[
-                    styles.endDriveButtonCompact,
-                    {
-                      backgroundColor: isDriveActionPreviewStart
-                        ? colors.primary
-                        : colors.danger,
-                    },
-                  ]}
-                >
-                  <Ionicons
-                    name={isDriveActionPreviewStart ? "play-circle" : "stop-circle"}
-                    size={18}
-                    color="#FFFFFF"
-                  />
-                  <Text style={styles.endDriveTextCompact} numberOfLines={1}>
-                    {isDriveActionPreviewStart ? "Sürüşü Başlat" : "Sürüşü Bitir"}
-                  </Text>
-                </TouchableOpacity>
+                <View style={styles.headerActionsRow}>
+                  <TouchableOpacity
+                    onPress={handleVoiceButtonPress}
+                    activeOpacity={0.78}
+                    style={[
+                      styles.secondaryHeaderAction,
+                      {
+                        opacity: canStopConversation || canReconnectVoice ? 1 : 0.5,
+                        backgroundColor: isDark
+                          ? "rgba(255,255,255,0.08)"
+                          : "rgba(15,23,42,0.09)",
+                        borderColor: isDark
+                          ? "rgba(255,255,255,0.1)"
+                          : "rgba(15,23,42,0.14)",
+                      },
+                    ]}
+                    disabled={!canStopConversation && !canReconnectVoice}
+                  >
+                    <Ionicons name={voiceActionIcon} size={18} color={textColor} />
+                    <Text
+                      style={[
+                        styles.secondaryHeaderActionText,
+                        styles.headerActionLabel,
+                        { color: textColor },
+                      ]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.8}
+                    >
+                      {voiceActionLabel}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={() => setMuted(!isMuted)}
+                    onLongPress={
+                      canPickMicMode ? () => void showMicModePicker() : undefined
+                    }
+                    accessibilityRole="button"
+                    accessibilityLabel={isMuted ? "Mikrofonu aç" : "Mikrofonu kapat"}
+                    accessibilityHint={
+                      canPickMicMode
+                        ? "Uzun basınca mikrofon modunu (Ses Yalıtımı) seçebilirsin."
+                        : undefined
+                    }
+                    activeOpacity={0.78}
+                    disabled={!canToggleMic}
+                    style={[
+                      styles.iconHeaderAction,
+                      {
+                        opacity: canToggleMic ? 1 : 0.45,
+                        backgroundColor: isMuted
+                          ? isDark
+                            ? "rgba(255,159,10,0.18)"
+                            : "rgba(255,159,10,0.12)"
+                          : isDark
+                            ? "rgba(255,255,255,0.08)"
+                            : "rgba(15,23,42,0.09)",
+                        borderColor: isMuted
+                          ? "rgba(255,159,10,0.24)"
+                          : isDark
+                            ? "rgba(255,255,255,0.1)"
+                            : "rgba(15,23,42,0.14)",
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={isMuted ? "mic-off" : "mic"}
+                      size={18}
+                      color={isMuted ? "#FF9F0A" : textColor}
+                    />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    onPress={() =>
+                      isDriveActionPreviewStart
+                        ? setManualConfirmAction("start_drive")
+                        : handleEndDrivePress()
+                    }
+                    activeOpacity={0.7}
+                    style={[
+                      styles.endDriveButtonCompact,
+                      {
+                        backgroundColor: isDriveActionPreviewStart
+                          ? colors.primary
+                          : colors.danger,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={isDriveActionPreviewStart ? "play-circle" : "stop-circle"}
+                      size={18}
+                      color="#FFFFFF"
+                    />
+                    <Text style={styles.endDriveTextCompact} numberOfLines={1}>
+                      {isDriveActionPreviewStart ? "Sürüşü Başlat" : "Sürüşü Bitir"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
-          </SafeAreaView>
-        </BlurView>
-      </Animated.View>
-
-      {/* Floating Driving Stats (Right Side) */}
-      {!shouldHideFloatingStats && (
-        <Animated.View
-          pointerEvents="none"
-          style={[styles.floatingStats, animatedStatsStyle]}
-        >
-          <BlurView
-            intensity={70}
-            tint={glassTint}
-            style={[
-              styles.statGlass,
-              { backgroundColor: isDark ? "rgba(14,18,26,0.58)" : "rgba(255,255,255,0.7)" },
-            ]}
-          >
-            <Text style={[styles.statValue, { color: textColor }]}>
-              {Number.isFinite(displaySpeed) && displaySpeed >= 0
-                ? displaySpeed
-                : "-"}
-            </Text>
-            <Text style={[styles.statLabel, { color: subtextColor }]}>
-              km/h
-            </Text>
-          </BlurView>
-          <BlurView
-            intensity={70}
-            tint={glassTint}
-            style={[
-              styles.statGlass,
-              { backgroundColor: isDark ? "rgba(14,18,26,0.58)" : "rgba(255,255,255,0.7)" },
-            ]}
-          >
-            <Text style={[styles.statValue, { color: textColor }]}>
-              {arrivalTimeFormatted}
-            </Text>
-            <Text style={[styles.statLabel, { color: subtextColor }]}>
-              Varış
-            </Text>
           </BlurView>
         </Animated.View>
-      )}
 
-      {canReopenRouteSheet && tripSummary ? (
-        <RouteReopenCapsule
-          title={tripSummary.destination}
-          tripTime={tripSummary.tripTime}
-          isDark={isDark}
-          maxWidth={capsuleMaxWidth}
-          onPress={() => DriveSessionStore.openRouteSheet()}
-        />
-      ) : null}
-
-      {/* Assistant Area (Bottom Center) */}
-      <Animated.View
-        style={[styles.assistantContainer, animatedAssistantStyle]}
-        pointerEvents="box-none"
-      >
-        <TouchableOpacity
-          activeOpacity={0.9}
-          onPress={() => !isVoiceTransportActive && startSession()}
-          disabled={isVoiceTransportActive}
-          accessibilityRole="button"
-          accessibilityLabel={voiceStateLabel}
-          accessibilityHint={isVoiceTransportActive ? undefined : "Dokununca AKBA'ya bağlanır."}
-          accessibilityState={{ disabled: isVoiceTransportActive }}
-          style={styles.orbTouchTarget}
-        >
-          {ORB_STYLE === "ribbon" ? (
-            <AssistantOrbRibbon
-              state={sessionState}
-              audioLevel={audioLevel}
-              agentTrack={agentAudioTrack}
-              tone={isDark ? "dark" : "light"}
-            />
-          ) : ORB_STYLE === "aurora" ? (
-            <AssistantOrbAurora state={sessionState} audioLevel={audioLevel} />
-          ) : (
-            <AssistantOrb state={sessionState} audioLevel={audioLevel} />
-          )}
-        </TouchableOpacity>
-      </Animated.View>
-
-      {/* End Drive Confirmation Modal */}
-      <Modal
-        key={confirmModal.key}
-        transparent
-        visible={confirmModal.visible}
-        onShow={confirmModal.onShow}
-        animationType="fade"
-      >
-        <View style={styles.modalOverlay}>
-          <BlurView
-            intensity={30}
-            tint={glassTint}
-            style={StyleSheet.absoluteFill}
-          />
-          <View
-            style={[
-              styles.modalCard,
-              { backgroundColor: isDark ? "#1C1C1E" : "#FFFFFF" },
-            ]}
+        {/* Floating Driving Stats (Right Side) */}
+        {!shouldHideFloatingStats && (
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.floatingStats, animatedStatsStyle]}
           >
-            <Text style={[styles.modalTitle, { color: textColor }]}>
-              {confirmationCopy.title}
-            </Text>
-            <Text style={[styles.modalSubtitle, { color: subtextColor }]}>
-              {confirmationCopy.subtitle}
-            </Text>
-            <TouchableOpacity
+            <BlurView
+              intensity={70}
+              tint={glassTint}
               style={[
-                styles.modalButton,
-                {
-                  backgroundColor:
-                    manualConfirmAction === "connect_voice"
-                      ? colors.primary
-                      : colors.danger,
-                  marginTop: 12,
-                },
+                styles.statGlass,
+                { backgroundColor: isDark ? "rgba(14,18,26,0.58)" : "rgba(255,255,255,0.7)" },
               ]}
-              onPress={handleConfirmPrimaryAction}
             >
-              <Text style={[styles.modalButtonText, { color: "#FFFFFF" }]}>
-                {confirmationCopy.confirm}
+              <Text style={[styles.statValue, { color: textColor }]}>
+                {Number.isFinite(displaySpeed) && displaySpeed >= 0
+                  ? displaySpeed
+                  : "-"}
               </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
+              <Text style={[styles.statLabel, { color: subtextColor }]}>
+                km/h
+              </Text>
+            </BlurView>
+            <BlurView
+              intensity={70}
+              tint={glassTint}
               style={[
-                styles.modalButton,
-                {
-                  backgroundColor: "transparent",
-                  borderWidth: 1,
-                  borderColor: isDark ? "#333" : "#E5E5EA",
-                },
+                styles.statGlass,
+                { backgroundColor: isDark ? "rgba(14,18,26,0.58)" : "rgba(255,255,255,0.7)" },
               ]}
-              onPress={handleDismissEndConfirmation}
             >
-              <Text style={[styles.modalButtonText, { color: textColor }]}>
-                {confirmationCopy.cancel}
+              <Text style={[styles.statValue, { color: textColor }]}>
+                {arrivalTimeFormatted}
               </Text>
-            </TouchableOpacity>
+              <Text style={[styles.statLabel, { color: subtextColor }]}>
+                Varış
+              </Text>
+            </BlurView>
+          </Animated.View>
+        )}
+
+        {canReopenRouteSheet && tripSummary ? (
+          <RouteReopenCapsule
+            title={tripSummary.destination}
+            tripTime={tripSummary.tripTime}
+            isDark={isDark}
+            maxWidth={capsuleMaxWidth}
+            onPress={() => DriveSessionStore.openRouteSheet()}
+          />
+        ) : null}
+
+        {/* Assistant Area (Bottom Center) */}
+        <Animated.View
+          style={[styles.assistantContainer, animatedAssistantStyle]}
+          pointerEvents="box-none"
+        >
+          <TouchableOpacity
+            activeOpacity={0.9}
+            onPress={() => !isVoiceTransportActive && startSession()}
+            disabled={isVoiceTransportActive}
+            accessibilityRole="button"
+            accessibilityLabel={voiceStateLabel}
+            accessibilityHint={isVoiceTransportActive ? undefined : "Dokununca AKBA'ya bağlanır."}
+            accessibilityState={{ disabled: isVoiceTransportActive }}
+            style={styles.orbTouchTarget}
+          >
+            {ORB_STYLE === "ribbon" ? (
+              <AssistantOrbRibbon
+                state={sessionState}
+                audioLevel={audioLevel}
+                agentTrack={agentAudioTrack}
+                tone={isDark ? "dark" : "light"}
+              />
+            ) : ORB_STYLE === "aurora" ? (
+              <AssistantOrbAurora state={sessionState} audioLevel={audioLevel} />
+            ) : (
+              <AssistantOrb state={sessionState} audioLevel={audioLevel} />
+            )}
+          </TouchableOpacity>
+        </Animated.View>
+
+        {/* End Drive Confirmation Modal */}
+        <Modal
+          key={confirmModal.key}
+          transparent
+          visible={confirmModal.visible}
+          onShow={confirmModal.onShow}
+          animationType="fade"
+        >
+          <View style={styles.modalOverlay}>
+            <BlurView
+              intensity={30}
+              tint={glassTint}
+              style={StyleSheet.absoluteFill}
+            />
+            <View
+              style={[
+                styles.modalCard,
+                { backgroundColor: isDark ? "#1C1C1E" : "#FFFFFF" },
+              ]}
+            >
+              <Text style={[styles.modalTitle, { color: textColor }]}>
+                {confirmationCopy.title}
+              </Text>
+              <Text style={[styles.modalSubtitle, { color: subtextColor }]}>
+                {confirmationCopy.subtitle}
+              </Text>
+              <TouchableOpacity
+                style={[
+                  styles.modalButton,
+                  {
+                    // Red only for what ends something; starting a drive or
+                    // connecting AKBA takes the accent, as the header's pill.
+                    backgroundColor:
+                      !isAutomaticEndConfirm &&
+                      (manualConfirmAction === "connect_voice" ||
+                        manualConfirmAction === "start_drive")
+                        ? colors.primary
+                        : colors.danger,
+                    marginTop: 12,
+                  },
+                ]}
+                onPress={handleConfirmPrimaryAction}
+              >
+                <Text style={[styles.modalButtonText, { color: "#FFFFFF" }]}>
+                  {confirmationCopy.confirm}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalButton,
+                  {
+                    backgroundColor: "transparent",
+                    borderWidth: 1,
+                    borderColor: isDark ? "#333" : "#E5E5EA",
+                  },
+                ]}
+                onPress={handleDismissEndConfirmation}
+              >
+                <Text style={[styles.modalButtonText, { color: textColor }]}>
+                  {confirmationCopy.cancel}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      </Modal>
-    </View>
+        </Modal>
+      </View>
+
+      {/* Above the map, under iOS 26's system route sheet: the preview's
+          "Oturumlara dön", outside the sheet. Beside the container, which
+          takes no touches while the sheet is up. */}
+      {NATIVE_ROUTE_SHEET && canClosePreview ? (
+        <PreviewBackButton visible={showFloatingBack} onPress={handleClosePreview} />
+      ) : null}
+    </>
   );
 }
 
@@ -1415,7 +1465,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.1)",
   },
-  headerSafeArea: {
+  headerInner: {
     paddingVertical: 6,
   },
   headerContent: {

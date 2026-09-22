@@ -45,6 +45,11 @@ export const routeSheetModeOf = (params: object | undefined): RouteSheetMode =>
  * (previews only), 1 the middle, 2 the full height.
  */
 export const MIDDLE_LEVEL = 1;
+/**
+ * The full height, in both modes. There the sheet covers the screen's
+ * top-leading corner, so a preview's "Oturumlara dön" moves into the sheet.
+ */
+export const TOP_LEVEL = 2;
 
 export const levelOfIndex = (index: number, isPreview: boolean) =>
   index < 0 ? -1 : isPreview ? index : index + 1;
