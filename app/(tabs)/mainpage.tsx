@@ -75,7 +75,11 @@ import {
   DriveModeButton,
   LocateButton,
 } from "@/components/map-header/MapFloatingControls";
-import { stationSearchKey } from "@/components/map-header/stationSearch";
+import {
+  formatKw,
+  sortByDistance,
+  stationSearchKey,
+} from "@/components/map-header/stationSearch";
 import { TIER_BOLTS, TIER_COLORS } from "@/components/map-header/tiers";
 import { CAR_MODE_MAP_CLEAR_INSETS } from "@/components/carModeLayout";
 import {
@@ -88,7 +92,7 @@ import {
   formatPlaceLine,
 } from "@/components/route-sheet/breakSuggestion";
 import { supportsNativeRouteSheet } from "@/components/route-sheet/nativeRouteSheet";
-import { stationHardware } from "@/components/route-sheet/routeFormat";
+import { formatKm, stationHardware } from "@/components/route-sheet/routeFormat";
 import {
   routeSheetBridge,
   useModalOverRouteSheet,
@@ -1851,17 +1855,23 @@ export default function MapScreen() {
     if (!isDriveModeActive) StationFocusBus.clear();
   }, [isDriveModeActive]);
 
+  // The list under the filters and the one a cluster opens: nearest first.
+  // sortByDistance always works on a copy, so the map's pins keep the order
+  // allStations deliberately leaves them in.
   const typeSheetStations = useMemo(() => {
-    if (clusterList) return clusterList;
-    if (!bottomSheetSelectedType) return [];
-    return allStations.filter(
-      (s) =>
-        s.type === bottomSheetSelectedType ||
-        (s.socket_stats &&
-          s.socket_stats[bottomSheetSelectedType] &&
-          s.socket_stats[bottomSheetSelectedType].total > 0),
-    );
-  }, [clusterList, bottomSheetSelectedType, allStations]);
+    const listed = clusterList
+      ? clusterList
+      : bottomSheetSelectedType
+        ? allStations.filter(
+            (s) =>
+              s.type === bottomSheetSelectedType ||
+              (s.socket_stats &&
+                s.socket_stats[bottomSheetSelectedType] &&
+                s.socket_stats[bottomSheetSelectedType].total > 0),
+          )
+        : [];
+    return sortByDistance(listed, userLocation?.coords ?? null);
+  }, [clusterList, bottomSheetSelectedType, allStations, userLocation]);
 
   useFocusEffect(
     useCallback(() => {
@@ -3311,7 +3321,7 @@ export default function MapScreen() {
                   }}
                 >
                   {clusterList
-                    ? `Bu Konumda ${clusterList.length} İstasyon`
+                    ? `Bu konumda ${clusterList.length} istasyon`
                     : `${bottomSheetSelectedType} istasyonları`}
                 </Text>
                 <Pressable
@@ -3383,18 +3393,17 @@ export default function MapScreen() {
                   </View>
                 )}
                 renderItem={({ item }: { item: Station }) => {
-                  let distanceText = "";
-                  if (userLocation) {
-                    const dist = getDistanceFromLatLonInKm(
-                      userLocation.coords.latitude,
-                      userLocation.coords.longitude,
-                      item.latitude,
-                      item.longitude,
-                    );
-                    distanceText = ` • ${dist.toFixed(1)} km`;
-                  } else if (item.distanceKm) {
-                    distanceText = ` • ${item.distanceKm} km`;
-                  }
+                  // Turkish numbers, as the search rows and the route sheet
+                  // write them: "4,3 km", never "4.3 km".
+                  const distance = userLocation
+                    ? formatKm(metersBetween(userLocation.coords, item) / 1000)
+                    : formatKm(item.distanceKm);
+                  // A station the feed sent without a max_power keeps its row,
+                  // and does not read "NaN kW".
+                  const power = formatKw(item.powerKw);
+                  const subtitle = [power && `${power} kW`, distance]
+                    .filter(Boolean)
+                    .join(" • ");
 
                   const isAvailable = item.status === "available";
 
@@ -3508,7 +3517,7 @@ export default function MapScreen() {
                               fontWeight: "500",
                             }}
                           >
-                            {item.powerKw} kW{distanceText}
+                            {subtitle}
                           </Text>
                         </View>
                       </View>

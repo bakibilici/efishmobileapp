@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Sharing from "expo-sharing";
 import { Alert } from "react-native";
@@ -36,6 +37,14 @@ export async function exportUserData(user: DemoUserProfile): Promise<void> {
   else Alert.alert("Dışa aktarıldı", uri);
 }
 
+/**
+ * A key an earlier build's payment screen wrote the card number and the CVC
+ * into. That screen and everything that read the key are gone, which stops
+ * new writes but cannot reach what an install already holds — so deletion
+ * takes it with the rest. Nothing else in the app knows this name any more.
+ */
+const LEGACY_PAYMENT_CARDS_KEY = "user_payment_cards";
+
 /** Deletes the person's saved routes and profile from this phone, then signs out (logout goes to "/"). */
 export async function deleteAccount(
   user: DemoUserProfile,
@@ -43,5 +52,6 @@ export async function deleteAccount(
 ): Promise<void> {
   await DriveSessionHistoryStorage.deleteSessionsForUser(user.id);
   await LocalUserStorage.deleteUser(user.id);
+  await AsyncStorage.removeItem(LEGACY_PAYMENT_CARDS_KEY);
   await logout();
 }

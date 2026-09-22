@@ -66,14 +66,38 @@ export function matchStations(
   return hits.slice(0, limit).map((hit) => hit.station);
 }
 
-/** "120", "7,4": a power as the rest of the app writes numbers. */
-const formatKw = (kw: number) => String(Math.round(kw * 10) / 10).replace(".", ",");
+/**
+ * The same stations, nearest first, always as a new array. The map's own
+ * station list is deliberately left unsorted — re-ordering the map's
+ * children is what destabilises its native child list — so the sheets that
+ * list stations sort a copy of it. Without a location the order is kept.
+ */
+export function sortByDistance<T extends Coords>(
+  stations: readonly T[],
+  near: Coords | null,
+): T[] {
+  const listed = [...stations];
+  if (!near || listed.length < 2) return listed;
+  return listed.sort((a, b) => metersBetween(near, a) - metersBetween(near, b));
+}
+
+/**
+ * "120", "7,4": a power as the rest of the app writes numbers. Null when the
+ * feed sent none — `max_power` is optional, and a row that reads "NaN kW" is
+ * worse than a row with no power on it. The same contract as formatKm, so
+ * every call site drops the segment instead of guarding the number itself.
+ */
+export const formatKw = (kw?: number | null): string | null =>
+  typeof kw === "number" && Number.isFinite(kw) && kw > 0
+    ? String(Math.round(kw * 10) / 10).replace(".", ",")
+    : null;
 
 /** "HPC · 120 kW · 2,4 km". kW omitted when powerKw <= 0; distance omitted without `near`. */
 export function stationSubtitle(station: Station, near: Coords | null): string {
   const parts: string[] = [station.type];
-  if (Number.isFinite(station.powerKw) && station.powerKw > 0) {
-    parts.push(`${formatKw(station.powerKw)} kW`);
+  const kw = formatKw(station.powerKw);
+  if (kw) {
+    parts.push(`${kw} kW`);
   }
   if (near) {
     const km = formatKm(metersBetween(near, station) / 1000);

@@ -42,7 +42,7 @@ export function classifyActivity(
     const span = Math.max(1, (windowData[windowData.length - 1].timestamp - windowData[0].timestamp) / 1000);
     const predicted = predictWithLearnedModel({
       stepFreq: stepsTotal / span,
-      avgSpeed: windowData.reduce((sum, d) => sum + d.speed, 0) / windowData.length,
+      avgSpeed: windowData.reduce((sum, d) => sum + Math.max(0, d.speed), 0) / windowData.length,
       variance: windowData.reduce((sum, d) => sum + d.motionVariance, 0) / windowData.length,
       charging: false,
     });
@@ -58,7 +58,11 @@ export function classifyActivity(
 
   for (const point of windowData) {
     totalSteps += point.steps;
-    totalSpeed += point.speed;
+    // A sample the platform could not measure (UNKNOWN_SPEED) is no speed
+    // signal, not a negative one: it counts as 0 here, exactly as it did when
+    // the provider clamped it. The rules below only ever raise the state on
+    // speed, so an unmeasured window simply decides on steps instead.
+    totalSpeed += Math.max(0, point.speed);
     totalMotionVariance += point.motionVariance;
   }
 

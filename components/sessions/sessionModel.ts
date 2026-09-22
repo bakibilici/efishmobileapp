@@ -97,9 +97,28 @@ const positive = (value: unknown): number | null =>
 /**
  * Case-folds Turkish by hand, as placeTitle does: "İ"/"I" become "i"/"ı"
  * whatever the runtime's locale data ("İstanbul" and "istanbul" fold alike).
+ * The accents then come off, the way the wake word matcher folds them, so a
+ * name typed without them still finds the place: "Parkturk" finds "Parktürk"
+ * and "Umraniye" the trip to "Ümraniye". The dotless ı carries no accent and
+ * stays itself; searchKey below is what reads it as i.
  */
 export function foldForSearch(text: string): string {
-  return text.replace(/İ/g, "i").replace(/I/g, "ı").toLowerCase().trim();
+  return (
+    text
+      .replace(/İ/g, "i")
+      .replace(/I/g, "ı")
+      .toLowerCase()
+      .replace(/ğ/g, "g")
+      .replace(/ü/g, "u")
+      .replace(/ş/g, "s")
+      .replace(/ö/g, "o")
+      .replace(/ç/g, "c")
+      // Whatever else carries one (â in "Kâğıthane", é in a foreign name),
+      // and the combining dot a runtime without Turkish casing leaves on "İ".
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+  );
 }
 
 /**

@@ -51,8 +51,12 @@ export function activityStatus(
         doubleSteps: false,
       };
     case ActivityState.WALKING:
+      // The state machine decides whether this is a walk, and it already waits
+      // out a pause before it says otherwise. The capsule used to overrule it
+      // whenever the speed read under 1 km/h, which is most of a real walk:
+      // GPS gives a pedestrian's speed late, roughly, or not at all.
       return {
-        label: known && kmh < 1 ? "Beklemede" : "Yürüyüş",
+        label: "Yürüyüş",
         glyphColor: isDark ? colors.tertiary : "#00875A",
         iconState: ActivityState.WALKING,
         speedText: speed,

@@ -12,7 +12,7 @@ import { useSharedValue, withTiming } from "react-native-reanimated";
 
 import { hasRouteSheet } from "@/components/RoutePlanSheet";
 import { BatteryCard, hasBatteryLevels } from "@/components/route-sheet/BatteryCard";
-import { stationForHighlight } from "@/components/route-sheet/breakDetail";
+import { photoCreditLine, stationForHighlight } from "@/components/route-sheet/breakDetail";
 import { BreakDetailPanel } from "@/components/route-sheet/BreakDetailPanel";
 import { BreakSuggestionRow } from "@/components/route-sheet/BreakSuggestionRow";
 import {
@@ -52,6 +52,7 @@ import {
 import { getNativeSheetPalette } from "@/components/route-sheet/sheetPalette";
 import { StationsPanel } from "@/components/route-sheet/StationsPanel";
 import { SummaryStrip, type SummaryItem } from "@/components/route-sheet/SummaryStrip";
+import { useDestinationPhoto } from "@/components/route-sheet/useDestinationPhoto";
 import { GlassNavButton } from "@/components/ui/GlassNavButton";
 import { useTheme } from "@/context/ThemeContext";
 import {
@@ -61,6 +62,7 @@ import {
   type RoutePlanLocation,
 } from "@/services/DriveSessionStore";
 import { destinationTitle, isCoordinatePair } from "@/services/placeTitle";
+import { getRoutePlanGatewayUrl } from "@/services/routePlanGateway";
 
 /**
  * The route panel as the system's own sheet, on iOS 26 (a formSheet of the
@@ -402,6 +404,8 @@ export default function RouteSheetScreen() {
   }, [summary, hasStations, stopCount, openStations]);
 
   const destination = useMemo(() => destinationTitle(routePlanData), [routePlanData]);
+  /** Null for a plan without one, which is the header exactly as it was. */
+  const destinationPhoto = useDestinationPhoto(routePlanData);
 
   const breakStation = useMemo(
     () =>
@@ -442,9 +446,13 @@ export default function RouteSheetScreen() {
   );
   const showBattery = hasBatteryLevels(battery.start, battery.end);
   const optimizationSummary = routePlanData.route_optimization_summary?.trim();
-  const breakFooter = optimizationSummary
+  const summaryLine = optimizationSummary
     ? optimizationSummary.split(" | ").join(" · ")
     : "İlgi alanlarınıza göre, şarj beklerken yapabilecekleriniz.";
+  // Google's credit belongs on the screen the photo is on, on its own quiet
+  // line rather than run on to a sentence that is already full.
+  const photoCredits = photoCreditLine(highlights, getRoutePlanGatewayUrl());
+  const breakFooter = photoCredits ? `${summaryLine}\n${photoCredits}` : summaryLine;
 
   return (
     <SheetMotionContext.Provider value={sheetMotion}>
@@ -498,6 +506,7 @@ export default function RouteSheetScreen() {
                 title={destination?.title ?? "Rota"}
                 address={destination?.address}
                 subtitle={subtitle}
+                photo={destinationPhoto}
                 palette={palette}
               />
 

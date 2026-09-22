@@ -58,6 +58,19 @@ export class ActivityStateMachine {
   }
 
   /**
+   * Commits a state at once, without the debounce.
+   *
+   * Only for evidence the live windows cannot see for themselves: the steps the
+   * phone counted while the app was suspended, which is why the capsule
+   * otherwise reads "Beklemede" for ten seconds after every unlock. The caller
+   * decides what that evidence is worth (see sensors/resumeSeed) — a live
+   * classification must always go through transition() and wait its turn.
+   */
+  public seedState(state: ActivityState): void {
+    this.commitState(state);
+  }
+
+  /**
    * Transitions evaluate incoming rules and determine if a permanent state change should occur.
    * Typically called by your ActivityPipeline every X seconds.
    */

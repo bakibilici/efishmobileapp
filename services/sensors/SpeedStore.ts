@@ -4,10 +4,18 @@
  * This is the UI's source of truth for the user's current spatial speed.
  */
 
+import { UNKNOWN_SPEED } from './types';
+
 type SpeedListener = (speed: number) => void;
 
 class SpeedStoreImpl {
-  private speed: number = 0;
+  /**
+   * km/h, or UNKNOWN_SPEED (-1) when no window has measured one yet. Unknown
+   * rather than 0: before the first GPS fix the app knows nothing about the
+   * speed, and a screen that prints "0 km/sa" there is stating a measurement
+   * it never took.
+   */
+  private speed: number = UNKNOWN_SPEED;
   private listeners: Set<SpeedListener> = new Set();
 
   public setSpeed(speed: number): void {
@@ -26,7 +34,7 @@ class SpeedStoreImpl {
   }
 
   public reset(): void {
-    this.speed = 0;
+    this.speed = UNKNOWN_SPEED;
     this.notify();
   }
 

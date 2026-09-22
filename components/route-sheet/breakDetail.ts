@@ -8,6 +8,7 @@ import type {
   RoutePlanLocation,
 } from "../../services/DriveSessionStore";
 import { alternativeKind, type BreakKind } from "../../services/routePersonalization";
+import { gatewayPhotoUri, readable } from "./placePhoto";
 import { formatMinutes } from "./routeFormat";
 
 /**
@@ -184,16 +185,6 @@ export const alternativeKindOf = (
   return match?.[0] ?? null;
 };
 
-/**
- * Text worth showing: trimmed, and only when it has a letter or a digit. Place
- * data sometimes names an option "." or ",", which used to show up as
- * "Diğer: ., Shell".
- */
-const readable = (text: string | null | undefined): string | null => {
-  const trimmed = text?.trim();
-  return trimmed && /[\p{L}\p{N}]/u.test(trimmed) ? trimmed : null;
-};
-
 /** The alternative's own name, when it is a readable one. */
 export const alternativeName = (
   alternative: RoutePlanHighlightAlternative,
@@ -223,4 +214,46 @@ export const alternativeTitle = (
   if (own) return own;
   const kind = alternativeKind(alternative);
   return kind ? KIND_TITLE[kind] : null;
+};
+
+/**
+ * The photo to show for a suggestion, as a full https URL on the app's own
+ * gateway (placePhoto's one rule for every photo the sheet shows). A highlight
+ * that names no real place never shows one, whatever it carries: a generic
+ * suggestion has no place for a photograph to be of.
+ */
+export const placePhotoUri = (
+  highlight: RoutePlanInterestHighlight,
+  gatewayUrl: string,
+): string | null =>
+  hasRealPlace(highlight) ? gatewayPhotoUri(highlight.photoUrl, gatewayUrl) : null;
+
+/** "Ayşe K." for the break page's credit under the photo, or null. */
+export const photoCredit = (
+  highlight: RoutePlanInterestHighlight,
+): string | null => readable(highlight.photoAttribution);
+
+/**
+ * "Fotoğraflar: Ayşe K., Veli A." for the suggestions group's footer: the
+ * credits of the photos actually on screen, de-duped, at most two, and null
+ * when no shown photo is credited (Google sends no attribution for many
+ * places, and an uncredited photo is a legitimate one). The plural follows the
+ * names, not the photos: with one credited name among several photos,
+ * "Fotoğraflar: Ayşe K." would read as if the uncredited ones were hers too.
+ */
+export const photoCreditLine = (
+  highlights: readonly RoutePlanInterestHighlight[],
+  gatewayUrl: string,
+): string | null => {
+  const shown = (highlights ?? []).filter(
+    (highlight) => highlight && placePhotoUri(highlight, gatewayUrl) !== null,
+  );
+  const names: string[] = [];
+  for (const highlight of shown) {
+    const credit = photoCredit(highlight);
+    if (credit && !names.includes(credit)) names.push(credit);
+  }
+  if (!names.length) return null;
+  const credited = names.slice(0, 2);
+  return `${credited.length > 1 ? "Fotoğraflar" : "Fotoğraf"}: ${credited.join(", ")}`;
 };

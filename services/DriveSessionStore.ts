@@ -8,6 +8,7 @@ import { decodePolyline } from "./GoogleMapsService";
 import { LocalUserStorage } from "./localUserStorage";
 import { isCoordinatePair, type RouteDestinationDisplay } from "./placeTitle";
 import { withoutProviderNamesInPlan } from "./providerNames";
+import { withoutPhotosInPlan } from "./routePlanGateway";
 
 export enum DriveSessionState {
   IDLE = "IDLE",
@@ -64,6 +65,15 @@ export interface RoutePlanInterestHighlight {
   stationIndex?: number;
   /** 'places' when poiName is a real Google Places result, 'none' when only the generic suggestion applies. */
   poiSource?: "places" | "none";
+  /**
+   * Gateway path ('/api/place-photo?…') for the chosen place's photo, resolved
+   * against the gateway's own origin when it is rendered (placePhotoUri in
+   * components/route-sheet/breakDetail). Absent whenever the place has no
+   * photo worth showing, and then the category tile stands in for it.
+   */
+  photoUrl?: string;
+  /** Google's attribution for that photo, plain text. Shown wherever the photo is shown. */
+  photoAttribution?: string;
   /** Next-best places of other kinds at the same stop (ranker path only). */
   alternatives?: RoutePlanHighlightAlternative[];
 }
@@ -101,6 +111,20 @@ export interface RoutePlanData {
    * Read through destinationTitle() in services/placeTitle.
    */
   destination_display?: RouteDestinationDisplay;
+  /**
+   * The destination's own photograph, when Google has one: a path on the route
+   * gateway's own origin ("/api/place-photo?…"), signed there and short-lived.
+   * Absent for a place with no photo, for a destination that came from the
+   * geocoding fallback, for a gateway with its photos switched off, and from
+   * every stored plan — the signature expires within a day or two, so the
+   * agent strips photos from the session context it saves (withoutPhotos) and
+   * this store strips them from the drive history it writes and from anything
+   * it reads back (withoutPhotosInPlan). Read through destinationPhotoUri() in
+   * components/route-sheet/placePhoto, as a break photo's photoUrl is.
+   */
+  destination_photo_url?: string;
+  /** That photo's credit as plain text ("Ayşe K."); Google requires it beside the photo. */
+  destination_photo_attribution?: string;
 }
 
 export interface DriveSessionContext {
@@ -162,6 +186,14 @@ class DriveSessionStoreImpl {
     route: DriveSessionContext["route"];
     routePlanData: RoutePlanData | undefined;
   } | null = null;
+  /**
+   * The driver started this drive themselves ("Sürüş Modu", "Sürüşe Geç", the
+   * prompt, a resumed record). Such a drive outlives the voice session, so
+   * closing the conversation before the first route keeps the drive on
+   * screen, as the confirmation promises. A session AKBA opened by itself to
+   * hold a route plan is not one.
+   */
+  private driverStarted = false;
   /** Survives endSession(null context); kept in sync with AsyncStorage + context */
   private persistedBatteryPrefs: { start: number; arrival: number } | null =
     null;
@@ -279,7 +311,14 @@ class DriveSessionStoreImpl {
     this.startSession();
   }
 
-  public startSession(route?: DriveSessionContext["route"]) {
+  /**
+   * `startedByDriver` is false only for the session AKBA opens by itself to
+   * hold a route plan; every other start is the driver's own doing.
+   */
+  public startSession(
+    route?: DriveSessionContext["route"],
+    options: { startedByDriver?: boolean } = {},
+  ) {
     this.context = {
       sessionId: Math.random().toString(36).substring(7),
       startTime: Date.now(),
@@ -299,6 +338,7 @@ class DriveSessionStoreImpl {
     this.previewIsReadOnly = false;
     this.routeSheetDismissed = false;
     this.removedRoute = null;
+    this.driverStarted = options.startedByDriver !== false;
     this.setState(DriveSessionState.CAR_SESSION_ACTIVE);
     this.clearEndDriveTimer();
     this.persistCurrentSession();
@@ -518,6 +558,14 @@ class DriveSessionStoreImpl {
     );
   }
 
+  /**
+   * The driver started this drive themselves, so it is theirs to end: it
+   * stays on screen when AKBA goes quiet, route or no route.
+   */
+  public isDriverStarted(): boolean {
+    return this.driverStarted && !!this.context;
+  }
+
   public startNavigation() {
     if (this.context) {
       this.context = {
@@ -560,6 +608,7 @@ class DriveSessionStoreImpl {
     this.routePlanSheetIndex = -1;
     this.routeSheetDismissed = false;
     this.removedRoute = null;
+    this.driverStarted = false;
     this.pendingVoiceReconnect = false;
     this.previewIsReadOnly = false;
     this.clearEndDriveTimer();
@@ -573,6 +622,7 @@ class DriveSessionStoreImpl {
     this.routePlanSheetIndex = -1;
     this.routeSheetDismissed = false;
     this.removedRoute = null;
+    this.driverStarted = false;
     this.pendingVoiceReconnect = false;
     this.previewIsReadOnly = false;
     this.clearEndDriveTimer();
@@ -588,6 +638,10 @@ class DriveSessionStoreImpl {
     this.routePlanSheetIndex = -1;
     this.routeSheetDismissed = false;
     this.removedRoute = null;
+    // Resuming a stored drive is the driver's own doing, like starting one, so
+    // it survives AKBA going quiet. Only opening its route to look at it is
+    // not a drive the driver started, and must still fall back to IDLE.
+    this.driverStarted = !!options.reconnectVoice;
     this.pendingVoiceReconnect = !!options.reconnectVoice;
     // Resuming with AKBA continues the drive; opening the route only looks at it.
     this.previewIsReadOnly = !options.reconnectVoice;
@@ -700,9 +754,13 @@ class DriveSessionStoreImpl {
       history: Array.isArray(rawContext.history) ? rawContext.history : [],
       isPreviewMode: true,
       route: restoredRoute,
-      // A drive stored before stop names were cleaned shows them clean too.
+      // A drive stored before stop names were cleaned shows them clean too,
+      // and one stored before photos stopped being written (below) still opens
+      // without them: a signed photo path outlives its signature by months in
+      // this table, and drawing an expired one would shift the header's copy
+      // and then collapse it again when the 403 came back.
       routePlanData: rawContext.routePlanData
-        ? withoutProviderNamesInPlan(rawContext.routePlanData)
+        ? withoutPhotosInPlan(withoutProviderNamesInPlan(rawContext.routePlanData))
         : undefined,
       isNavigationActive:
         rawContext.isNavigationActive ??
@@ -754,6 +812,19 @@ class DriveSessionStoreImpl {
       context.route?.stops?.length ??
       0;
 
+    // What is written to the drive history, never what this drive is shown
+    // from: the photographs are the live plan's and stay on it. Their paths
+    // are signed for a day or two, so a stored one is a 403 waiting to happen
+    // — the agent strips them from its own session context for the same
+    // reason (withoutPhotos in apps/agent/src/tools/route-planner).
+    const storedPlan = context.routePlanData
+      ? withoutPhotosInPlan(context.routePlanData)
+      : undefined;
+    const storedContext: DriveSessionContext =
+      storedPlan === context.routePlanData
+        ? context
+        : { ...context, routePlanData: storedPlan };
+
     return {
       sessionId: context.sessionId,
       title:
@@ -769,7 +840,7 @@ class DriveSessionStoreImpl {
       durationSeconds,
       distanceKm,
       stationCount,
-      routeContext: context,
+      routeContext: storedContext,
     };
   }
 

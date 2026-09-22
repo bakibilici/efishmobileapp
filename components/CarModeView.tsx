@@ -33,14 +33,13 @@ import {
   DriveSessionState,
   DriveSessionStore,
 } from "../services/DriveSessionStore";
-import { destinationTitle } from "../services/placeTitle";
+import { planTripSummary, tripDurationSeconds } from "./carModeTrip";
 import {
   MIDDLE_LEVEL,
   supportsNativeRouteSheet,
   TOP_LEVEL,
 } from "./route-sheet/nativeRouteSheet";
 import { PreviewBackButton } from "./route-sheet/PreviewBackButton";
-import { formatMinutes } from "./route-sheet/routeFormat";
 import {
   routeSheetBridge,
   useModalOverRouteSheet,
@@ -433,27 +432,8 @@ const AssistantOrb = ({
   );
 };
 
-/** What the driver wants to see about the planned trip at a glance; null without a plan. */
-const readTripSummary = () => {
-  const plan = DriveSessionStore.getRoutePlanData();
-  if (!plan) return null;
-  // The same short title as the sheet and Oturumlar: "Alemdağ Cd. No:940",
-  // not the geocoder's whole postal address.
-  const place = destinationTitle(plan);
-  const destination = place?.title ?? "Hedef";
-  const parts: string[] = [];
-  const km = plan.summary?.total_travel_length;
-  if (typeof km === "number" && km > 0) parts.push(`${km.toFixed(km >= 100 ? 0 : 1)} km`);
-  const stops = plan.summary?.total_station_count ?? 0;
-  parts.push(stops > 0 ? `${stops} şarj durağı` : "şarj durağı yok");
-  const chargeMin = plan.summary?.total_charge_duration ?? 0;
-  if (stops > 0 && chargeMin > 0) parts.push(`${chargeMin} dk şarj`);
-  // The capsule's time: the whole trip, charging included.
-  const tripTime = formatMinutes(
-    (plan.summary?.total_travel_duration ?? 0) + (stops > 0 ? chargeMin : 0),
-  );
-  return { destination, detail: place?.detail ?? null, line: parts.join(" · "), tripTime };
-};
+/** The planned trip as the header and the capsule say it; null without a plan. */
+const readTripSummary = () => planTripSummary(DriveSessionStore.getRoutePlanData());
 
 /**
  * Brings back a route sheet the driver put away (its Close, "Kapat", or a
@@ -565,6 +545,7 @@ export function CarModeView() {
     setMuted,
     wakeWordArmed,
     routePlanFailedAt,
+    conversationEnded,
   } = useDrivingAgent();
 
   const isDark = themeScheme === "dark";
@@ -582,22 +563,9 @@ export function CarModeView() {
   const statsX = useSharedValue(120);
   const assistantY = useSharedValue(150);
 
-  const getRouteDurationSeconds = () => {
-    const context = DriveSessionStore.getContext();
-    const durationFromRoute = context?.route?.summary?.duration;
-    const durationFromPlan =
-      context?.routePlanData?.summary?.total_travel_duration;
-
-    if (typeof durationFromRoute === "number" && durationFromRoute > 0) {
-      return durationFromRoute;
-    }
-
-    if (typeof durationFromPlan === "number" && durationFromPlan > 0) {
-      return durationFromPlan * 60;
-    }
-
-    return null;
-  };
+  /** The drive plus its charging stops: what VARIŞ counts from (carModeTrip). */
+  const getRouteDurationSeconds = () =>
+    tripDurationSeconds(DriveSessionStore.getContext());
 
   const [routeDurationSeconds, setRouteDurationSeconds] = useState<
     number | null
@@ -728,6 +696,7 @@ export function CarModeView() {
     aiConnecting: sessionState === DriveSessionState.AI_CONNECTING,
     hasRoute: !!tripSummary,
     hasEverConnected,
+    conversationEnded,
     wakeWordArmed,
     thinking: isThinking,
     routePlanFailed: routePlanFailedVisible,
@@ -1027,9 +996,20 @@ export function CarModeView() {
       }
     : manualConfirmAction === "connect_voice"
       ? {
-          title: "AKBA’ya yeniden bağlanılsın mı?",
-          subtitle:
-            "Sesli konuşma yeniden başlayacak. Sürüş rotanız olduğu gibi korunur.",
+          // "Yeniden" only once this drive has had AKBA on the line, and the
+          // route sentence only with a route: the first connection of a drive
+          // that has neither promised to keep a route that did not exist.
+          title: hasEverConnected
+            ? "AKBA’ya yeniden bağlanılsın mı?"
+            : "AKBA’ya bağlanılsın mı?",
+          subtitle: [
+            hasEverConnected
+              ? "Sesli konuşma yeniden başlayacak."
+              : "Sesli konuşma başlayacak.",
+            hasRoutePlan ? "Sürüş rotanız olduğu gibi korunur." : null,
+          ]
+            .filter(Boolean)
+            .join(" "),
           confirm: "AKBA’ya Bağlan",
           cancel: "Vazgeç",
         }
@@ -1044,8 +1024,11 @@ export function CarModeView() {
       : manualConfirmAction === "stop_voice"
         ? {
             title: "Konuşma sonlandırılsın mı?",
-            subtitle:
-              "Sadece AKBA konuşması kapanacak. Sürüş ve rota takibi devam edecek.",
+            // Only what really goes on: the drive always does (passiveDriveState
+            // keeps it), the route only when there is one.
+            subtitle: hasRoutePlan
+              ? "Sadece AKBA konuşması kapanacak. Sürüş ve rota takibi devam edecek."
+              : "Sadece AKBA konuşması kapanacak. Sürüş devam edecek.",
             confirm: "Konuşmayı Bitir",
             cancel: "Vazgeç",
           }
@@ -1308,7 +1291,7 @@ export function CarModeView() {
                   : "-"}
               </Text>
               <Text style={[styles.statLabel, { color: subtextColor }]}>
-                km/h
+                km/sa
               </Text>
             </BlurView>
             <BlurView
@@ -1624,7 +1607,9 @@ const styles = StyleSheet.create({
   statLabel: {
     fontSize: 10,
     fontWeight: "700",
-    textTransform: "uppercase",
+    // No uppercasing: the unit reads "km/sa" as it does in the route sheet
+    // and the map capsule, and Turkish words keep the casing they are written
+    // with (a runtime without Turkish rules upper-cases "ı" as "I").
     marginTop: 2,
   },
   assistantContainer: {

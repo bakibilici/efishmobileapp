@@ -52,6 +52,15 @@ const MAPPING = {
   'bolt.fill': 'bolt',
   magnifyingglass: 'search',
 
+  // Hareket Durumu
+  'figure.walk': 'directions-walk',
+  'figure.run': 'directions-run',
+  'moon.zzz.fill': 'bedtime',
+  speedometer: 'speed',
+  timer: 'timer',
+  'bolt.batteryblock.fill': 'battery-charging-full',
+  ruler: 'straighten',
+
   // Map header
   'line.3.horizontal.decrease': 'filter-list',
   'mic.fill': 'mic',

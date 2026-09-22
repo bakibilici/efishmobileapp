@@ -4,7 +4,7 @@ import { ActivityRecorder } from "./ActivityRecorder";
 import { SensorDataBuffer } from "./SensorDataBuffer";
 import { SpeedStore } from "./SpeedStore";
 import { StepStore } from "./StepStore";
-import { ISensorDataProvider, SensorDataPayload } from "./types";
+import { ISensorDataProvider, SensorDataPayload, UNKNOWN_SPEED } from "./types";
 import { ChargingSessionStore } from "../ChargingSessionStore";
 
 /**
@@ -37,11 +37,14 @@ export class ActivityPipeline {
       (data: SensorDataPayload) => {
         this.buffer.add(data);
 
-        // Push step data to the centralized store for UI consumption
+        // Push step data to the centralized store for UI consumption.
+        // The counter gets the backlog too — those steps were walked, they just
+        // were not walked in this window, so only the buffer above ignores them.
         const isCharging = ChargingSessionStore.isCharging;
         const currentState = this.stateMachine.getState();
-        if (data.steps > 0) {
-          StepStore.addSteps(data.steps, isCharging, currentState);
+        const countedSteps = data.steps + (data.backlogSteps ?? 0);
+        if (countedSteps > 0) {
+          StepStore.addSteps(countedSteps, isCharging, currentState);
         } else {
           StepStore.setChargingState(isCharging);
         }
@@ -98,8 +101,9 @@ export class ActivityPipeline {
         (data: SensorDataPayload) => {
           this.buffer.add(data);
           const isCharging = ChargingSessionStore.isCharging;
-          if (data.steps > 0) {
-            StepStore.addSteps(data.steps, isCharging);
+          const countedSteps = data.steps + (data.backlogSteps ?? 0);
+          if (countedSteps > 0) {
+            StepStore.addSteps(countedSteps, isCharging);
           } else {
             StepStore.setChargingState(isCharging);
           }
@@ -128,14 +132,22 @@ export class ActivityPipeline {
     //   `[ActivityPipeline] Instantaneous Window Classification: ${classifiedState}`,
     // );
 
-    // C. Calculate average speed over the window and update store
+    // C. Calculate average speed over the window and update store.
+    // Only the samples the platform actually measured count: averaging an
+    // UNKNOWN_SPEED in would drag a real speed down, and a window of nothing
+    // but unknowns would print a negative one. Such a window stays unknown,
+    // which every screen shows as no speed rather than as a confident "0".
     let totalSpeed = 0;
+    let measuredCount = 0;
     for (const d of windowData) {
-      totalSpeed += d.speed;
+      if (d.speed >= 0) {
+        totalSpeed += d.speed;
+        measuredCount += 1;
+      }
     }
-    const avgSpeed = totalSpeed / windowData.length;
+    const avgSpeed = measuredCount > 0 ? totalSpeed / measuredCount : UNKNOWN_SPEED;
     // Assuming sensor input is m/s, converting to km/h for UI display
-    const avgSpeedKmh = avgSpeed * 3.6;
+    const avgSpeedKmh = measuredCount > 0 ? avgSpeed * 3.6 : UNKNOWN_SPEED;
     SpeedStore.setSpeed(avgSpeedKmh);
 
     // D. Send instantaneous classification to State Machine for debounce/hysteresis checks
@@ -145,6 +157,13 @@ export class ActivityPipeline {
     this.stateMachine.transition(classifiedState, latestCharging);
 
     // E. Field-test evidence: one feature row per window (no-op unless recording).
+    // avgSpeed above is the mean of what was measured, which is what the screen
+    // should print. The recorded feature has to be the other thing: exactly what
+    // classifyActivity feeds the learned model, unknowns counted as 0 over every
+    // sample. Recording the displayed number instead would train the model on a
+    // value it never sees at serve time, on precisely the unmeasured windows
+    // this work is about. `speedKnown` keeps the distinction without moving the
+    // number.
     const steps = windowData.reduce((sum, d) => sum + d.steps, 0);
     const variance = windowData.reduce((sum, d) => sum + d.motionVariance, 0) / windowData.length;
     ActivityRecorder.onWindow({
@@ -152,7 +171,8 @@ export class ActivityPipeline {
       windowSec: this.checkWindowSeconds,
       steps,
       stepFreq: steps / this.checkWindowSeconds,
-      avgSpeed,
+      avgSpeed: totalSpeed / windowData.length,
+      speedKnown: measuredCount > 0,
       variance,
       charging: latestCharging,
       classified: classifiedState,

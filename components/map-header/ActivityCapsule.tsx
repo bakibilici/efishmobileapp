@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import { useRouter } from "expo-router";
+import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { useTheme } from "../../context/ThemeContext";
@@ -11,15 +12,24 @@ import ActivityIcon from "../ActivityIcon";
 import { RollingNumber } from "../RollingNumber";
 import { GlassSurface } from "../ui/glass";
 import { TABULAR } from "../ui/GroupedList";
+import { IconSymbol } from "../ui/icon-symbol";
 import { usePagePalette } from "../ui/pagePalette";
 import { activityStatus } from "./activityStatus";
 
 /**
  * The map's status capsule: the activity, its speed and the day's steps
  * ("Beklemede · 0 adım"), and "Sürüşe Geç" while the phone is in a car and no
- * drive is running. Glass, because it is floating, tappable map chrome: a
- * tap brings the search and filters back. The status and "Sürüşe Geç" are
- * sibling buttons inside one glass shape, so VoiceOver reaches both.
+ * drive is running. Glass, because it is floating, tappable map chrome. The
+ * status and "Sürüşe Geç" are sibling buttons inside one glass shape, so
+ * VoiceOver reaches both.
+ *
+ * A tap does what the capsule is at that moment. Collapsed, it is the
+ * header's only remaining surface, so it brings the search and the filters
+ * back (as it always has). Expanded, it is a status row, and a status row
+ * opens its own detail: the activity sheet (app/activity-sheet.tsx). The
+ * chevron is drawn in exactly that second case — including beside "Sürüşe
+ * Geç", where the status half still opens the sheet — and it sits inside the
+ * status button, so the indicator is tapped by the row it belongs to.
  */
 export function ActivityCapsule({
   compact,
@@ -33,7 +43,10 @@ export function ActivityCapsule({
   const speed = useSpeed();
   const { colors, themeScheme } = useTheme();
   const palette = usePagePalette();
+  const router = useRouter();
   const [driveState, setDriveState] = useState(() => DriveSessionStore.getState());
+
+  const openSheet = useCallback(() => router.push("/activity-sheet"), [router]);
 
   // Whole km/h from the first frame: the raw reading is a window average
   // ("4.299339319991123"), and the debounce below only replaces it once the
@@ -73,10 +86,12 @@ export function ActivityCapsule({
         style={[styles.capsule, { paddingRight: showCta ? 7 : 14 }]}
       >
         <Pressable
-          onPress={onExpand}
-          accessibilityRole={compact ? "button" : undefined}
+          onPress={compact ? onExpand : openSheet}
+          accessibilityRole="button"
           accessibilityLabel={accessibilityLabel}
-          accessibilityHint={compact ? "Arama ve filtreleri gösterir" : undefined}
+          accessibilityHint={
+            compact ? "Arama ve filtreleri gösterir" : "Hareket durumu ayrıntılarını açar"
+          }
           style={({ pressed }) => [styles.status, pressed && styles.pressed]}
         >
           <ActivityIcon
@@ -88,18 +103,19 @@ export function ActivityCapsule({
           <View style={styles.line}>
             <Text
               maxFontSizeMultiplier={1.4}
+              numberOfLines={1}
               style={[styles.label, { color: palette.label }]}
             >
               {status.label}
             </Text>
             {status.speedText ? (
-              <Text maxFontSizeMultiplier={1.4} style={secondary}>
+              <Text maxFontSizeMultiplier={1.4} numberOfLines={1} style={secondary}>
                 {` · ${status.speedText}`}
               </Text>
             ) : null}
             {status.showSteps ? (
               <>
-                <Text maxFontSizeMultiplier={1.4} style={secondary}>
+                <Text maxFontSizeMultiplier={1.4} numberOfLines={1} style={secondary}>
                   {" · "}
                 </Text>
                 <RollingNumber
@@ -110,7 +126,7 @@ export function ActivityCapsule({
                     color: palette.secondaryLabel,
                   }}
                 />
-                <Text maxFontSizeMultiplier={1.4} style={secondary}>
+                <Text maxFontSizeMultiplier={1.4} numberOfLines={1} style={secondary}>
                   {" adım"}
                 </Text>
               </>
@@ -123,6 +139,19 @@ export function ActivityCapsule({
               </View>
             ) : null}
           </View>
+          {compact ? null : (
+            // The grouped list's own accessory (ui/GroupedList Row): this row
+            // opens a detail. Inside the Pressable, so the indicator is part
+            // of the row that acts on it, as a grouped cell's accessory is.
+            // Collapsed, the tap only reopens the header, so nothing is drawn.
+            <IconSymbol
+              name="chevron.right"
+              size={13}
+              weight="semibold"
+              color={palette.tertiaryLabel}
+              style={styles.chevron}
+            />
+          )}
         </Pressable>
         {showCta ? (
           <Pressable
@@ -149,8 +178,11 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.6,
   },
+  // The capsule spans the header's grid like the rows above it, instead of
+  // hugging its text: a status whose width changed with every state change
+  // made the block's silhouette move while the driver did nothing.
   wrapper: {
-    alignSelf: "center",
+    alignSelf: "stretch",
   },
   capsule: {
     minHeight: 44,
@@ -159,23 +191,34 @@ const styles = StyleSheet.create({
     paddingLeft: 14,
   },
   status: {
+    flex: 1,
     minHeight: 44,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
   },
+  // Takes the width the chevron and "Sürüşe Geç" leave, so the text stays on
+  // the leading edge. Since the capsule stretches to the header's grid, the
+  // row can no longer grow to fit its text: the parts shrink instead, and
+  // whatever still will not fit is clipped inside the glass rather than
+  // drawn over the chevron and the capsule's trailing edge.
   line: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
+    flexShrink: 1,
+    overflow: "hidden",
   },
   label: {
     fontSize: 15,
     lineHeight: 20,
     fontWeight: "600",
+    flexShrink: 1,
   },
   secondary: {
     fontSize: 15,
     lineHeight: 20,
+    flexShrink: 1,
   },
   // The ×2 badge as ActivityContextBar drew it: steps count double while charging.
   badge: {
@@ -192,6 +235,9 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#000",
     letterSpacing: -0.2,
+  },
+  chevron: {
+    marginLeft: 8,
   },
   ctaTouch: {
     minHeight: 44,

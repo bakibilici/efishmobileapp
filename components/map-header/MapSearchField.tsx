@@ -27,7 +27,7 @@ import { withoutProviderNames } from "../../services/providerNames";
 import { GlassSurface } from "../ui/glass";
 import { GROUP_RADIUS } from "../ui/GroupedList";
 import { IconSymbol } from "../ui/icon-symbol";
-import { usePagePalette } from "../ui/pagePalette";
+import { accentOnGlass, usePagePalette } from "../ui/pagePalette";
 import { RESULT_SEPARATOR_INSET, ResultRow } from "./ResultRow";
 import {
   buildStationIndex,
@@ -35,7 +35,7 @@ import {
   stationSubtitle,
   type Coords,
 } from "./stationSearch";
-import { TIER_COLORS, accentOnGlass } from "./tiers";
+import { TIER_COLORS } from "./tiers";
 import { useSearchDictation } from "./useSearchDictation";
 
 export type MapSearchFieldHandle = {
@@ -50,6 +50,15 @@ const LIST_GAP = 8;
 
 /** A Places session token: a new one makes the field fetch its text again. */
 const nextToken = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+
+/**
+ * Places looks for Turkish places only: "zes" used to come back from
+ * Georgia, Spain, the Netherlands and Indonesia, "Forum" from Mexico and
+ * Poland. Within the country the driver's own surroundings come first
+ * (a bias, not a bound: a search for another city still finds it).
+ */
+const PLACES_COUNTRY = "country:tr";
+const PLACES_BIAS_RADIUS_M = 50000;
 
 /** Provider names never reach the screen; a line left empty is dropped. */
 const clean = (text?: string | null) => (text ? withoutProviderNames(text) || null : null);
@@ -114,6 +123,16 @@ export function MapSearchField({
     }
   }, []);
   const { listening, toggle, cancel } = useSearchDictation(onText);
+
+  // Rounded to about a kilometre: the field refetches whenever its query
+  // changes, and a raw fix would change it with every GPS update.
+  const biasLocation = useMemo(
+    () =>
+      userCoords
+        ? `${userCoords.latitude.toFixed(2)},${userCoords.longitude.toFixed(2)}`
+        : null,
+    [userCoords],
+  );
 
   const index = useMemo(() => buildStationIndex(stations), [stations]);
   const matches = useMemo(
@@ -231,6 +250,10 @@ export function MapSearchField({
               ? process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY
               : process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY,
           language: "tr",
+          components: PLACES_COUNTRY,
+          ...(biasLocation
+            ? { location: biasLocation, radius: PLACES_BIAS_RADIUS_M }
+            : {}),
           sessiontoken: session,
         }}
         // What the field shows after a pick: the place's name, as its row's

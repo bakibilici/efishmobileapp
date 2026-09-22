@@ -3,9 +3,8 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { GlassSurface, hasLiquidGlass } from "../ui/glass";
 import { IconSymbol } from "../ui/icon-symbol";
-import { usePagePalette } from "../ui/pagePalette";
+import { accentOnGlass, usePagePalette } from "../ui/pagePalette";
 import { GlassIconButton } from "./GlassIconButton";
-import { accentOnGlass } from "./tiers";
 
 /** Where the map's bottom controls stand: clear of the tab bar (tabBarMetrics' MAP_BUTTONS_BOTTOM). */
 const MAP_BUTTONS_BOTTOM = 120;

@@ -1,4 +1,3 @@
-import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Animated, BackHandler, StyleSheet, View } from "react-native";
@@ -6,22 +5,24 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { Station, StationType } from "../../constants/stations";
 import type { HeaderMode } from "../../hooks/useHeaderAutoCollapse";
-import { usePagePalette } from "../ui/pagePalette";
+import { accentOnGlass, usePagePalette } from "../ui/pagePalette";
 import { ActivityCapsule } from "./ActivityCapsule";
 import { FilterPopover } from "./FilterPopover";
 import { GlassIconButton } from "./GlassIconButton";
+import { HeaderBackdrop } from "./HeaderBackdrop";
+import {
+  ANCHOR_GAP,
+  CAPSULE_H,
+  CHIPS_MARGIN,
+  CONTROLS_FALLBACK,
+  GROUP_FALLBACK,
+  SIDE,
+  statusCollapseOffset,
+  STATUS_MARGIN,
+} from "./headerMetrics";
 import { MapSearchField, type MapSearchFieldHandle } from "./MapSearchField";
 import type { Coords } from "./stationSearch";
 import { TierChips } from "./TierChips";
-import { accentOnGlass } from "./tiers";
-
-/** The header's top: 8 under the safe area, the route sheet's floating button's anchor. */
-const ANCHOR_GAP = 8;
-const SIDE = 16;
-/** Before the first layout: the top row and the chips (48 + 4 + 44). */
-const CONTROLS_FALLBACK = 96;
-/** Before the first layout: the whole header, full. */
-const GROUP_FALLBACK = 144;
 
 export type MapHeaderProps = {
   mode: HeaderMode;
@@ -51,11 +52,18 @@ export type MapHeaderProps = {
 };
 
 /**
- * The map screen's header: separate Liquid Glass shapes floating over the
- * map, no band behind them. The search capsule with the filter circle (a ✕
- * while searching), the tier chips, and the status capsule; compact, only
+ * The map screen's header: glass shapes over the map on a blurred band (see
+ * HeaderBackdrop) that runs the width of the screen from the status bar to
+ * just under the last of them. The search capsule with the filter circle (a
+ * ✕ while searching), the tier chips, and the status capsule; compact, only
  * the status capsule at the top. It moves by transforms alone: glass under
  * a changing opacity stops drawing (expo/expo#41024).
+ *
+ * One column, one grid: every row runs from SIDE to SIDE, so the three read
+ * as one group of controls rather than three floating objects. The rhythm
+ * between them is deliberate — 8 pt from the search field to the chips it
+ * belongs with, 12 pt before the status capsule, which is about the driver
+ * and not about the search.
  */
 export function MapHeader({
   mode,
@@ -86,6 +94,7 @@ export function MapHeader({
   const [searchActive, setSearchActive] = useState(false);
   const [controlsHeight, setControlsHeight] = useState(0);
   const [groupHeight, setGroupHeight] = useState(0);
+  const [statusHeight, setStatusHeight] = useState(0);
   const compact = mode === "COMPACT";
   const showStatus = !searchActive && !filtersOpen;
 
@@ -120,7 +129,7 @@ export function MapHeader({
   });
   const statusY = collapse.interpolate({
     inputRange: [0, 1],
-    outputRange: [0, -(controls + 4)],
+    outputRange: [0, statusCollapseOffset(controls)],
   });
 
   // Hidden: the whole header slides a measured distance off the top.
@@ -148,17 +157,19 @@ export function MapHeader({
     }, [filtersOpen, searchActive]),
   );
 
-  const scrim = palette.isDark
-    ? (["rgba(0,0,0,0.45)", "rgba(0,0,0,0)"] as const)
-    : (["rgba(255,255,255,0.55)", "rgba(255,255,255,0)"] as const);
-
   return (
     <>
-      {/* The map runs under the status bar: a static scrim keeps it legible. */}
-      <LinearGradient
-        pointerEvents="none"
-        colors={scrim}
-        style={[styles.scrim, { height: safeTop + ANCHOR_GAP }]}
+      {/* The band the whole header sits on: the map blurred and washed from
+          behind the status bar down to just under the capsule. It follows the
+          same collapse value, so it stops where the header stops. */}
+      <HeaderBackdrop
+        safeTop={safeTop}
+        controlsHeight={controls}
+        statusHeight={statusHeight || CAPSULE_H}
+        collapse={collapse}
+        slide={slide}
+        visible={!hidden && showStatus}
+        isDark={palette.isDark}
       />
       <Animated.View
         pointerEvents={hidden ? "none" : "box-none"}
@@ -174,7 +185,14 @@ export function MapHeader({
           pointerEvents={compact ? "none" : "box-none"}
           accessibilityElementsHidden={compact}
           importantForAccessibility={compact ? "no-hide-descendants" : "auto"}
-          onLayout={(event) => setControlsHeight(Math.round(event.nativeEvent.layout.height))}
+          // Only the header's own two rows are measured. The chips leave and
+          // the filter popover arrives inside this container while the search
+          // or the filters are up, and the band would follow that height for
+          // a frame as they dismiss; the last expanded measurement is the one
+          // the collapse and the band want.
+          onLayout={(event) => {
+            if (showStatus) setControlsHeight(Math.round(event.nativeEvent.layout.height));
+          }}
           style={{ transform: [{ translateY: controlsY }] }}
         >
           <View pointerEvents="box-none" style={styles.topRow}>
@@ -238,7 +256,15 @@ export function MapHeader({
             pointerEvents="box-none"
             style={[styles.status, { transform: [{ translateY: statusY }] }]}
           >
-            <ActivityCapsule compact={compact} onExpand={onExpand} />
+            {/* The capsule alone is measured, not the footer under it: the
+                band ends just below the capsule, and a minimised charge —
+                an opaque card of its own — must not push it down the map. */}
+            <View
+              pointerEvents="box-none"
+              onLayout={(event) => setStatusHeight(Math.round(event.nativeEvent.layout.height))}
+            >
+              <ActivityCapsule compact={compact} onExpand={onExpand} />
+            </View>
             {footer ? <View style={styles.footer}>{footer}</View> : null}
           </Animated.View>
         ) : null}
@@ -248,12 +274,6 @@ export function MapHeader({
 }
 
 const styles = StyleSheet.create({
-  scrim: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-  },
   group: {
     position: "absolute",
     left: SIDE,
@@ -266,10 +286,10 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   chips: {
-    marginTop: 4,
+    marginTop: CHIPS_MARGIN,
   },
   status: {
-    marginTop: 4,
+    marginTop: STATUS_MARGIN,
     gap: 8,
   },
   footer: {

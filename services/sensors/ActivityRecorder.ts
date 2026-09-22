@@ -7,7 +7,10 @@ export interface WindowRecord {
   windowSec: number;
   steps: number;
   stepFreq: number;
+  /** m/s, exactly as classifyActivity feeds the model: unmeasured samples count as 0. */
   avgSpeed: number;
+  /** False when no sample in the window carried a speed, so avgSpeed is all zeroes. */
+  speedKnown: boolean;
   variance: number;
   charging: boolean;
   classified: string;

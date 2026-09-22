@@ -36,8 +36,9 @@ import {
   RoutePlanLocation,
 } from "../services/DriveSessionStore";
 import { destinationTitle, isCoordinatePair } from "../services/placeTitle";
+import { getRoutePlanGatewayUrl } from "../services/routePlanGateway";
 import { BatteryCard, hasBatteryLevels } from "./route-sheet/BatteryCard";
-import { stationForHighlight } from "./route-sheet/breakDetail";
+import { photoCreditLine, stationForHighlight } from "./route-sheet/breakDetail";
 import { BreakDetailPanel } from "./route-sheet/BreakDetailPanel";
 import { BreakSuggestionRow } from "./route-sheet/BreakSuggestionRow";
 import {
@@ -72,6 +73,7 @@ import {
 import { getSheetPalette } from "./route-sheet/sheetPalette";
 import { StationsPanel } from "./route-sheet/StationsPanel";
 import { SummaryStrip, type SummaryItem } from "./route-sheet/SummaryStrip";
+import { useDestinationPhoto } from "./route-sheet/useDestinationPhoto";
 import { GlassNavButton } from "./ui/GlassNavButton";
 
 /**
@@ -608,6 +610,8 @@ export function RoutePlanSheet({
   // full address under it: never a two-line postal address as the title.
   // Shared with the ROTA list's destination row.
   const destination = useMemo(() => destinationTitle(routePlanData), [routePlanData]);
+  /** Null for a plan without one, which is the header exactly as it was. */
+  const destinationPhoto = useDestinationPhoto(routePlanData);
 
   // The open suggestion's stop: the stop's row it was opened from while the
   // plan holds it, else its carrier, its id, its place, its name
@@ -655,9 +659,13 @@ export function RoutePlanSheet({
   const showBattery = hasBatteryLevels(battery.start, battery.end);
   // The on-device fallback joins its stops with " | "; read as a sentence here.
   const optimizationSummary = routePlanData.route_optimization_summary?.trim();
-  const breakFooter = optimizationSummary
+  const summaryLine = optimizationSummary
     ? optimizationSummary.split(" | ").join(" · ")
     : "İlgi alanlarınıza göre, şarj beklerken yapabilecekleriniz.";
+  // Google's credit belongs on the screen the photo is on, on its own quiet
+  // line rather than run on to a sentence that is already full.
+  const photoCredits = photoCreditLine(highlights, getRoutePlanGatewayUrl());
+  const breakFooter = photoCredits ? `${summaryLine}\n${photoCredits}` : summaryLine;
 
   const isLive = mounted.mode === "live";
 
@@ -708,6 +716,7 @@ export function RoutePlanSheet({
                     title={destination?.title ?? "Rota"}
                     address={destination?.address}
                     subtitle={subtitle}
+                    photo={destinationPhoto}
                     palette={palette}
                   />
 

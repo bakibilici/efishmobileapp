@@ -23,8 +23,10 @@ import { startNetworkLogging } from "react-native-network-logger";
 
 import "react-native-reanimated";
 
+import { activitySheetScreenOptions } from "@/components/activity-sheet/nativeActivitySheet";
 import { CarModeView } from "@/components/CarModeView";
 import { routeSheetScreenOptions } from "@/components/route-sheet/nativeRouteSheet";
+import { ActivityStateDuration } from "@/services/ActivityStateDuration";
 import { DailyStepStore } from "@/services/sensors/DailyStepStore";
 
 import {
@@ -32,8 +34,11 @@ import {
   useTheme,
 } from "@/context/ThemeContext";
 import { UserProvider, useUser } from "@/context/UserContext";
-import { PaymentProvider } from "@/context/payment/PaymentContext";
 import { ActivityService } from "@/services/ActivityService";
+import {
+  DriveSessionState,
+  DriveSessionStore,
+} from "@/services/DriveSessionStore";
 import * as Sentry from "@sentry/react-native";
 
 // --- Polyfills required for LiveKit WebRTC on React Native ---
@@ -132,7 +137,12 @@ Sentry.init({
 
 SplashScreen.preventAutoHideAsync();
 
-const SHAKE_THRESHOLD = 1.5; // g-force threshold for a single spike
+/**
+ * A deliberate shake, not a pothole: gravity alone reads 1 g, and a kerb or
+ * a speed bump taken at speed reaches about 2 g at the phone. Two spikes
+ * over this within the window are a person shaking the phone.
+ */
+const SHAKE_THRESHOLD = 2.2; // g-force threshold for a single spike
 const SHAKE_COUNT_NEEDED = 2; // number of shakes required
 const SHAKE_WINDOW = 1500; // shakes must occur within this window (ms)
 const SHAKE_COOLDOWN = 3000; // cooldown after trigger (ms)
@@ -171,7 +181,12 @@ function useShakeDetector() {
           if (shakeTimestamps.current.length >= SHAKE_COUNT_NEEDED) {
             shakeTimestamps.current = [];
             lastTriggerTime.current = now;
-            Sentry.showFeedbackWidget();
+            // Never over a drive: the road shakes the phone by itself, and a
+            // feedback form with name and e-mail fields has no business on
+            // top of the driving screen. Off the road it opens as before.
+            if (DriveSessionStore.getState() === DriveSessionState.IDLE) {
+              Sentry.showFeedbackWidget();
+            }
           }
         }
       } else if (totalForce <= SHAKE_THRESHOLD) {
@@ -193,6 +208,12 @@ export default Sentry.wrap(function RootLayout() {
 
     // Boot the sensor pipeline (steps, activity detection)
     DailyStepStore.bindAppState(AppState);
+    // Before the service starts, so the activity sheet can say how long the
+    // current state has held: starting the service can commit a seeded state,
+    // and a change this observer did not hear leaves "Bu durumda" claiming
+    // the state never moved. The state machine is a module singleton, so it
+    // is there to listen to before the service runs.
+    ActivityStateDuration.start();
     ActivityService.start();
     return () => ActivityService.stop();
   }, []);
@@ -201,9 +222,7 @@ export default Sentry.wrap(function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <UserProvider>
         <AppThemeProvider>
-          <PaymentProvider>
-            <RootLayoutNav />
-          </PaymentProvider>
+          <RootLayoutNav />
         </AppThemeProvider>
       </UserProvider>
     </GestureHandlerRootView>
@@ -298,6 +317,7 @@ function RootLayoutNav() {
               options={{ headerShown: false }}
             />
             <Stack.Screen name="route-sheet" options={routeSheetScreenOptions} />
+            <Stack.Screen name="activity-sheet" options={activitySheetScreenOptions} />
           </Stack>
           <StatusBar style={themeScheme === "dark" ? "light" : "dark"} />
           {user && (

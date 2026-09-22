@@ -9,6 +9,8 @@
  */
 
 import Constants from "expo-constants";
+import { AppState, type AppStateStatus } from "react-native";
+import { Pedometer } from "expo-sensors";
 import { ActivityStateMachine } from "./ActivityStateMachine";
 import { ActivityPipeline } from "./sensors/ActivityPipeline";
 import { ExpoSensorProvider } from "./sensors/ExpoSensorProvider";
@@ -17,6 +19,7 @@ import { StepStore } from "./sensors/StepStore";
 import { ChargingSessionStore } from "./ChargingSessionStore";
 import { DeviceChargingMonitor } from "./sensors/DeviceChargingMonitor";
 import { ActivityRecorder } from "./sensors/ActivityRecorder";
+import { RESUME_LOOKBACK_MS, seededStateFrom } from "./sensors/resumeSeed";
 import { ActivityState } from "./ActivityStateMachine";
 
 // Singleton instances
@@ -139,6 +142,58 @@ function stopBridgePoller(): void {
   }
 }
 
+// ─── Resume Seeding ──────────────────────────────────────────────────────────
+// The pipeline does not run while the phone is locked, so it comes back from a
+// walk knowing nothing and needs two windows — about ten seconds — before the
+// capsule stops saying "Beklemede". The phone counted those steps regardless,
+// so we ask it and commit the walk at once. See sensors/resumeSeed for the
+// rules about what history is allowed to conclude.
+
+let appStateSub: { remove: () => void } | null = null;
+
+async function seedFromRecentSteps(): Promise<void> {
+  // The dev bridge drives the state machine itself, with the debounce off.
+  if (isSimulationActive) return;
+  // Charging outranks activity in the FSM; seeding a walk under it would only
+  // be overwritten by the next window.
+  if (ChargingSessionStore.isCharging) return;
+
+  try {
+    // Step history is iOS-only and needs the motion grant. The seed is an
+    // optimisation on top of the live windows, so it must never be the thing
+    // that puts a permission prompt on screen — the pedometer subscription in
+    // ExpoSensorProvider asks for that, in its own time.
+    if (!(await Pedometer.isAvailableAsync())) return;
+    if (!(await Pedometer.getPermissionsAsync()).granted) return;
+
+    const end = new Date();
+    const start = new Date(end.getTime() - RESUME_LOOKBACK_MS);
+    const { steps } = await Pedometer.getStepCountAsync(start, end);
+    const seeded = seededStateFrom(stateMachine.getState(), steps, RESUME_LOOKBACK_MS);
+    if (!seeded) return;
+    console.log(
+      `[ActivityService] Resume: ${steps} steps in the last ${RESUME_LOOKBACK_MS / 1000}s, seeding ${seeded}`,
+    );
+    stateMachine.seedState(seeded);
+  } catch {
+    // Step history is iOS-only and needs the motion grant. Without it we simply
+    // wait for the live windows — the behaviour this seeding improves on.
+  }
+}
+
+function startResumeSeeding(): void {
+  appStateSub = AppState.addEventListener("change", (next: AppStateStatus) => {
+    if (next === "active") void seedFromRecentSteps();
+  });
+  // Opening the app mid-walk is the same situation as unlocking mid-walk.
+  void seedFromRecentSteps();
+}
+
+function stopResumeSeeding(): void {
+  appStateSub?.remove();
+  appStateSub = null;
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 export const ActivityService = {
@@ -155,6 +210,9 @@ export const ActivityService = {
     // Phone charger → CHARGING state (2x steps), vetoed while driving.
     void DeviceChargingMonitor.start(() => stateMachine.getState() === ActivityState.CAR);
 
+    // Come back from a locked screen already knowing the walk is a walk.
+    startResumeSeeding();
+
     // In dev mode, start listening for CLI simulation data
     startBridgePoller();
   },
@@ -164,6 +222,7 @@ export const ActivityService = {
     if (!isRunning) return;
     isRunning = false;
     stopBridgePoller();
+    stopResumeSeeding();
     DeviceChargingMonitor.stop();
     pipeline.stop();
     console.log("[ActivityService] Pipeline stopped.");

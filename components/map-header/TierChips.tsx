@@ -12,13 +12,17 @@ import type { StationType } from "../../constants/stations";
 import { GlassSurface } from "../ui/glass";
 import { IconSymbol } from "../ui/icon-symbol";
 import { usePagePalette } from "../ui/pagePalette";
-import { TIER_BOLTS, TIER_COLORS, TIERS } from "./tiers";
+import { TIER_BOLTS, TIER_COLORS, TIER_SELECTED_COLORS, TIERS } from "./tiers";
 
 /**
  * The tier chips under the search field: they filter the map's pins (any
  * number selected, none selected shows every tier). An unselected chip is
  * plain glass with its bolts in the pin's colour; a selected one is glass
- * tinted with that colour, its bolts and label white.
+ * tinted with that colour darkened for white text, its bolts and label white.
+ *
+ * The three share the row in equal parts, so the row ends on the header's
+ * trailing margin like the search field above it. The set is fixed at three
+ * and always fits, so there is nothing to scroll and nothing to leave ragged.
  */
 export function TierChips({
   selected,
@@ -54,7 +58,7 @@ export function TierChips({
               radius={18}
               interactive
               material="frosted"
-              tintColor={isSelected ? TIER_COLORS[tier] : undefined}
+              tintColor={isSelected ? TIER_SELECTED_COLORS[tier] : undefined}
               style={styles.chip}
             >
               <View style={styles.bolts}>
@@ -68,7 +72,11 @@ export function TierChips({
                   />
                 ))}
               </View>
-              <Text style={[styles.label, { color: content }]} maxFontSizeMultiplier={1.4}>
+              <Text
+                style={[styles.label, { color: content }]}
+                maxFontSizeMultiplier={1.4}
+                numberOfLines={1}
+              >
                 {tier}
               </Text>
             </GlassSurface>
@@ -83,9 +91,13 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
     gap: 8,
-    alignSelf: "flex-start",
   },
+  // An equal third of the row each, so the three end on the grid's trailing
+  // margin; minWidth 0 lets a long label shorten instead of pushing out.
   touch: {
+    flex: 1,
+    flexBasis: 0,
+    minWidth: 0,
     minHeight: 44,
     justifyContent: "center",
   },
@@ -96,12 +108,14 @@ const styles = StyleSheet.create({
     minHeight: 36,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     gap: 6,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
   },
   bolts: {
     flexDirection: "row",
     alignItems: "center",
+    flexShrink: 0,
   },
   overlap: {
     marginLeft: -6,

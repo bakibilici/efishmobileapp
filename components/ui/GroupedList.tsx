@@ -14,6 +14,7 @@ import {
 import {
   GROUP_RADIUS,
   SIDE_MARGIN,
+  TABULAR,
   TEXT_INSET,
 } from "../route-sheet/Grouped";
 import { IconSymbol, type IconSymbolName } from "./icon-symbol";
@@ -162,6 +163,7 @@ export const Row = memo(function Row({
   title,
   subtitle,
   value,
+  tabularValue = false,
   tile,
   accessory,
   destructive = false,
@@ -176,6 +178,8 @@ export const Row = memo(function Row({
   title: string;
   subtitle?: string | null;
   value?: string | null;
+  /** Tabular figures: a value that changes in place must not shift its digits. */
+  tabularValue?: boolean;
   tile?: Tile | null;
   accessory?: "chevron" | "check" | "none";
   destructive?: boolean;
@@ -205,7 +209,10 @@ export const Row = memo(function Row({
         titleColor={titleColor}
       />
       {value ? (
-        <Text style={[styles.value, { color: palette.secondaryLabel }]} numberOfLines={1}>
+        <Text
+          style={[styles.value, tabularValue && TABULAR, { color: palette.secondaryLabel }]}
+          numberOfLines={1}
+        >
           {value}
         </Text>
       ) : null}

@@ -91,8 +91,10 @@ const titles = (sections: SessionSection[]) => items(sections).map((item) => ite
 
 check("Turkish casing folds by hand: İ/i and I/ı", () => {
   assert.equal(foldForSearch("İstanbul"), "istanbul");
-  assert.equal(foldForSearch("Işık"), "ışık");
-  assert.equal(foldForSearch("  ÇANKAYA "), "çankaya");
+  // The accents come off with the casing; the dotless ı carries none and
+  // stays itself (the search key below is what reads it as i).
+  assert.equal(foldForSearch("Işık"), "ısık");
+  assert.equal(foldForSearch("  ÇANKAYA "), "cankaya");
 
   const rows = [
     record({ destination: "İstanbul Havalimanı", display: { title: "İstanbul Havalimanı" } }),
@@ -104,6 +106,28 @@ check("Turkish casing folds by hand: İ/i and I/ı", () => {
   // International names are written with a plain I: "istanbul" finds them too.
   const hilton = [record({ destination: "Hilton Istanbul Bosphorus, Harbiye, Cumhuriyet Cd. No:50" })];
   assert.equal(items(build(hilton, "istanbul")).length, 1);
+});
+
+check("a query typed without Turkish letters still finds the place", () => {
+  // The reported misses: "Umraniye" found no trip to Ümraniye and "Parkturk"
+  // no "Parktürk Şişhane DC" on the map (both searches fold the same way).
+  assert.equal(foldForSearch("Parktürk"), "parkturk");
+  assert.equal(foldForSearch("Ümraniye"), "umraniye");
+  // The circumflex goes, the dotless ı stays (searchKey reads that as i).
+  assert.equal(foldForSearch("Kâğıthane"), "kagıthane");
+  assert.equal(foldForSearch("ŞİŞHANE"), "sishane");
+  // Folding is idempotent: a folded name folds to itself.
+  assert.equal(foldForSearch(foldForSearch("Göztepe Çarşısı")), foldForSearch("Göztepe Çarşısı"));
+
+  const rows = [
+    record({ destination: "Ümraniye, İstanbul", display: { title: "Ümraniye" } }),
+    record({ destination: "Göztepe, İstanbul", display: { title: "Göztepe" } }),
+    record({ destination: "Kâğıthane, İstanbul", display: { title: "Kâğıthane" } }),
+  ];
+  assert.deepEqual(titles(build(rows, "umraniye")), ["Ümraniye"]);
+  assert.deepEqual(titles(build(rows, "ümraniye")), ["Ümraniye"]);
+  assert.deepEqual(titles(build(rows, "GOZTEPE")), ["Göztepe"]);
+  assert.deepEqual(titles(build(rows, "kagithane")), ["Kâğıthane"]);
 });
 
 check("an older record takes the name a later trip to the same address was given", () => {
