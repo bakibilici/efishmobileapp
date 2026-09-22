@@ -1,12 +1,25 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 
-import type { RoutePlanInterestHighlight } from "../../services/DriveSessionStore";
+import type {
+  RoutePlanHighlightAlternative,
+  RoutePlanInterestHighlight,
+} from "../../services/DriveSessionStore";
+import { highlightKind, type BreakKind } from "../../services/routePersonalization";
 import {
-  highlightKind,
-  keptAlternatives,
-  type BreakKind,
-} from "../../services/routePersonalization";
+  alternativeKindOf,
+  formatWalkDistance,
+  hasRealPlace,
+  listedAlternatives,
+} from "./breakDetail";
 import type { SheetPalette } from "./sheetPalette";
+
+// The plain helpers live in breakDetail.ts (checked under tsx); callers keep importing them here.
+export {
+  formatWalkDistance,
+  hasRealPlace,
+  placeName,
+  shortWalkDistance,
+} from "./breakDetail";
 
 type IoniconName = keyof typeof Ionicons.glyphMap;
 
@@ -93,20 +106,15 @@ export const breakTile = (
   };
 };
 
-/**
- * Whether the highlight names a place that exists. The gateway sends
- * poi_source 'none' with an empty name when it only has a generic suggestion;
- * a highlight mapped without the flag is trusted only when it carries a name.
- */
-export const hasRealPlace = (highlight: RoutePlanInterestHighlight): boolean => {
-  if (!highlight.poiName?.trim()) return false;
-  return highlight.poiSource ? highlight.poiSource === "places" : true;
-};
-
-export const formatWalkDistance = (meters?: number): string | null => {
-  if (meters == null || !Number.isFinite(meters) || meters <= 0) return null;
-  if (meters < 1000) return `~${Math.max(10, Math.round(meters / 10) * 10)} m`;
-  return `~${(meters / 1000).toFixed(1).replace(".", ",")} km`;
+/** An alternative's tile: its category's colour and glyph, a grey pin when the category is unknown. */
+export const alternativeTile = (
+  alternative: RoutePlanHighlightAlternative,
+  palette: SheetPalette,
+): { color: string; glyph: IoniconName } => {
+  const kind = alternativeKindOf(alternative);
+  return kind
+    ? { color: palette[KIND_TINT[kind]], glyph: KIND_GLYPH[kind] }
+    : { color: palette.gray, glyph: "location" };
 };
 
 /** "Keddy's Cafe · ~350 m", or null when the place is not a real one. */
@@ -119,21 +127,16 @@ export const formatPlaceLine = (
   return distance ? `${name} · ${distance}` : name;
 };
 
-/** The real place's name, or null. */
-export const placeName = (highlight: RoutePlanInterestHighlight): string | null =>
-  hasRealPlace(highlight) ? highlight.poiName!.trim() : null;
-
-/** "350 m", "1,2 km": the sheet's list rows show walking distance without the tilde. */
-export const shortWalkDistance = (meters?: number): string | null =>
-  formatWalkDistance(meters)?.replace(/^~/, "") ?? null;
-
-/** "Diğer: …", leaving out every alternative of a kind the driver ruled out. */
+/**
+ * "Diğer: …", leaving out every alternative of a kind the driver ruled out:
+ * the same options the detail page lists (listedAlternatives).
+ */
 export const formatAlternatives = (
   highlight: RoutePlanInterestHighlight,
   excludedKinds: readonly string[] = [],
 ): string | null => {
-  const names = (keptAlternatives(highlight.alternatives, excludedKinds) ?? [])
-    .map((alternative) => (alternative?.name || alternative?.title || "").trim())
+  const names = listedAlternatives(highlight.alternatives, excludedKinds)
+    .map((alternative) => (alternative.name?.trim() || alternative.title?.trim() || ""))
     .filter(Boolean);
   if (!names.length) return null;
   return `Diğer: ${names.join(", ")}`;

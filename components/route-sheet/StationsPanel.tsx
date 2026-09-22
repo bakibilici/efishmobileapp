@@ -1,8 +1,10 @@
-import React, { memo } from "react";
+import React, { memo, useCallback } from "react";
 import { StyleSheet, Text, View } from "react-native";
 
-import type { RoutePlanLocation } from "../../services/DriveSessionStore";
-import { placeName } from "./breakSuggestion";
+import type {
+  RoutePlanInterestHighlight,
+  RoutePlanLocation,
+} from "../../services/DriveSessionStore";
 import { BreakSuggestionInline } from "./BreakSuggestionRow";
 import { Group, IconTile, TABULAR, TitleBlock } from "./Grouped";
 import {
@@ -14,14 +16,22 @@ import {
 } from "./routeFormat";
 import type { SheetPalette } from "./sheetPalette";
 
+/** Opens a break suggestion's detail page, with the stop whose row it was tapped in. */
+export type OpenBreakAtStop = (
+  highlight: RoutePlanInterestHighlight,
+  station: RoutePlanLocation,
+) => void;
+
 const StationRow = memo(function StationRow({
   location,
   divided,
   palette,
+  onOpenBreak,
 }: {
   location: RoutePlanLocation;
   divided: boolean;
   palette: SheetPalette;
+  onOpenBreak?: OpenBreakAtStop;
 }) {
   // Same wording as the route list: "31 dk şarj · %24 → %80".
   const charge = stationChargeLine(location);
@@ -29,19 +39,24 @@ const StationRow = memo(function StationRow({
   const hardware = stationHardware(location);
   const address = location.address?.trim();
   const highlight = location.interest_highlight;
+  // The stop reads as one element; its break suggestion is a button of its own.
   const accessibilityLabel = [
     location.name,
     spokenStationCharge(location),
     hardware ? spoken(hardware) : null,
     address,
-    highlight ? `mola önerisi: ${highlight.title || "Mola önerisi"}` : null,
-    highlight && placeName(highlight),
   ]
     .filter(Boolean)
     .join(", ");
+  // The detail page is told which stop it was opened from: two stops can
+  // share a name, or a suggestion's id.
+  const openBreak = useCallback(
+    (opened: RoutePlanInterestHighlight) => onOpenBreak?.(opened, location),
+    [onOpenBreak, location],
+  );
 
   return (
-    <View style={styles.row} accessible accessibilityLabel={accessibilityLabel}>
+    <View style={styles.row}>
       <View style={styles.tileSlot}>
         <IconTile glyph="flash" color={palette.station} />
       </View>
@@ -54,45 +69,58 @@ const StationRow = memo(function StationRow({
           },
         ]}
       >
-        <Text style={[styles.title, { color: palette.label }]} numberOfLines={2}>
-          {location.name}
-        </Text>
-        {charge ? (
-          <Text style={[styles.line, TABULAR, { color: palette.secondaryLabel }]}>
-            {charge}
+        <View style={styles.stationCopy} accessible accessibilityLabel={accessibilityLabel}>
+          <Text style={[styles.title, { color: palette.label }]} numberOfLines={2}>
+            {location.name}
           </Text>
+          {charge ? (
+            <Text style={[styles.line, TABULAR, { color: palette.secondaryLabel }]}>
+              {charge}
+            </Text>
+          ) : null}
+          {hardware ? (
+            <Text
+              style={[styles.line, TABULAR, { color: palette.secondaryLabel }]}
+              numberOfLines={1}
+            >
+              {hardware}
+            </Text>
+          ) : null}
+          {address ? (
+            <Text
+              style={[styles.line, { color: palette.secondaryLabel }]}
+              numberOfLines={2}
+            >
+              {address}
+            </Text>
+          ) : null}
+        </View>
+        {highlight ? (
+          <BreakSuggestionInline
+            highlight={highlight}
+            palette={palette}
+            onPress={onOpenBreak ? openBreak : undefined}
+          />
         ) : null}
-        {hardware ? (
-          <Text
-            style={[styles.line, TABULAR, { color: palette.secondaryLabel }]}
-            numberOfLines={1}
-          >
-            {hardware}
-          </Text>
-        ) : null}
-        {address ? (
-          <Text
-            style={[styles.line, { color: palette.secondaryLabel }]}
-            numberOfLines={2}
-          >
-            {address}
-          </Text>
-        ) : null}
-        {highlight ? <BreakSuggestionInline highlight={highlight} palette={palette} /> : null}
       </View>
     </View>
   );
 });
 
-/** The stops in full. The screen's back button ("Rota özetine dön") leads back. */
+/**
+ * The stops in full. The screen's back button ("Rota özetine dön") leads
+ * back; a stop's break suggestion opens its detail page.
+ */
 function StationsPanelComponent({
   stations,
   totalChargeMinutes,
   palette,
+  onOpenBreak,
 }: {
   stations: RoutePlanLocation[];
   totalChargeMinutes: number;
   palette: SheetPalette;
+  onOpenBreak?: OpenBreakAtStop;
 }) {
   const totalCharge = formatMinutes(totalChargeMinutes);
   const subtitle = stations.length
@@ -113,6 +141,7 @@ function StationsPanelComponent({
               location={location}
               divided={index > 0}
               palette={palette}
+              onOpenBreak={onOpenBreak}
             />
           ))}
         </Group>
@@ -159,6 +188,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     fontWeight: "400",
+  },
+  stationCopy: {
+    gap: 2,
   },
   empty: {
     alignItems: "center",

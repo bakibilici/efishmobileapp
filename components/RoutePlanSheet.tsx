@@ -16,19 +16,29 @@ import {
   BackHandler,
   StyleSheet,
   Text,
-  useWindowDimensions,
   View,
 } from "react-native";
+import {
+  Extrapolation,
+  interpolate,
+  useAnimatedReaction,
+  useDerivedValue,
+  useSharedValue,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { scheduleOnRN } from "react-native-worklets";
 
 import { useTheme } from "../context/ThemeContext";
 import {
   DriveSessionStore,
   RoutePlanData,
   RoutePlanInterestHighlight,
+  RoutePlanLocation,
 } from "../services/DriveSessionStore";
 import { destinationTitle, isCoordinatePair } from "../services/placeTitle";
 import { BatteryCard, hasBatteryLevels } from "./route-sheet/BatteryCard";
+import { stationForHighlight } from "./route-sheet/breakDetail";
+import { BreakDetailPanel } from "./route-sheet/BreakDetailPanel";
 import { BreakSuggestionRow } from "./route-sheet/BreakSuggestionRow";
 import {
   DestructiveRow,
@@ -47,7 +57,15 @@ import {
   startLevel,
 } from "./route-sheet/routeFormat";
 import { RouteSteps } from "./route-sheet/RouteSteps";
+import { SheetBackButton } from "./route-sheet/SheetBackButton";
 import { SheetGlassBackground } from "./route-sheet/SheetGlassBackground";
+import {
+  SHEET_BACK_INSET,
+  SHEET_BACK_REVEAL_START,
+  SheetMotionContext,
+  TOP_HANDOVER,
+  type SheetMotion,
+} from "./route-sheet/sheetMotion";
 import { getSheetPalette } from "./route-sheet/sheetPalette";
 import { StationsPanel } from "./route-sheet/StationsPanel";
 import { SummaryStrip, type SummaryItem } from "./route-sheet/SummaryStrip";
@@ -57,24 +75,36 @@ import { GlassNavButton } from "./ui/GlassNavButton";
  * A live route closes all the way (the back button, a swipe down) and has
  * no low peek: that stop left the title half under the orb. A preview keeps
  * it: the car-mode header, with "Sürüşü Başlat", shows above it.
+ *
+ * The stops count from under the safe area (topInset), so the highest,
+ * 100 %, reaches just under the Dynamic Island, as Find My's full-height
+ * sheet: there the glass turns almost opaque and the back button moves into
+ * the sheet (sheetMotion). There is no stop in between, and no stop sized to
+ * the content, so the highest is always the last and the full height.
  */
 /** The middle stop, in percent of the sheet's container (the screen under the safe area). */
 const MIDDLE_SNAP_PERCENT = 55;
-const LIVE_SNAP_POINTS = [`${MIDDLE_SNAP_PERCENT}%`, "85%"];
-const PREVIEW_SNAP_POINTS = ["15%", `${MIDDLE_SNAP_PERCENT}%`, "85%"];
+const LIVE_SNAP_POINTS = [`${MIDDLE_SNAP_PERCENT}%`, "100%"];
+const PREVIEW_SNAP_POINTS = ["15%", `${MIDDLE_SNAP_PERCENT}%`, "100%"];
 /** Where a new route and a reopened sheet land. */
 const MIDDLE_LEVEL = 1;
 
 /** The floating back button: 44 pt, 8 pt under the safe area, 16 pt in. */
 const NAV_BUTTON_TOP = 8;
 const NAV_BUTTON_LEFT = 16;
+
+type Panel = "overview" | "stations" | "break";
 /**
- * The sheet's highest stop (dynamic sizing adds one as tall as the content,
- * up to the full height) stays this far under the safe area: below the back
- * button (8 + 44) with room to spare, so the button never covers the sheet's
- * title. Only that stop is capped; the percentage stops keep their heights.
+ * The break suggestion the detail panel shows, the stop's row it was opened
+ * from (null from the overview) with that stop's place among the stops, and
+ * the panel its back button returns to.
  */
-const SHEET_TOP_CLEARANCE = 60;
+type OpenBreak = {
+  highlight: RoutePlanInterestHighlight;
+  station: RoutePlanLocation | null;
+  stationIndex: number | null;
+  from: "overview" | "stations";
+};
 
 /**
  * How tall the sheet stands at its middle stop on a screen this tall (the
@@ -117,16 +147,9 @@ const routeSubtitle = (origin: string | undefined, tripWithCharging: string | nu
 };
 
 export function RoutePlanSheet({
-  containerHeight,
   onSheetIndexChange,
   onClosePreview,
 }: {
-  /**
-   * The height of the view the sheet stands in (the map screen measures it
-   * and fits the camera above the middle stop with the same number); the
-   * window's height until it is known.
-   */
-  containerHeight?: number;
   /** Receives the sheet's level: -1 closed, 0 peek, 1 middle, 2 and up higher. */
   onSheetIndexChange?: (level: number) => void;
   /** Set while a stored session is only previewed and can be left: the back button goes to Oturumlar. */
@@ -135,8 +158,6 @@ export function RoutePlanSheet({
   const { themeScheme } = useTheme();
   const palette = getSheetPalette(themeScheme === "dark");
   const { top: safeTop } = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
-  const screenHeight = containerHeight || windowHeight;
   const bottomSheetRef = useRef<BottomSheet>(null);
   const scrollRef = useRef<BottomSheetScrollViewMethods>(null);
   const lastHandledRouteIdRef = useRef<string | null>(null);
@@ -151,9 +172,8 @@ export function RoutePlanSheet({
   const [isPreview, setIsPreview] = useState(
     () => !!DriveSessionStore.getContext()?.isPreviewMode,
   );
-  const [activePanel, setActivePanel] = useState<"overview" | "stations">(
-    "overview",
-  );
+  const [activePanel, setActivePanel] = useState<Panel>("overview");
+  const [openBreak, setOpenBreak] = useState<OpenBreak | null>(null);
   /**
    * The level the sheet is at or on its way to (onAnimate), so the back
    * button leaves as the sheet starts to close rather than after it has.
@@ -298,19 +318,35 @@ export function RoutePlanSheet({
     );
   }, []);
 
+  const locations = routePlanData?.locations;
+  const stationLocations = useMemo(
+    () => (locations ?? []).filter((location) => location.type === "station"),
+    [locations],
+  );
+
+  /**
+   * Set from a panel change's first frame until its fade-in ends. A second
+   * tap meanwhile would act on the panel on its way out or the one just in:
+   * a quick double tap on back would go two levels up (and could leave the
+   * preview), one on a row would push its page twice. Every panel change and
+   * every way back waits for it.
+   */
+  const panelTransitionRef = useRef(false);
+
   const animatePanelChange = useCallback(
-    (nextPanel: "overview" | "stations", direction: "forward" | "backward") => {
-      if (nextPanel === activePanel) return;
+    (nextPanel: Panel, direction: "forward" | "backward") => {
+      if (panelTransitionRef.current || nextPanel === activePanel) return;
+      panelTransitionRef.current = true;
 
       Animated.parallel([
         Animated.timing(contentOpacity, {
           toValue: 0,
-          duration: 150,
+          duration: 1500,
           useNativeDriver: true,
         }),
         Animated.timing(contentTranslate, {
           toValue: direction === "forward" ? -18 : 18,
-          duration: 150,
+          duration: 1500,
           useNativeDriver: true,
         }),
       ]).start(() => {
@@ -321,15 +357,17 @@ export function RoutePlanSheet({
         Animated.parallel([
           Animated.timing(contentOpacity, {
             toValue: 1,
-            duration: 200,
+            duration: 2000,
             useNativeDriver: true,
           }),
           Animated.timing(contentTranslate, {
             toValue: 0,
-            duration: 200,
+            duration: 2000,
             useNativeDriver: true,
           }),
-        ]).start();
+        ]).start(() => {
+          panelTransitionRef.current = false;
+        });
       });
     },
     [activePanel, contentOpacity, contentTranslate],
@@ -343,33 +381,119 @@ export function RoutePlanSheet({
     () => animatePanelChange("overview", "backward"),
     [animatePanelChange],
   );
+  /**
+   * A break suggestion's row, in the overview or a stop's row: its detail
+   * page, one level down. A stop's row names its stop, so the page shows
+   * that stop even when two share a name or a suggestion id.
+   */
+  const openBreakDetail = useCallback(
+    (highlight: RoutePlanInterestHighlight, station?: RoutePlanLocation) => {
+      if (panelTransitionRef.current || activePanel === "break") return;
+      const stationIndex = station ? stationLocations.indexOf(station) : -1;
+      setOpenBreak({
+        highlight,
+        station: station ?? null,
+        stationIndex: stationIndex >= 0 ? stationIndex : null,
+        from: activePanel,
+      });
+      animatePanelChange("break", "forward");
+    },
+    [activePanel, animatePanelChange, stationLocations],
+  );
+  const breakBackTo = openBreak?.from ?? "overview";
+  const closeBreakDetail = useCallback(
+    () => animatePanelChange(breakBackTo, "backward"),
+    [animatePanelChange, breakBackTo],
+  );
 
   /**
-   * The one back button, one level up as in a navigation stack: the
-   * stations panel goes back to the route overview; a preview's overview to
-   * Oturumlar; a live route's overview down to the map. A preview AKBA is
-   * live in has no way back yet (see mainpage), so its overview has none.
+   * The one back button, one level up as in a navigation stack: a break
+   * suggestion's page goes back to where it was opened (the overview or the
+   * stops); the stations panel back to the route overview; a preview's
+   * overview to Oturumlar; a live route's overview down to the map. A
+   * preview AKBA is live in has no way back yet (see mainpage), so its
+   * overview has none.
    */
   const isPreviewSheet = mounted?.mode === "preview";
   const backAction = !mounted
     ? null
-    : activePanel === "stations"
-      ? { label: "Rota özetine dön", onPress: openOverview }
-      : isPreviewSheet
-        ? onClosePreview
-          ? { label: "Oturumlara dön", onPress: onClosePreview }
-          : null
-        : { label: "Haritaya dön", onPress: closeSheet };
+    : activePanel === "break"
+      ? {
+          label: breakBackTo === "stations" ? "Şarj duraklarına dön" : "Rota özetine dön",
+          onPress: closeBreakDetail,
+        }
+      : activePanel === "stations"
+        ? { label: "Rota özetine dön", onPress: openOverview }
+        : isPreviewSheet
+          ? onClosePreview
+            ? { label: "Oturumlara dön", onPress: onClosePreview }
+            : null
+          : { label: "Haritaya dön", onPress: closeSheet };
   const isSheetOpen = targetLevel >= 0;
+
+  /**
+   * The back action as both buttons, VoiceOver's escape and Android's back
+   * key run it: ignored while a panel change is under way, so a quick second
+   * tap does not run the action of the level above.
+   */
+  const backPress = backAction?.onPress;
+  const goBack = useCallback(() => {
+    if (panelTransitionRef.current) return;
+    backPress?.();
+  }, [backPress]);
+
+  /**
+   * The sheet's position for the parts that follow it frame by frame, all on
+   * the UI thread: the index the library animates (fractional between stops)
+   * turned into 0 at the middle stop and 1 at the highest. The background
+   * fades its opaque fill with it; the title slides right for the sheet's own
+   * back button as that fades in. React hears only the handover itself.
+   */
+  const sheetIndex = useSharedValue(-1);
+  const topIndex =
+    (mountedMode === "preview" ? PREVIEW_SNAP_POINTS : LIVE_SNAP_POINTS).length - 1;
+  const topProgress = useDerivedValue(
+    () =>
+      interpolate(sheetIndex.value, [topIndex - 1, topIndex], [0, 1], Extrapolation.CLAMP),
+    [topIndex],
+  );
+  const hasBackAction = !!backAction;
+  const titleShift = useDerivedValue(
+    () =>
+      hasBackAction
+        ? interpolate(
+            topProgress.value,
+            [SHEET_BACK_REVEAL_START, 1],
+            [0, SHEET_BACK_INSET],
+            Extrapolation.CLAMP,
+          )
+        : 0,
+    [hasBackAction],
+  );
+  const sheetMotion = useMemo<SheetMotion>(
+    () => ({ topProgress, hasBack: hasBackAction, titleShift }),
+    [topProgress, hasBackAction, titleShift],
+  );
+  const [isNearTop, setIsNearTop] = useState(false);
+  useAnimatedReaction(
+    () => topProgress.value >= TOP_HANDOVER,
+    (nearTop, previous) => {
+      if (nearTop !== previous) scheduleOnRN(setIsNearTop, nearTop);
+    },
+    [topProgress],
+  );
+
   // A preview's low peek leaves the top of the screen to the car-mode header
   // (it holds "Sürüşü Başlat" and its own "Oturumlara dön" chevron), which is
   // drawn above this screen; the header leaves as the sheet rises past it.
-  const showBackButton = !!backAction && targetLevel >= 1;
+  // Near the highest stop the sheet would run into the floating button: the
+  // sheet's own button (SheetBackButton) takes over there.
+  const showBackButton = !!backAction && targetLevel >= 1 && !isNearTop;
 
   // Android's back key follows the button, and also works at a preview's
   // peek. With the sheet put away it is left to the system.
   const hardwareBackRef = useRef<(() => void) | null>(null);
-  hardwareBackRef.current = backAction && isSheetOpen ? backAction.onPress : null;
+  hardwareBackRef.current = backAction && isSheetOpen ? goBack : null;
   useFocusEffect(
     useCallback(() => {
       const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -382,12 +506,7 @@ export function RoutePlanSheet({
     }, []),
   );
 
-  const locations = routePlanData?.locations;
   const summary = routePlanData?.summary;
-  const stationLocations = useMemo(
-    () => (locations ?? []).filter((location) => location.type === "station"),
-    [locations],
-  );
   // Server highlights first; a plan that only embeds them in its stops still shows them.
   const highlights = useMemo(() => {
     const listed = routePlanData?.interest_highlights ?? [];
@@ -445,6 +564,36 @@ export function RoutePlanSheet({
   // Shared with the ROTA list's destination row.
   const destination = useMemo(() => destinationTitle(routePlanData), [routePlanData]);
 
+  // The open suggestion's stop: the stop's row it was opened from while the
+  // plan holds it, else its carrier, its id, its place, its name
+  // (stationForHighlight). Then the suggestion as the plan has it now: the
+  // object itself while the plan holds it; after the plan is saved again
+  // (new objects, same ids), that stop's own suggestion of the same id, else
+  // the one listed suggestion of that id.
+  const breakStation = useMemo(
+    () =>
+      openBreak ? stationForHighlight(openBreak.highlight, stationLocations, openBreak) : null,
+    [openBreak, stationLocations],
+  );
+  const breakHighlight = useMemo(() => {
+    if (!openBreak) return null;
+    const opened = openBreak.highlight;
+    const held =
+      highlights.includes(opened) ||
+      stationLocations.some((location) => location.interest_highlight === opened);
+    if (held) return opened;
+    const id = opened.id?.trim();
+    if (!id) return opened;
+    const own = breakStation?.interest_highlight;
+    if (own?.id?.trim() === id) return own;
+    const sameId = highlights.filter((highlight) => highlight.id?.trim() === id);
+    const current =
+      sameId.length === 1
+        ? sameId[0]
+        : sameId.find((highlight) => highlight.stationName === opened.stationName);
+    return current ?? opened;
+  }, [openBreak, highlights, stationLocations, breakStation]);
+
   if (!mounted || !routePlanData || !locations || locations.length < 2 || !summary) {
     return null;
   }
@@ -469,122 +618,140 @@ export function RoutePlanSheet({
 
   return (
     <>
-      <BottomSheet
-        key={mounted.mode}
-        ref={bottomSheetRef}
-        index={mounted.index}
-        snapPoints={isLive ? LIVE_SNAP_POINTS : PREVIEW_SNAP_POINTS}
-        // The percentage stops count from under the safe area. Dynamic sizing
-        // (the library default) adds a stop as tall as the content, up to the
-        // full height; that one alone stays under the floating back button,
-        // so the title is never beneath it.
-        topInset={safeTop}
-        maxDynamicContentSize={Math.max(
-          0,
-          screenHeight - safeTop - SHEET_TOP_CLEARANCE,
-        )}
-        onAnimate={handleSheetAnimate}
-        onChange={handleSheetChange}
-        // Swiping a live route's sheet down does what "Haritaya dön" does.
-        enablePanDownToClose={isLive}
-        backgroundComponent={SheetGlassBackground}
-        handleIndicatorStyle={[styles.handleIndicator, { backgroundColor: palette.handle }]}
-        style={styles.sheet}
-      >
-        <BottomSheetScrollView
-          ref={scrollRef}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          // VoiceOver's two-finger scrub anywhere in the sheet: the back button.
-          onAccessibilityEscape={backAction?.onPress}
+      <SheetMotionContext.Provider value={sheetMotion}>
+        <BottomSheet
+          key={mounted.mode}
+          ref={bottomSheetRef}
+          index={mounted.index}
+          snapPoints={isLive ? LIVE_SNAP_POINTS : PREVIEW_SNAP_POINTS}
+          // The stops count from under the safe area; 100 % is the full height
+          // under the Dynamic Island. No stop sized to the content.
+          topInset={safeTop}
+          enableDynamicSizing={false}
+          animatedIndex={sheetIndex}
+          onAnimate={handleSheetAnimate}
+          onChange={handleSheetChange}
+          // Swiping a live route's sheet down does what "Haritaya dön" does.
+          enablePanDownToClose={isLive}
+          backgroundComponent={SheetGlassBackground}
+          // The library makes its content one "Bottom Sheet" element
+          // (adjustable), which hides the rows and the sheet's own back
+          // button from VoiceOver and swallows its escape: the content stays
+          // a plain container. The handle keeps its own element.
+          accessible={false}
+          accessibilityRole={null}
+          accessibilityLabel={null}
+          handleIndicatorStyle={[styles.handleIndicator, { backgroundColor: palette.handle }]}
+          style={styles.sheet}
         >
-          <Animated.View
-            style={{
-              opacity: contentOpacity,
-              transform: [{ translateX: contentTranslate }],
-            }}
+          <BottomSheetScrollView
+            ref={scrollRef}
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            // VoiceOver's two-finger scrub anywhere in the sheet: the back button.
+            onAccessibilityEscape={backAction ? goBack : undefined}
           >
-            {activePanel === "overview" ? (
-              <>
-                <TitleBlock
-                  title={destination?.title ?? "Rota"}
-                  address={destination?.address}
-                  subtitle={subtitle}
-                  palette={palette}
-                />
-
-                <Group palette={palette}>
-                  <SummaryStrip items={summaryItems} palette={palette} />
-                  {showBattery ? (
-                    <>
-                      <View
-                        style={[styles.groupSeparator, { backgroundColor: palette.separator }]}
-                      />
-                      <BatteryCard
-                        start={battery.start}
-                        end={battery.end}
-                        trajectory={battery.trajectory}
-                        palette={palette}
-                      />
-                    </>
-                  ) : null}
-                </Group>
-
-                {highlights.length > 0 ? (
-                  <>
-                    <SectionHeader title="MOLA ÖNERİLERİ" palette={palette} />
-                    <Group palette={palette}>
-                      {highlights.map((highlight, index) => (
-                        <BreakSuggestionRow
-                          key={highlight.id || `${highlight.stationName}-${index}`}
-                          highlight={highlight}
-                          palette={palette}
-                          divided={index > 0}
-                        />
-                      ))}
-                    </Group>
-                    <GroupFooter text={breakFooter} palette={palette} />
-                  </>
-                ) : null}
-
-                <SectionHeader title="ROTA" palette={palette} />
-                <RouteSteps
-                  locations={locations}
-                  legs={legs}
-                  destination={destination}
-                  palette={palette}
-                />
-
-                {isLive ? (
-                  <DestructiveRow
-                    label="Rotayı kaldır"
-                    accessibilityHint="Onay sorar. Sürüş ve AKBA açık kalır."
-                    onPress={confirmRemoveRoute}
+            <Animated.View
+              style={{
+                opacity: contentOpacity,
+                transform: [{ translateX: contentTranslate }],
+              }}
+            >
+              {activePanel === "overview" ? (
+                <>
+                  <TitleBlock
+                    title={destination?.title ?? "Rota"}
+                    address={destination?.address}
+                    subtitle={subtitle}
                     palette={palette}
                   />
-                ) : null}
-              </>
-            ) : (
-              <StationsPanel
-                stations={stationLocations}
-                totalChargeMinutes={summary.total_charge_duration}
-                palette={palette}
-              />
-            )}
-          </Animated.View>
 
-          <Text style={[styles.footerText, { color: palette.tertiaryLabel }]}>
-            AKBA © 2026
-          </Text>
-        </BottomSheetScrollView>
-      </BottomSheet>
+                  <Group palette={palette}>
+                    <SummaryStrip items={summaryItems} palette={palette} />
+                    {showBattery ? (
+                      <>
+                        <View
+                          style={[styles.groupSeparator, { backgroundColor: palette.separator }]}
+                        />
+                        <BatteryCard
+                          start={battery.start}
+                          end={battery.end}
+                          trajectory={battery.trajectory}
+                          palette={palette}
+                        />
+                      </>
+                    ) : null}
+                  </Group>
+
+                  {highlights.length > 0 ? (
+                    <>
+                      <SectionHeader title="MOLA ÖNERİLERİ" palette={palette} />
+                      <Group palette={palette}>
+                        {highlights.map((highlight, index) => (
+                          <BreakSuggestionRow
+                            key={highlight.id || `${highlight.stationName}-${index}`}
+                            highlight={highlight}
+                            palette={palette}
+                            divided={index > 0}
+                            onPress={openBreakDetail}
+                          />
+                        ))}
+                      </Group>
+                      <GroupFooter text={breakFooter} palette={palette} />
+                    </>
+                  ) : null}
+
+                  <SectionHeader title="ROTA" palette={palette} />
+                  <RouteSteps
+                    locations={locations}
+                    legs={legs}
+                    destination={destination}
+                    palette={palette}
+                  />
+
+                  {isLive ? (
+                    <DestructiveRow
+                      label="Rotayı kaldır"
+                      accessibilityHint="Onay sorar. Sürüş ve AKBA açık kalır."
+                      onPress={confirmRemoveRoute}
+                      palette={palette}
+                    />
+                  ) : null}
+                </>
+              ) : activePanel === "stations" ? (
+                <StationsPanel
+                  stations={stationLocations}
+                  totalChargeMinutes={summary.total_charge_duration}
+                  palette={palette}
+                  onOpenBreak={openBreakDetail}
+                />
+              ) : breakHighlight ? (
+                <BreakDetailPanel
+                  highlight={breakHighlight}
+                  station={breakStation}
+                  palette={palette}
+                />
+              ) : null}
+            </Animated.View>
+
+            <Text style={[styles.footerText, { color: palette.tertiaryLabel }]}>
+              AKBA © 2026
+            </Text>
+          </BottomSheetScrollView>
+
+          {/* The back button at the highest stop: in the sheet, left of the title. */}
+          {backAction ? (
+            <SheetBackButton label={backAction.label} onPress={goBack} active={isNearTop} />
+          ) : null}
+        </BottomSheet>
+      </SheetMotionContext.Provider>
 
       {/* Screen-level, over the map and above the sheet: a floating toolbar's back button. */}
       {backAction ? (
         <GlassNavButton
           visible={showBackButton}
-          onPress={backAction.onPress}
-          onAccessibilityEscape={backAction.onPress}
+          onPress={goBack}
+          onAccessibilityEscape={goBack}
           accessibilityLabel={backAction.label}
           style={[styles.navButton, { top: safeTop + NAV_BUTTON_TOP }]}
         />

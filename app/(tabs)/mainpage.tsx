@@ -553,15 +553,12 @@ export default function MapScreen() {
   safeTopRef.current = safeTop;
   /**
    * The map area's height, measured (the window's until then): the route
-   * sheet's snap points count from it, and the camera fits above the sheet's
-   * middle stop with the same number.
+   * sheet stands in it, and the camera fits above the sheet's middle stop
+   * with this number.
    */
-  const [mapAreaHeight, setMapAreaHeight] = useState(0);
   const mapAreaHeightRef = useRef(0);
   const measureMapArea = useCallback((event: LayoutChangeEvent) => {
-    const height = Math.round(event.nativeEvent.layout.height);
-    mapAreaHeightRef.current = height;
-    setMapAreaHeight(height);
+    mapAreaHeightRef.current = Math.round(event.nativeEvent.layout.height);
   }, []);
   const isSwitchingMode = useRef(false);
 
@@ -4012,7 +4009,6 @@ export default function MapScreen() {
           {/* Route Plan Bottom Sheet — shown when Atlas creates a route */}
           {isDriveModeActive && (
             <RoutePlanSheet
-              containerHeight={mapAreaHeight}
               onSheetIndexChange={handleRoutePlanSheetIndexChange}
               onClosePreview={canClosePreview ? handleClosePreview : undefined}
             />

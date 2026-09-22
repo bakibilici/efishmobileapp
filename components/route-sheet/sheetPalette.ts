@@ -15,6 +15,13 @@ export type SheetPalette = {
   blurIntensity: number;
   /** Colour laid over the blur; near-opaque on Android, where expo-blur does not blur. */
   wash: string;
+  /**
+   * The sheet at its highest stop, as Find My's full-height sheet: the glass
+   * gives way to an almost opaque fill (faded in over the wash as the sheet
+   * rises from the middle stop): the grouped background in light, the
+   * wash's own navy in dark, so the sheet does not change colour as it rises.
+   */
+  topFill: string;
   sheetEdge: string;
 
   // Content: iOS semantic colours.
@@ -51,6 +58,8 @@ const LIGHT: SheetPalette = {
   blurTint: "light",
   blurIntensity: 80,
   wash: isAndroid ? "rgba(246,248,251,0.97)" : "rgba(248,250,252,0.72)",
+  // systemGroupedBackground: the white cells stand out on it as in Settings.
+  topFill: "rgba(242,242,247,0.96)",
   sheetEdge: "rgba(0,35,49,0.10)",
 
   label: "#1C1C1E",
@@ -80,6 +89,9 @@ const DARK: SheetPalette = {
   blurTint: "dark",
   blurIntensity: 70,
   wash: isAndroid ? "rgba(13,19,32,0.97)" : "rgba(13,19,32,0.72)",
+  // The wash's own navy, almost opaque: rising, the sheet only loses its
+  // see-through and keeps its colour (a neutral grey here shifted it in hue).
+  topFill: "rgba(13,19,32,0.96)",
   sheetEdge: "rgba(255,255,255,0.10)",
 
   label: "#FFFFFF",

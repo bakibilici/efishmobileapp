@@ -8,7 +8,9 @@ import {
   type StyleProp,
   type ViewStyle,
 } from "react-native";
+import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 
+import { SHEET_BACK_INSET, useSheetMotion } from "./sheetMotion";
 import type { SheetPalette } from "./sheetPalette";
 
 type IoniconName = keyof typeof Ionicons.glyphMap;
@@ -129,24 +131,43 @@ export const DestructiveRow = memo(function DestructiveRow({
   );
 });
 
+/** A detail page's header tile, a little larger than a row's. */
+const TITLE_TILE_SIZE = 36;
+
 /**
  * Large title (at most two lines, cut with "…", never shrunk) above the
- * groups, then an optional address line and one secondary line.
+ * groups, then an optional address line and one secondary line; `tile`
+ * puts a category tile before it (a detail page's header).
+ *
+ * At the sheet's highest stop the sheet's own back button stands at the
+ * left of this block. When the panel has a way back the block keeps the
+ * button's room free at its right at every stop and slides right into it
+ * with the sheet's position (sheetMotion): a translation only, so the title
+ * never wraps again mid-drag.
  */
 export const TitleBlock = memo(function TitleBlock({
   title,
   address,
   subtitle,
+  tile,
   palette,
 }: {
   title: string;
   /** The full address when the title is only part of it. */
   address?: string | null;
   subtitle?: string | null;
+  tile?: { glyph: IoniconName; color: string } | null;
   palette: SheetPalette;
 }) {
-  return (
-    <View style={styles.titleBlock}>
+  const motion = useSheetMotion();
+  const noShift = useSharedValue(0);
+  const shift = motion?.titleShift ?? noShift;
+  // Only a translation follows the sheet: the width stays, so the title
+  // keeps its lines while it slides into the room kept free for it.
+  const shiftStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shift.value }] }));
+
+  const copy = (
+    <View style={[styles.titleCopy, tile && styles.titleCopyBesideTile]}>
       <Text
         accessibilityRole="header"
         style={[styles.title, { color: palette.label }]}
@@ -173,6 +194,21 @@ export const TitleBlock = memo(function TitleBlock({
         </Text>
       ) : null}
     </View>
+  );
+
+  return (
+    <Animated.View
+      style={[styles.titleBlock, motion?.hasBack && styles.titleBlockBesideBack, shiftStyle]}
+    >
+      {tile ? (
+        <View style={styles.titleRow}>
+          <IconTile glyph={tile.glyph} color={tile.color} size={TITLE_TILE_SIZE} />
+          {copy}
+        </View>
+      ) : (
+        copy
+      )}
+    </Animated.View>
   );
 });
 
@@ -221,7 +257,22 @@ const styles = StyleSheet.create({
     marginHorizontal: SIDE_MARGIN,
     marginTop: 2,
     marginBottom: 14,
+  },
+  // The sheet's own back button's room, kept at all stops: at the top stop
+  // the block slides right into it (titleShift).
+  titleBlockBesideBack: {
+    paddingRight: SHEET_BACK_INSET,
+  },
+  titleCopy: {
     gap: 3,
+  },
+  titleCopyBesideTile: {
+    flex: 1,
+  },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
   },
   title: {
     fontSize: 24,
