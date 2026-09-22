@@ -241,6 +241,7 @@ const header = (overrides: Partial<HeaderInput> = {}) =>
     aiConnecting: false,
     hasRoute: false,
     hasEverConnected: true,
+    conversationEnded: false,
     wakeWordArmed: false,
     thinking: false,
     routePlanFailed: false,
@@ -249,7 +250,7 @@ const header = (overrides: Partial<HeaderInput> = {}) =>
 
 check("the fallback copy is one calm line per state", () => {
   assert.equal(HEADER_COPY.ask, "Nereye gidiyoruz?");
-  assert.equal(HEADER_COPY.wake, "“AKBA” de, dinleyeyim");
+  assert.equal(HEADER_COPY.wake, "“AKBA” diyerek uyandır");
   assert.equal(HEADER_COPY.tap, "Konuşmak için AKBA'ya dokun");
   assert.equal(HEADER_COPY.routePlanFailed, "Rota hesaplanamadı");
   for (const line of [HEADER_COPY.ask, HEADER_COPY.wake, HEADER_COPY.tap]) {
@@ -274,6 +275,46 @@ check("passive with no route says how to start talking", () => {
   assert.deepEqual(
     header({ ...passive, hasEverConnected: true, wakeWordArmed: true }),
     { kind: "prompt", prompt: "wake" },
+  );
+});
+
+check("a conversation AKBA ended is not a lost connection", () => {
+  // After its goodbye the voice is gone (disconnected, the wake word not yet
+  // re-armed): the row says how to start again instead of "Bağlantı koptu".
+  const ended = {
+    status: "disconnected" as const,
+    agentState: null,
+    hasEverConnected: true,
+    conversationEnded: true,
+  };
+  assert.deepEqual(header(ended), { kind: "prompt", prompt: "tap" });
+  assert.deepEqual(header({ ...ended, wakeWordArmed: true }), {
+    kind: "prompt",
+    prompt: "wake",
+  });
+  // With a trip on screen the trip is the line, as anywhere else.
+  assert.deepEqual(header({ ...ended, hasRoute: true }), { kind: "trip" });
+  // Without it, that same end would have read as a broken connection.
+  assert.deepEqual(header({ ...ended, conversationEnded: false }), { kind: "offline" });
+  // A real failure still wins: the drive's error state is not hidden by it.
+  assert.deepEqual(header({ ...ended, aiError: true }), { kind: "offline" });
+  // And it says nothing about a connection that is up again.
+  assert.deepEqual(
+    header({ ...ended, conversationEnded: true, status: "connected", agentState: "listening" }),
+    { kind: "prompt", prompt: "ask" },
+  );
+  assert.deepEqual(
+    header({ ...ended, conversationEnded: true, status: "connecting" }),
+    { kind: "busy", text: "Bağlanıyor…" },
+  );
+  // Why useDrivingAgent sets the status itself when the goodbye arrives
+  // instead of waiting for the room to report the disconnect: the teardown
+  // drops the agent state first, and a transport still called "connected"
+  // with no agent behind it is this — "Bağlanıyor…", a flash of the state
+  // the goodbye just ended.
+  assert.deepEqual(
+    header({ ...ended, status: "connected", agentState: null }),
+    { kind: "busy", text: "Bağlanıyor…" },
   );
 });
 
