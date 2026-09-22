@@ -19,7 +19,7 @@ import Reanimated, {
 
 import { GlassSurface } from "../ui/glass";
 import { IconSymbol, type IconSymbolName } from "../ui/icon-symbol";
-import { usePagePalette } from "../ui/pagePalette";
+import { accentOnGlass, usePagePalette } from "../ui/pagePalette";
 import { TAB_BAR_HEIGHT, useTabBarBottomOffset } from "./tabBarMetrics";
 
 /**
@@ -43,7 +43,6 @@ const PLATTER_SPRING = { damping: 22, stiffness: 260, mass: 0.9 };
  * brand blue itself reads about 2.5:1 on the light glass over the sea on the
  * map, under the 3:1 a control's label needs. Dark mode keeps the brand blue.
  */
-const SELECTED_TINT_LIGHT = "#00729C";
 
 type Props = BottomTabBarProps & {
   /** The bar's slide: moved off screen while driving, under a sheet or the keyboard. */
@@ -130,11 +129,9 @@ export function GlassTabBar({
             ) : null}
             {tabs.map((tab, index) => {
               const selected = index === selectedIndex;
-              const color = selected
-                ? palette.isDark
-                  ? palette.accent
-                  : SELECTED_TINT_LIGHT
-                : palette.label;
+              // The brand blue is too dim on dark glass over a dark map and too
+              // dark on light glass: accentOnGlass gives each scheme a tone that reads.
+              const color = selected ? accentOnGlass(palette.isDark) : palette.label;
               const onPress = () => {
                 const event = navigation.emit({
                   type: "tabPress",

@@ -39,6 +39,15 @@ const DARK: PagePalette = {
 
 export const getPagePalette = (isDark: boolean): PagePalette => (isDark ? DARK : LIGHT);
 
+/**
+ * The accent for a glyph or label drawn ON a glass control (the tab bar's
+ * selected tab, the header's active glyphs). The brand blue is too dark on
+ * light glass (about 2.5:1) and too dim on dark glass over a dark map (about
+ * 4:1), so each scheme gets the brand hue at a luminance that reads: about
+ * 5:1 on light glass and about 6:1 on dark.
+ */
+export const accentOnGlass = (isDark: boolean) => (isDark ? "#4DB6DE" : "#00729C");
+
 /** The page palette for the app's own light/dark setting (Görünüm), not the system's. */
 export function usePagePalette(): PagePalette {
   const { themeScheme } = useTheme();

@@ -16,5 +16,4 @@ export const TIER_COLORS: Record<StationType, string> = {
 
 export const TIER_BOLTS: Record<StationType, number> = { HPC: 3, DC: 2, AC: 1 };
 
-/** An accent glyph on glass: the brand blue reads about 2.5:1 on light glass (GlassTabBar SELECTED_TINT_LIGHT). */
-export const accentOnGlass = (isDark: boolean) => (isDark ? "#0093C9" : "#00729C");
+export { accentOnGlass } from "../ui/pagePalette";
