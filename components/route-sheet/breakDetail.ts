@@ -185,6 +185,21 @@ export const alternativeKindOf = (
 };
 
 /**
+ * Text worth showing: trimmed, and only when it has a letter or a digit. Place
+ * data sometimes names an option "." or ",", which used to show up as
+ * "Diğer: ., Shell".
+ */
+const readable = (text: string | null | undefined): string | null => {
+  const trimmed = text?.trim();
+  return trimmed && /[\p{L}\p{N}]/u.test(trimmed) ? trimmed : null;
+};
+
+/** The alternative's own name, when it is a readable one. */
+export const alternativeName = (
+  alternative: RoutePlanHighlightAlternative,
+): string | null => readable(alternative.name);
+
+/**
  * The alternatives worth listing: those with a name or a title, leaving out
  * every one of a kind the driver ruled out, the kind read as its tile reads
  * it (alternativeKindOf), so an option sent without a category but titled
@@ -195,7 +210,7 @@ export const listedAlternatives = (
   excludedKinds: readonly string[],
 ): RoutePlanHighlightAlternative[] =>
   (alternatives ?? []).filter((alternative) => {
-    if (!(alternative?.name?.trim() || alternative?.title?.trim())) return false;
+    if (!alternative || !(alternativeName(alternative) || readable(alternative.title))) return false;
     const kind = alternativeKindOf(alternative);
     return kind === null || !excludedKinds.includes(kind);
   });
@@ -204,7 +219,7 @@ export const listedAlternatives = (
 export const alternativeTitle = (
   alternative: RoutePlanHighlightAlternative,
 ): string | null => {
-  const own = alternative.title?.trim();
+  const own = readable(alternative.title);
   if (own) return own;
   const kind = alternativeKind(alternative);
   return kind ? KIND_TITLE[kind] : null;

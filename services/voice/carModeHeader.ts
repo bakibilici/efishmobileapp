@@ -13,6 +13,7 @@ export const HEADER_COPY = {
   thinking: "Düşünüyor…",
   planning: "Rota planlanıyor…",
   geocoding: "Adresi arıyor…",
+  stations: "İstasyon arıyor…",
   offline: "Bağlantı koptu",
   offlineDetail: "Tekrar bağlanmak için orb'a dokunun.",
   routePlanFailed: "Rota hesaplanamadı",
@@ -33,6 +34,7 @@ export const HEADER_COPY = {
 export const TOOL_STATUS_COPY: Record<string, string> = {
   create_route_plan: HEADER_COPY.planning,
   geocodeDestination: HEADER_COPY.geocoding,
+  findChargingStations: HEADER_COPY.stations,
 };
 
 /** How long "Rota hesaplanamadı" stays before the row goes back to its fallback. */

@@ -7,6 +7,8 @@ import type {
 import { highlightKind, type BreakKind } from "../../services/routePersonalization";
 import {
   alternativeKindOf,
+  alternativeName,
+  alternativeTitle,
   formatWalkDistance,
   hasRealPlace,
   listedAlternatives,
@@ -136,7 +138,7 @@ export const formatAlternatives = (
   excludedKinds: readonly string[] = [],
 ): string | null => {
   const names = listedAlternatives(highlight.alternatives, excludedKinds)
-    .map((alternative) => (alternative.name?.trim() || alternative.title?.trim() || ""))
+    .map((alternative) => alternativeName(alternative) || alternativeTitle(alternative) || "")
     .filter(Boolean);
   if (!names.length) return null;
   return `Diğer: ${names.join(", ")}`;

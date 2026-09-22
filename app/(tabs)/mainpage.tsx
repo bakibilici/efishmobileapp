@@ -76,7 +76,6 @@ import MapView, {
 // ... existing imports ...
 
 import { ActivityContextBar } from "@/components/ActivityContextBar";
-import { ActivityNotice } from "@/components/ActivityNotice";
 import { CAR_MODE_MAP_CLEAR_INSETS } from "@/components/carModeLayout";
 import {
   hasRouteSheet,
@@ -2755,9 +2754,10 @@ export default function MapScreen() {
                   </View>
                 </Animated.View>
 
+                {/* The bar alone shows the activity: no banner under it
+                    announces a change the bar already reads out. */}
                 <View style={{ marginTop: 12, paddingBottom: 4 }}>
                   <ActivityContextBar mode={headerMode} onPress={forceExpand} />
-                  <ActivityNotice dark={isDark} />
                 </View>
               </Animated.View>
             )}

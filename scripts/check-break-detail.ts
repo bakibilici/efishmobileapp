@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 
 import {
   alternativeKindOf,
+  alternativeName,
   alternativeTitle,
   chargeFitLine,
   listedAlternatives,
@@ -185,6 +186,16 @@ check("an alternative of a ruled-out kind is left out, by its category or its ti
   );
   assert.equal(listedAlternatives(alternatives, []).length, 3);
   assert.deepEqual(listedAlternatives(undefined, ["food"]), []);
+});
+
+check("a name of only punctuation is no name: never listed as \".\"", () => {
+  const alternatives = [{ name: "." }, { name: " , " }, { name: "Shell" }, { name: ".", title: "Kahve molası" }];
+  assert.deepEqual(
+    listedAlternatives(alternatives, []).map((alternative) => alternativeName(alternative) ?? alternativeTitle(alternative)),
+    ["Shell", "Kahve molası"],
+  );
+  assert.equal(alternativeName({ name: "7/24 Market" }), "7/24 Market");
+  assert.equal(alternativeTitle({ name: "x", title: " - " }), null);
 });
 
 console.log(`\n${passed} checks passed`);

@@ -18,7 +18,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useTheme } from "../context/ThemeContext";
 import { useActivityState } from "../hooks/useActivityState";
-import { useSpeed } from "../hooks/useSpeed";
+import { toDisplayKmh, useSpeed } from "../hooks/useSpeed";
 import { useStepCount } from "../hooks/useStepCount";
 import { ActivityState } from "../services/ActivityStateMachine";
 import { DriveSessionState, DriveSessionStore } from "../services/DriveSessionStore";
@@ -52,12 +52,15 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
   const { width: SCREEN_WIDTH } = Dimensions.get("window");
   const FULL_WIDTH = SCREEN_WIDTH - 32;
 
-  const [displaySpeed, setDisplaySpeed] = useState(speed);
+  // Whole km/h from the first frame: the raw reading is a window average
+  // ("4.299339319991123"), and the debounce below only replaces it once the
+  // speed moves by 1 km/h. -1 means unknown (toDisplayKmh).
+  const [displaySpeed, setDisplaySpeed] = useState(() => toDisplayKmh(speed));
 
   // Debounce/smooth speed display purely for UI feel (to prevent rapid 1km/h micro-jitters)
   useEffect(() => {
     if (Math.abs(speed - displaySpeed) >= 1 || speed === 0) {
-      setDisplaySpeed(Math.round(speed));
+      setDisplaySpeed(toDisplayKmh(speed));
     }
   }, [speed, displaySpeed]);
 
@@ -107,7 +110,8 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
           data: `${dSpeedText} km/sa`,
         };
       case ActivityState.RUNNING: {
-        const displaySpeed = Math.round(speed * 10) / 10;
+        // Whole km/h like every other state ("9 km/sa", not "9.3").
+        const isUnknownSpeed = displaySpeed < 0;
         return {
           icon: "walk",
           color: colors.primary,
@@ -118,7 +122,7 @@ export function ActivityContextBar({ mode = "FULL", onPress }: Props) {
             ? "rgba(0, 147, 201, 0.3)"
             : "rgba(0, 147, 201, 0.2)",
           label: displaySpeed >= 9 ? "Koşu (hızlı)" : "Koşu (yavaş)",
-          speedText: `${displaySpeed} km/sa • `,
+          speedText: isUnknownSpeed ? "" : `${displaySpeed} km/sa • `,
           showSteps: true,
         };
       }

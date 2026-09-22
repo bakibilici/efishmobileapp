@@ -93,6 +93,16 @@ const MIDDLE_LEVEL = 1;
 const NAV_BUTTON_TOP = 8;
 const NAV_BUTTON_LEFT = 16;
 
+/**
+ * Every panel change, the stops and a break's page alike and every way back:
+ * the panel fades out sliding this far away, the next fades in from the
+ * other side. Quick, as a pushed page: a slower fade reads as the sheet
+ * hanging.
+ */
+const PANEL_FADE_OUT_MS = 150;
+const PANEL_FADE_IN_MS = 200;
+const PANEL_SLIDE = 18;
+
 type Panel = "overview" | "stations" | "break";
 /**
  * The break suggestion the detail panel shows, the stop's row it was opened
@@ -332,6 +342,13 @@ export function RoutePlanSheet({
    * every way back waits for it.
    */
   const panelTransitionRef = useRef(false);
+  /**
+   * Counts the panel swaps: the fade-in starts from the effect below, once
+   * the new panel is rendered. Started straight after setActivePanel, it
+   * ran a frame or two ahead of the render and showed the old panel again,
+   * faintly, before the new one replaced it.
+   */
+  const [panelSwaps, setPanelSwaps] = useState(0);
 
   const animatePanelChange = useCallback(
     (nextPanel: Panel, direction: "forward" | "backward") => {
@@ -341,37 +358,44 @@ export function RoutePlanSheet({
       Animated.parallel([
         Animated.timing(contentOpacity, {
           toValue: 0,
-          duration: 1500,
+          duration: PANEL_FADE_OUT_MS,
           useNativeDriver: true,
         }),
         Animated.timing(contentTranslate, {
-          toValue: direction === "forward" ? -18 : 18,
-          duration: 1500,
+          toValue: direction === "forward" ? -PANEL_SLIDE : PANEL_SLIDE,
+          duration: PANEL_FADE_OUT_MS,
           useNativeDriver: true,
         }),
       ]).start(() => {
         setActivePanel(nextPanel);
         // A pushed or popped panel starts at its top, while it is faded out.
         scrollRef.current?.scrollTo({ y: 0, animated: false });
-        contentTranslate.setValue(direction === "forward" ? 18 : -18);
-        Animated.parallel([
-          Animated.timing(contentOpacity, {
-            toValue: 1,
-            duration: 2000,
-            useNativeDriver: true,
-          }),
-          Animated.timing(contentTranslate, {
-            toValue: 0,
-            duration: 2000,
-            useNativeDriver: true,
-          }),
-        ]).start(() => {
-          panelTransitionRef.current = false;
-        });
+        contentTranslate.setValue(direction === "forward" ? PANEL_SLIDE : -PANEL_SLIDE);
+        setPanelSwaps((count) => count + 1);
       });
     },
     [activePanel, contentOpacity, contentTranslate],
   );
+
+  // The new panel is on screen, still faded out: it fades in from the side
+  // the change set above. Every swap runs this, so the lock always ends.
+  useEffect(() => {
+    if (!panelSwaps) return;
+    Animated.parallel([
+      Animated.timing(contentOpacity, {
+        toValue: 1,
+        duration: PANEL_FADE_IN_MS,
+        useNativeDriver: true,
+      }),
+      Animated.timing(contentTranslate, {
+        toValue: 0,
+        duration: PANEL_FADE_IN_MS,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      panelTransitionRef.current = false;
+    });
+  }, [panelSwaps, contentOpacity, contentTranslate]);
 
   const openStations = useCallback(
     () => animatePanelChange("stations", "forward"),
@@ -732,11 +756,13 @@ export function RoutePlanSheet({
                   palette={palette}
                 />
               ) : null}
-            </Animated.View>
 
-            <Text style={[styles.footerText, { color: palette.tertiaryLabel }]}>
-              AKBA © 2026
-            </Text>
+              {/* Fades with its panel: outside it, it stayed put through the
+                  fade-out and jumped to the new panel's end at the swap. */}
+              <Text style={[styles.footerText, { color: palette.tertiaryLabel }]}>
+                AKBA © 2026
+              </Text>
+            </Animated.View>
           </BottomSheetScrollView>
 
           {/* The back button at the highest stop: in the sheet, left of the title. */}

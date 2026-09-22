@@ -297,6 +297,10 @@ check("work in progress and errors replace the fallback", () => {
     kind: "busy",
     text: "Adresi arıyor…",
   });
+  assert.deepEqual(header({ pendingToolText: TOOL_STATUS_COPY.findChargingStations }), {
+    kind: "busy",
+    text: "İstasyon arıyor…",
+  });
   assert.deepEqual(header({ planning: true, hasRoute: true }), {
     kind: "busy",
     text: "Rota planlanıyor…",

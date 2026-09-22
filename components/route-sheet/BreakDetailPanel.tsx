@@ -9,6 +9,7 @@ import type {
   RoutePlanLocation,
 } from "../../services/DriveSessionStore";
 import {
+  alternativeName,
   alternativeTitle,
   chargeFitLine,
   listedAlternatives,
@@ -39,7 +40,7 @@ const AlternativeRow = memo(function AlternativeRow({
   palette: SheetPalette;
 }) {
   const tile = alternativeTile(alternative, palette);
-  const name = alternative.name?.trim() || alternativeTitle(alternative) || "Mola yeri";
+  const name = alternativeName(alternative) || alternativeTitle(alternative) || "Mola yeri";
   const kind = alternativeTitle(alternative);
   const meta = [kind !== name ? kind : null, shortWalkDistance(alternative.distanceM)]
     .filter(Boolean)

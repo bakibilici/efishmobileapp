@@ -29,7 +29,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useTheme } from "../context/ThemeContext";
-import { useSpeed } from "../hooks/useSpeed";
+import { toDisplayKmh, useSpeed } from "../hooks/useSpeed";
 import {
   DriveSessionState,
   DriveSessionStore,
@@ -521,7 +521,8 @@ export function CarModeView() {
     !!DriveSessionStore.getContext()?.isPreviewMode,
   );
   const speed = useSpeed();
-  const [displaySpeed, setDisplaySpeed] = useState(speed);
+  // Whole km/h from the first frame, -1 while unknown (toDisplayKmh).
+  const [displaySpeed, setDisplaySpeed] = useState(() => toDisplayKmh(speed));
 
   // Hook into the ElevenLabs agent lifecycle
   const {
@@ -780,7 +781,7 @@ export function CarModeView() {
   // Mirror ActivityContextBar speed behavior for consistent UX.
   useEffect(() => {
     if (Math.abs(speed - displaySpeed) >= 1 || speed === 0) {
-      setDisplaySpeed(Math.round(speed));
+      setDisplaySpeed(toDisplayKmh(speed));
     }
   }, [speed, displaySpeed]);
 
