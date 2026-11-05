@@ -28,7 +28,7 @@ const APPEARANCE_LABELS = { system: "Sistem", light: "Açık", dark: "Koyu" } as
 // Fixed for the life of a build: read once.
 const VERSION_LINE =
   Application.nativeApplicationVersion && Application.nativeBuildVersion
-    ? `AKBA ${Application.nativeApplicationVersion} (${Application.nativeBuildVersion})`
+    ? `Electrip AIRouting ${Application.nativeApplicationVersion} (${Application.nativeBuildVersion})`
     : null;
 
 /**
@@ -130,16 +130,16 @@ export default function AccountScreen() {
           />
           <SwitchRow
             palette={palette}
-            title="“AKBA” komutunu dinle"
+            title="“Electrip” komutunu dinle"
             tile={{ symbol: "waveform", color: palette.indigo }}
             value={wakeWord}
             onValueChange={toggleWakeWord}
-            accessibilityHint="Sürüş sırasında “AKBA” diyerek konuşmayı başlatır"
+            accessibilityHint="Sürüş sırasında “Electrip” diyerek konuşmayı başlatır"
           />
         </ListGroup>
         <GroupFooter
           palette={palette}
-          text="Açıkken, sürüş sırasında “AKBA” diyerek konuşmayı başlatabilirsiniz. Dinleme telefonunuzda yapılır; siz seslenmeden ses telefondan çıkmaz."
+          text="Açıkken, sürüş sırasında “Electrip” diyerek konuşmayı başlatabilirsiniz. Dinleme telefonunuzda yapılır; siz seslenmeden ses telefondan çıkmaz."
         />
 
         <SectionHeader title="GİZLİLİK VE VERİLER" palette={palette} />
@@ -151,12 +151,12 @@ export default function AccountScreen() {
             tile={{ symbol: "location.fill", color: palette.blue }}
             value={shareLocation}
             onValueChange={toggleShareLocation}
-            accessibilityHint="Kapalıyken konumunuz AKBA'ya gönderilmez"
+            accessibilityHint="Kapalıyken konumunuz Electrip'e gönderilmez"
           />
         </ListGroup>
         <GroupFooter
           palette={palette}
-          text="Kapalıyken konumunuz AKBA'ya gönderilmez ve rotalar bulunduğunuz yerden planlanamaz."
+          text="Kapalıyken konumunuz Electrip'e gönderilmez ve rotalar bulunduğunuz yerden planlanamaz."
         />
 
         <ListGroup palette={palette} style={styles.headerlessGroup}>

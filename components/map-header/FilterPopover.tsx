@@ -39,7 +39,7 @@ export function FilterPopover({
         <>
           <SwitchRow
             palette={palette}
-            title="Yalnızca AKBA istasyonları"
+            title="Yalnızca Electrip istasyonları"
             tile={{ symbol: "checkmark.seal.fill", color: palette.accent }}
             value={onlyAkba}
             onValueChange={onOnlyAkbaChange}

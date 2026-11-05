@@ -138,8 +138,8 @@ function buildStartOptions(
     maxAlternatives: 3,
     requiresOnDeviceRecognition: true,
     addsPunctuation: false,
-    // Also what makes an English recognizer write the name as "AKBA".
-    contextualStrings: ["AKBA", "Akba", "akba"],
+    // Also what makes an English or Turkish recognizer write the name as "Electrip" or "AKBA".
+    contextualStrings: ["Electrip", "electrip", "Elektrip", "elektrip", "AKBA", "Akba", "akba"],
     // Passive listening must not look like a call to the car. videoChat and
     // voiceChat (like allowBluetooth) open the hands-free profile, which
     // switches a Bluetooth car kit into call mode and cuts its music; the

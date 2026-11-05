@@ -392,7 +392,7 @@ export default function ActivitySheetScreen() {
           </ListGroup>
           <GroupFooter palette={palette} text={permissionFooter(motion, location)} />
 
-          <SectionHeader title="AKBA NASIL KARAR VERİYOR" palette={palette} />
+          <SectionHeader title="ELECTRİP NASIL KARAR VERİYOR" palette={palette} />
           <SectionParagraph palette={palette} text={DETECTION_EXPLANATION} />
         </View>
       </ScrollView>

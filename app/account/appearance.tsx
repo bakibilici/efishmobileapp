@@ -44,7 +44,7 @@ export default function AppearanceScreen() {
         </ListGroup>
         <GroupFooter
           palette={palette}
-          text="Sistem seçiliyse AKBA, telefonunuzun açık ya da koyu görünüm ayarını izler."
+          text="Sistem seçiliyse Electrip AIRouting, telefonunuzun açık ya da koyu görünüm ayarını izler."
         />
       </ScrollView>
     </>

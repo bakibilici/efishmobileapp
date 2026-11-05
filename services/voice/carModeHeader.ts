@@ -20,9 +20,9 @@ export const HEADER_COPY = {
   /** AKBA is live and nothing is planned yet. */
   ask: "Nereye gidiyoruz?",
   /** Passive, the phone listens for its name. */
-  wake: "“AKBA” diyerek uyandır",
+  wake: "“Electrip” diyerek uyandır",
   /** Passive, no wake word: tapping the orb connects. */
-  tap: "Konuşmak için AKBA'ya dokun",
+  tap: "Konuşmak için Electrip'e dokun",
 } as const;
 
 /**

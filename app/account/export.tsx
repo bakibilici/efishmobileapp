@@ -119,19 +119,19 @@ export default function ExportDataScreen() {
         </ListGroup>
         <GroupFooter
           palette={palette}
-          text="Görünüm, konum paylaşımı ve “AKBA” komutu gibi cihaz ayarları, mola tercihleriniz ve son aramalarınız dosyaya eklenmez."
+          text="Görünüm, konum paylaşımı ve “Electrip” komutu gibi cihaz ayarları, mola tercihleriniz ve son aramalarınız dosyaya eklenmez."
         />
 
         <SectionHeader title="PAYLAŞIM" palette={palette} />
         <SectionParagraph
           palette={palette}
-          text="Dosya JSON biçiminde bu telefonda oluşturulur, ardından paylaşım ekranı açılır; Dosyalar'a kaydedebilir ya da seçtiğiniz bir uygulamayla gönderebilirsiniz. AKBA dosyayı hiçbir sunucuya göndermez. Oluşturulan her dosyanın bir kopyası uygulamanın klasöründe kalır ve hesabınızı silseniz de silinmez."
+          text="Dosya JSON biçiminde bu telefonda oluşturulur, ardından paylaşım ekranı açılır; Dosyalar'a kaydedebilir ya da seçtiğiniz bir uygulamayla gönderebilirsiniz. Electrip dosyayı hiçbir sunucuya göndermez. Oluşturulan her dosyanın bir kopyası uygulamanın klasöründe kalır ve hesabınızı silseniz de silinmez."
         />
 
         <SectionHeader title="KVKK" palette={palette} />
         <SectionParagraph
           palette={palette}
-          text="Bu dosya, 6698 sayılı KVKK'nın 11. maddesindeki haklarınızı kullanabilmeniz için hazırlanır. AKBA sunucusundaki oturum özetleri dosyada yer almaz; bunlar için info@uptecra.com adresine yazabilirsiniz."
+          text="Bu dosya, 6698 sayılı KVKK'nın 11. maddesindeki haklarınızı kullanabilmeniz için hazırlanır. Electrip sunucusundaki oturum özetleri dosyada yer almaz; bunlar için info@uptecra.com adresine yazabilirsiniz."
         />
       </ScrollView>
 

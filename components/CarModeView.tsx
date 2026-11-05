@@ -657,8 +657,8 @@ export function CarModeView() {
       Alert.alert(
         "Batarya seviyesi",
         known
-          ? `Şu an %${batteryStart}. Tam yüzdeyi AKBA'ya sesli de söyleyebilirsiniz.`
-          : "Tam yüzdeyi AKBA'ya sesli söyleyebilirsiniz: \"Şarjım yüzde altmış beş.\"",
+          ? `Şu an %${batteryStart}. Tam yüzdeyi Electrip'e sesli de söyleyebilirsiniz.`
+          : "Tam yüzdeyi Electrip'e sesli söyleyebilirsiniz: \"Şarjım yüzde altmış beş.\"",
         known
           ? [
               { text: "Vazgeç", style: "cancel" as const },
@@ -702,21 +702,21 @@ export function CarModeView() {
     routePlanFailed: routePlanFailedVisible,
   });
 
-  // What AKBA is doing, for VoiceOver (the header and the orb).
+  // What Electrip is doing, for VoiceOver (the header and the orb).
   const voiceStateLabel =
     headerLine.kind === "offline"
-      ? "AKBA bağlantısı koptu"
+      ? "Electrip bağlantısı koptu"
       : headerLine.kind === "busy"
-        ? `AKBA: ${headerLine.text.replace(/…$/, "")}`
+        ? `Electrip: ${headerLine.text.replace(/…$/, "")}`
         : !isVoiceTransportActive
           ? wakeWordArmed
-            ? "AKBA kapalı, “AKBA” deyince dinler"
-            : "AKBA kapalı"
+            ? "Electrip kapalı, “Electrip” deyince dinler"
+            : "Electrip kapalı"
           : agentState === "speaking"
-            ? "AKBA konuşuyor"
+            ? "Electrip konuşuyor"
             : isMuted
-              ? "AKBA dinlemiyor, mikrofon kapalı"
-              : "AKBA dinliyor";
+              ? "Electrip dinlemiyor, mikrofon kapalı"
+              : "Electrip dinliyor";
 
   useEffect(() => {
     const isVisible =
@@ -954,7 +954,7 @@ export function CarModeView() {
 
   const voiceActionLabel = canStopConversation
     ? "Konuşmayı Bitir"
-    : "AKBA'ya Bağlan";
+    : "Electrip'e Bağlan";
   const voiceActionIcon = canStopConversation ? "pause-circle" : "radio-outline";
 
   const handleDismissEndConfirmation = () => {
@@ -1000,8 +1000,8 @@ export function CarModeView() {
           // route sentence only with a route: the first connection of a drive
           // that has neither promised to keep a route that did not exist.
           title: hasEverConnected
-            ? "AKBA’ya yeniden bağlanılsın mı?"
-            : "AKBA’ya bağlanılsın mı?",
+            ? "Electrip’e yeniden bağlanılsın mı?"
+            : "Electrip’e bağlanılsın mı?",
           subtitle: [
             hasEverConnected
               ? "Sesli konuşma yeniden başlayacak."
@@ -1010,7 +1010,7 @@ export function CarModeView() {
           ]
             .filter(Boolean)
             .join(" "),
-          confirm: "AKBA’ya Bağlan",
+          confirm: "Electrip’e Bağlan",
           cancel: "Vazgeç",
         }
       : manualConfirmAction === "start_drive"
@@ -1027,15 +1027,15 @@ export function CarModeView() {
             // Only what really goes on: the drive always does (passiveDriveState
             // keeps it), the route only when there is one.
             subtitle: hasRoutePlan
-              ? "Sadece AKBA konuşması kapanacak. Sürüş ve rota takibi devam edecek."
-              : "Sadece AKBA konuşması kapanacak. Sürüş devam edecek.",
+              ? "Sadece Electrip konuşması kapanacak. Sürüş ve rota takibi devam edecek."
+              : "Sadece Electrip konuşması kapanacak. Sürüş devam edecek.",
             confirm: "Konuşmayı Bitir",
             cancel: "Vazgeç",
           }
         : {
             title: "Sürüşü şimdi bitirelim mi?",
             subtitle:
-              "AKBA kapanacak ve sürüş oturumu sonlandırılacak. İsterseniz daha sonra yeniden başlatabilirsiniz.",
+              "Electrip kapanacak ve sürüş oturumu sonlandırılacak. İsterseniz daha sonra yeniden başlatabilirsiniz.",
             confirm: "Sürüşü Bitir",
             cancel: "Vazgeç",
           };
@@ -1333,7 +1333,7 @@ export function CarModeView() {
             disabled={isVoiceTransportActive}
             accessibilityRole="button"
             accessibilityLabel={voiceStateLabel}
-            accessibilityHint={isVoiceTransportActive ? undefined : "Dokununca AKBA'ya bağlanır."}
+            accessibilityHint={isVoiceTransportActive ? undefined : "Dokununca Electrip'e bağlanır."}
             accessibilityState={{ disabled: isVoiceTransportActive }}
             style={styles.orbTouchTarget}
           >

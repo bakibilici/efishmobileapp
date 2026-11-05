@@ -72,6 +72,16 @@ check("folds Turkish letters after tr-TR lower-casing", () => {
 
 check("matches the spellings the recognizer produces", () => {
   for (const heard of [
+    "Electrip",
+    "electrip",
+    "Elektrip",
+    "elektrip",
+    "elektirip",
+    "ilektrip",
+    "hey Electrip nereye gidiyoruz",
+    "Electrip'e sor",
+    "Electrip, şarj istasyonu bul",
+    "elek trip",
     "AKBA",
     "Akba",
     "akba",
@@ -93,6 +103,11 @@ check("matches the spellings the recognizer produces", () => {
 check("ignores words that only contain the sound", () => {
   for (const heard of [
     "",
+    "elektrik",
+    "elektrikli",
+    "elektronik",
+    "trip",
+    "elek",
     "akbaba",
     "Akbank",
     "Akbay",
@@ -250,8 +265,8 @@ const header = (overrides: Partial<HeaderInput> = {}) =>
 
 check("the fallback copy is one calm line per state", () => {
   assert.equal(HEADER_COPY.ask, "Nereye gidiyoruz?");
-  assert.equal(HEADER_COPY.wake, "“AKBA” diyerek uyandır");
-  assert.equal(HEADER_COPY.tap, "Konuşmak için AKBA'ya dokun");
+  assert.equal(HEADER_COPY.wake, "“Electrip” diyerek uyandır");
+  assert.equal(HEADER_COPY.tap, "Konuşmak için Electrip'e dokun");
   assert.equal(HEADER_COPY.routePlanFailed, "Rota hesaplanamadı");
   for (const line of [HEADER_COPY.ask, HEADER_COPY.wake, HEADER_COPY.tap]) {
     assert.ok(!line.includes("\n"), line);

@@ -121,7 +121,7 @@ export default function DeleteAccountScreen() {
           <Row
             palette={palette}
             title="Mola tercihleriniz"
-            subtitle="AKBA'ya önermemesini söylediğiniz mola türleri"
+            subtitle="Electrip'e önermemesini söylediğiniz mola türleri"
             tile={{ symbol: "nosign", color: palette.orange }}
           />
           <Row
@@ -137,7 +137,7 @@ export default function DeleteAccountScreen() {
           <Row
             palette={palette}
             title="Oturum özetleri"
-            subtitle="AKBA sunucusundan en geç 30 gün içinde kaldırılır"
+            subtitle="Electrip sunucusundan en geç 30 gün içinde kaldırılır"
             tile={{ symbol: "server.rack", color: palette.indigo }}
           />
         </ListGroup>
@@ -145,7 +145,7 @@ export default function DeleteAccountScreen() {
         <SectionHeader title="BU TELEFONDA KALANLAR" palette={palette} />
         <SectionParagraph
           palette={palette}
-          text="Görünüm, konum paylaşımı, “AKBA” komutu ve batarya ayarları gibi cihaz ayarları, son aramalar ve daha önce dışa aktardığınız dosyalar bu telefonda kalır. Bunlar, uygulamayı telefonunuzdan kaldırdığınızda silinir."
+          text="Görünüm, konum paylaşımı, “Electrip” komutu ve batarya ayarları gibi cihaz ayarları, son aramalar ve daha önce dışa aktardığınız dosyalar bu telefonda kalır. Bunlar, uygulamayı telefonunuzdan kaldırdığınızda silinir."
         />
 
         <ListGroup palette={palette} style={styles.exportGroup}>

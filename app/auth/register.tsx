@@ -156,19 +156,35 @@ export default function RegisterScreen() {
     if (!visibleDocument || !canAcknowledgeDocument) {
       return;
     }
-    setViewedDocuments((current) => ({
-      ...current,
+    const nextViewed = {
+      ...viewedDocuments,
       [visibleDocument]: true,
-    }));
+    };
+    setViewedDocuments(nextViewed);
+    if (nextViewed.terms && nextViewed.privacy) {
+      setAgreedToTerms(true);
+    }
     closeDocumentModal();
   };
 
   const handleTermsToggle = () => {
     if (!hasReadRequiredDocuments) {
-      Alert.alert(
-        "Belgeleri önce okuyun",
-        "Devam etmeden önce Kullanım Koşulları ve Aydınlatma Metni metinlerini açıp sonuna kadar incelemeniz gerekir.",
-      );
+      if (!viewedDocuments.terms && !viewedDocuments.privacy) {
+        Alert.alert(
+          "Belgeleri önce inceleyin",
+          "Devam etmeden önce Kullanım Koşulları ve Aydınlatma Metni metinlerini açıp sonuna kadar incelemeniz gerekir.",
+        );
+      } else if (!viewedDocuments.terms) {
+        Alert.alert(
+          "Kullanım Koşulları",
+          "Lütfen Kullanım Koşulları metnini açıp sonuna kadar inceleyin.",
+        );
+      } else {
+        Alert.alert(
+          "Aydınlatma Metni",
+          "Kullanım Koşulları okundu. Lütfen Aydınlatma Metni metnini de açıp inceleyin.",
+        );
+      }
       return;
     }
     setAgreedToTerms((current) => !current);
@@ -286,7 +302,7 @@ export default function RegisterScreen() {
               PROFIL
             </Text>
             <Text style={[styles.title, { color: colors.text }]}>
-              AKBA sizi tanıyarak başlasın
+              Electrip AIRouting sizi tanıyarak başlasın
             </Text>
             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
               Demo kaydınız cihazda tutulur. Telefon numaranız hashlenerek
@@ -372,10 +388,10 @@ export default function RegisterScreen() {
               İLGİ ALANLARI
             </Text>
             <Text style={[styles.title, { color: colors.text }]}>
-              AKBA önerilerini size göre şekillendirsin
+              Electrip önerilerini size göre şekillendirsin
             </Text>
             <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-              Seçeceğiniz ilgi alanları rota sırası ve mola önerilerinde AKBA
+              Seçeceğiniz ilgi alanları rota sırası ve mola önerilerinde Electrip
               için ek bağlam oluşturur.
             </Text>
 
@@ -461,8 +477,12 @@ export default function RegisterScreen() {
                     ]}
                   >
                     {hasReadRequiredDocuments
-                      ? "Her iki metin görüntülendi. Artık onay verebilirsiniz."
-                      : "Onay verebilmek için her iki metni de sonuna kadar okuyun."}
+                      ? "✓ Her iki metin onaylandı. Hesabınızı oluşturabilirsiniz."
+                      : viewedDocuments.terms
+                      ? "✓ Kullanım Koşulları okundu. Lütfen Aydınlatma Metni'ni de açıp okuyun."
+                      : viewedDocuments.privacy
+                      ? "✓ Aydınlatma Metni okundu. Lütfen Kullanım Koşulları'nı da açıp okuyun."
+                      : "Onay verebilmek için her iki metni de açıp sonuna kadar okuyun."}
                   </Text>
                 </View>
               </View>

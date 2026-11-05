@@ -314,7 +314,7 @@ export function RoutePlanSheet({
   const confirmRemoveRoute = useCallback(() => {
     Alert.alert(
       "Rota kaldırılsın mı?",
-      "Harita ve rota özeti temizlenir. Sürüş ve AKBA açık kalır.",
+      "Harita ve rota özeti temizlenir. Sürüş ve Electrip açık kalır.",
       [
         { text: "Vazgeç", style: "cancel" },
         {
@@ -766,7 +766,7 @@ export function RoutePlanSheet({
                   {isLive ? (
                     <DestructiveRow
                       label="Rotayı kaldır"
-                      accessibilityHint="Onay sorar. Sürüş ve AKBA açık kalır."
+                      accessibilityHint="Onay sorar. Sürüş ve Electrip açık kalır."
                       onPress={confirmRemoveRoute}
                       palette={palette}
                     />
@@ -790,7 +790,7 @@ export function RoutePlanSheet({
               {/* Fades with its panel: outside it, it stayed put through the
                   fade-out and jumped to the new panel's end at the swap. */}
               <Text style={[styles.footerText, { color: palette.tertiaryLabel }]}>
-                AKBA © 2026
+                Electrip AIRouting © 2026
               </Text>
             </Animated.View>
           </BottomSheetScrollView>

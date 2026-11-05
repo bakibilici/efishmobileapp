@@ -20,7 +20,7 @@ import type { PagePalette } from "@/components/ui/pagePalette";
 
 import type { SessionListItem } from "./sessionModel";
 
-const AKBA_ACTIONS = [{ name: "akba", label: "AKBA ile aç" }];
+const AKBA_ACTIONS = [{ name: "electrip", label: "Electrip ile aç" }];
 
 /**
  * One trip in Oturumlar, a cell of an inset group like a Mail or Notes row:
@@ -49,7 +49,7 @@ export const SessionRow = memo(function SessionRow({
   const openWithAkba = useCallback(() => onOpenWithAkba(session), [onOpenWithAkba, session]);
   const onAccessibilityAction = useCallback(
     (event: AccessibilityActionEvent) => {
-      if (event.nativeEvent.actionName === "akba") openWithAkba();
+      if (event.nativeEvent.actionName === "electrip" || event.nativeEvent.actionName === "akba") openWithAkba();
     },
     [openWithAkba],
   );
@@ -97,8 +97,8 @@ export const SessionRow = memo(function SessionRow({
           <Pressable
             onPress={openWithAkba}
             accessibilityRole="button"
-            accessibilityLabel="AKBA ile aç"
-            accessibilityHint="Rotayı açar ve AKBA'yı bağlar"
+            accessibilityLabel="Electrip ile aç"
+            accessibilityHint="Rotayı açar ve Electrip'i bağlar"
             style={({ pressed }) => [styles.akbaButton, pressed && styles.akbaPressed]}
           >
             <View style={[styles.akbaCircle, { backgroundColor: palette.accentFill }]}>

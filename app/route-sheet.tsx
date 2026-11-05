@@ -212,7 +212,7 @@ export default function RouteSheetScreen() {
   const confirmRemoveRoute = useCallback(() => {
     Alert.alert(
       "Rota kaldırılsın mı?",
-      "Harita ve rota özeti temizlenir. Sürüş ve AKBA açık kalır.",
+      "Harita ve rota özeti temizlenir. Sürüş ve Electrip açık kalır.",
       [
         { text: "Vazgeç", style: "cancel" },
         {
@@ -556,7 +556,7 @@ export default function RouteSheetScreen() {
               {!isPreviewSheet ? (
                 <DestructiveRow
                   label="Rotayı kaldır"
-                  accessibilityHint="Onay sorar. Sürüş ve AKBA açık kalır."
+                  accessibilityHint="Onay sorar. Sürüş ve Electrip açık kalır."
                   onPress={confirmRemoveRoute}
                   palette={palette}
                 />
@@ -578,7 +578,7 @@ export default function RouteSheetScreen() {
           ) : null}
 
           <Text style={[styles.footerText, { color: palette.tertiaryLabel }]}>
-            AKBA © 2026
+            Electrip AIRouting © 2026
           </Text>
         </Animated.View>
       </ScrollView>

@@ -95,7 +95,7 @@ export default function InterestsScreen() {
         </ListGroup>
         <GroupFooter
           palette={palette}
-          text="AKBA, şarj duraklarında mola yeri önerirken seçtiğiniz ilgi alanlarını kullanır. Sürüş sırasında AKBA'ya söyleyerek ilgi alanı çıkarabilir ya da geri ekleyebilirsiniz."
+          text="Electrip, şarj duraklarında mola yeri önerirken seçtiğiniz ilgi alanlarını kullanır. Sürüş sırasında Electrip'e söyleyerek ilgi alanı çıkarabilir ya da geri ekleyebilirsiniz."
         />
       </ScrollView>
     </>

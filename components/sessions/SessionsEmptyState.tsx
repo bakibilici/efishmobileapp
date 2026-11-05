@@ -32,7 +32,7 @@ export const SessionsEmptyState = memo(function SessionsEmptyState({
       <Text style={[styles.body, { color: palette.secondaryLabel }]}>
         {noMatches
           ? "Yazımı kontrol edin ya da başka bir arama deneyin."
-          : "AKBA ile planladığınız rotalar burada listelenir."}
+          : "Electrip ile planladığınız rotalar burada listelenir."}
       </Text>
     </View>
   );

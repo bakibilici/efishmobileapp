@@ -1,22 +1,22 @@
 // Permission copy shared by the Info.plist keys and the speech plugin, so the
 // two can never disagree. The wake-word listener only runs on-device (see
 // patches/expo-speech-recognition+3.1.3.patch); search dictation does not.
-const MIC_PERMISSION = "AKBA ile sesli konuşabilmen için mikrofon erişimi gerekiyor.";
+const MIC_PERMISSION = "Electrip AIRouting ile sesli konuşabilmen için mikrofon erişimi gerekiyor.";
 const SPEECH_PERMISSION =
-  "“AKBA” diye seslendiğinde seni duyabilmek (bu dinleme telefonunda yapılır) ve aramaya sesle yazabilmek için konuşma tanıma izni gerekiyor.";
+  "“Electrip” diye seslendiğinde seni duyabilmek (bu dinleme telefonunda yapılır) ve aramaya sesle yazabilmek için konuşma tanıma izni gerekiyor.";
 // The packages' own defaults read "Allow $(PRODUCT_NAME) to …", which names
 // the Xcode target (TubitakAppDemo in an older local ios/ folder) instead of
-// the app. Written out here so every dialog says AKBA, in Turkish.
+// the app. Written out here so every dialog says Electrip AIRouting, in Turkish.
 const LOCATION_PERMISSION =
-  "AKBA, çevrendeki şarj istasyonlarını gösterebilmek, rotanı bulunduğun yerden planlayabilmek ve sürüşte olduğunu anlayabilmek için konumunu kullanır.";
+  "Electrip AIRouting, çevrendeki şarj istasyonlarını gösterebilmek, rotanı bulunduğun yerden planlayabilmek ve sürüşte olduğunu anlayabilmek için konumunu kullanır.";
 const MOTION_PERMISSION =
-  "AKBA, yürüdüğünü ya da araçta olduğunu anlayabilmek için hareket verisini kullanır.";
+  "Electrip AIRouting, yürüdüğünü ya da araçta olduğunu anlayabilmek için hareket verisini kullanır.";
 const FACE_ID_PERMISSION =
-  "AKBA, telefonunda sakladığı giriş bilgilerini Face ID ile koruyabilir.";
+  "Electrip AIRouting, telefonunda sakladığı giriş bilgilerini Face ID ile koruyabilir.";
 
 export default ({ config }) => ({
   ...config,
-  name: "AKBA",
+  name: "Electrip AIRouting",
   slug: "tubitak-app",
   // The EAS project lives under the uptecra account. Without this the CLI
   // resolves the project by id alone, which is how the previous project ended

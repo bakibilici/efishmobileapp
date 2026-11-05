@@ -220,14 +220,14 @@ export const opensSettings = (kind: PermissionKind) =>
 export function permissionFooter(...kinds: readonly PermissionKind[]): string {
   const base =
     "Adımlar Hareket ve Fitness iznine, hız ile sürüş algısı Konum iznine bağlıdır. " +
-    "İzin verilmediğinde AKBA yalnızca elindeki veriyle çalışır.";
+    "İzin verilmediğinde Electrip yalnızca elindeki veriyle çalışır.";
   const unasked = kinds.some((kind) => kind === "undetermined");
   return unasked
-    ? `${base} Henüz sorulmamış bir izni AKBA, ilk ihtiyaç duyduğunda sizden isteyecektir.`
+    ? `${base} Henüz sorulmamış bir izni Electrip, ilk ihtiyaç duyduğunda sizden isteyecektir.`
     : base;
 }
 
-// ─── How AKBA decides ────────────────────────────────────────────────────────
+// ─── How Electrip decides ────────────────────────────────────────────────────────
 
 /**
  * The detection in plain Turkish, for the person reading the screen. Every
@@ -240,7 +240,7 @@ export function permissionFooter(...kinds: readonly PermissionKind[]): string {
  * here stops matching them.
  */
 export const DETECTION_EXPLANATION =
-  "AKBA beş saniyede bir, son beş saniyenin adım ve hız verisine bakar. " +
+  "Electrip beş saniyede bir, son beş saniyenin adım ve hız verisine bakar. " +
   "Saniyede en az 1,2 adım yürüyüş sayılır; saniyede en az 2,2 adım ve saatte 6 km'nin üzerinde hız birlikte görülürse koşu sayılır. " +
   "Saatte 15 km'yi aşan hız diğer her şeyin önüne geçer ve araç olarak değerlendirilir. " +
   "Adım da hız da yoksa ve telefon sabit duruyorsa beklemede olduğunuz kabul edilir. " +

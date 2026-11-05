@@ -14,7 +14,7 @@ import { IconSymbol } from "@/components/ui/icon-symbol";
 import { usePagePalette } from "@/components/ui/pagePalette";
 import { LEGAL_TEXTS, LegalTextKey } from "@/constants/legalTexts";
 
-const END_TOLERANCE_PX = 24;
+const END_TOLERANCE_PX = 100;
 /** The sheet's close button: the smallest touch target (HIG). */
 const CLOSE_SIZE = 44;
 
@@ -44,19 +44,32 @@ export function LegalScrollText({
     onReachEnd?.();
   }, [onReachEnd]);
 
-  const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+  const handleScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
-    if (contentOffset.y + layoutMeasurement.height >= contentSize.height - END_TOLERANCE_PX) fire();
+    if (
+      contentSize.height <= layoutMeasurement.height + END_TOLERANCE_PX ||
+      contentOffset.y + layoutMeasurement.height >= contentSize.height - END_TOLERANCE_PX
+    ) {
+      fire();
+    }
   };
 
   return (
     <ScrollView
       style={styles.scroll}
       contentContainerStyle={styles.content}
-      onScroll={onScroll}
-      scrollEventThrottle={100}
-      onLayout={(e) => { layoutHeight.current = e.nativeEvent.layout.height; }}
-      onContentSizeChange={(_w, h) => { if (layoutHeight.current && h <= layoutHeight.current + END_TOLERANCE_PX) fire(); }}
+      onScroll={handleScroll}
+      onMomentumScrollEnd={handleScroll}
+      onScrollEndDrag={handleScroll}
+      scrollEventThrottle={16}
+      onLayout={(e) => {
+        layoutHeight.current = e.nativeEvent.layout.height;
+      }}
+      onContentSizeChange={(_w, h) => {
+        if (layoutHeight.current && h <= layoutHeight.current + END_TOLERANCE_PX) {
+          fire();
+        }
+      }}
     >
       {doc.paragraphs.map((p, i) => {
         const heading = p.length < 90 && p === p.toLocaleUpperCase("tr-TR") && /[A-ZÇĞİÖŞÜ]/.test(p);
@@ -69,7 +82,9 @@ export function LegalScrollText({
           </Text>
         );
       })}
-      <Text style={[styles.endMark, { color: colors.textSecondary }]}>— Metnin sonu —</Text>
+      <Pressable onPress={fire} hitSlop={12}>
+        <Text style={[styles.endMark, { color: colors.textSecondary }]}>— Metnin sonu —</Text>
+      </Pressable>
     </ScrollView>
   );
 }

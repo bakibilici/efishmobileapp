@@ -1,13 +1,12 @@
 /**
- * Pure matching for the on-device "AKBA" wake word. No React Native imports,
+ * Pure matching for the on-device "Electrip" / "AKBA" wake word. No React Native imports,
  * so scripts/voice/check-voice-helpers.ts can exercise it under plain node.
  *
- * The recognizer does not know the word, so it writes whatever it heard. A
- * Turkish one: "AKBA", "Akba", "akpa", "ağba", "akbaa", "hakba", or two words
- * "ak ba". An English one (a phone without on-device Turkish, see
- * wakeWordLocales): "Akbah", "Acba", "Aqba", "ack ba", "ak bah". Matching is
- * whole-token only, which keeps "akbaba", "Akbank", "Akbay", "Akbar" and
- * "Ackbar" from waking the assistant.
+ * Supports both "Electrip" and the original "AKBA" wake word:
+ * - Electrip variants: Electrip, Elektrip, elektrip, electripe, elektripe, elek trip, electrip'e
+ * - AKBA variants: AKBA, Akba, akpa, ağba, akbaa, hakba, ak ba, Akbah, Acba
+ * Matching is whole-token only, keeping words like "elektrik", "elektrikli",
+ * "akbaba", "Akbank" from waking the assistant.
  */
 
 /** tr-TR lower-casing, then Turkish letters and stray combining marks folded to ASCII. */
@@ -25,15 +24,16 @@ export function foldTurkish(text: string): string {
     .replace(/[̀-ͯ]/g, "");
 }
 
-/**
- * One token: optional leading "h", "a", the k sound (k, g, c, q or ck), b or
- * p, one or more a's, optional trailing "h". Nothing else may follow, so an
- * "r" ("akbar"), "n" ("akbank") or a second syllable ("akbaba") never matches.
- */
-const WAKE_TOKEN = /^h?a(?:ck|[kgcq])[bp]a+h?$/;
-/** Split form "ak ba" / "ack bah": first half, then second half. */
-const WAKE_HEAD = /^h?a(?:ck|[kgcq])$/;
-const WAKE_TAIL = /^[bp]a+h?$/;
+/** AKBA token: optional leading "h", "a", the k sound, b/p, one or more a's. */
+const AKBA_TOKEN = /^h?a(?:ck|[kgcq])[bp]a+h?$/;
+const AKBA_HEAD = /^h?a(?:ck|[kgcq])$/;
+const AKBA_TAIL = /^[bp]a+h?$/;
+
+/** Electrip token: e/i, le, k/c/kt/ct, r, i/ı, p/b, with optional Turkish suffixes. */
+const ELECTRIP_TOKEN = /^(?:e|i)le(?:k|c|kt|ct)i?r[iı]?[pb](?:e|a|ye|ya|i|ı|yi|in|nin)?$/;
+/** Split forms "elek trip" / "elec trip" */
+const ELECTRIP_HEAD = /^(?:e|i)le(?:k|c|kt|ct)$/;
+const ELECTRIP_TAIL = /^t?r[iı]?[pb](?:e|a|ye|ya|i|ı|yi|in|nin)?$/;
 
 export function tokenize(text: string): string[] {
   return foldTurkish(text)
@@ -46,13 +46,11 @@ export function matchesWakeWord(transcript: string): boolean {
   if (!transcript) return false;
   const tokens = tokenize(transcript);
   for (let i = 0; i < tokens.length; i += 1) {
-    if (WAKE_TOKEN.test(tokens[i])) return true;
-    if (
-      i + 1 < tokens.length &&
-      WAKE_HEAD.test(tokens[i]) &&
-      WAKE_TAIL.test(tokens[i + 1])
-    ) {
-      return true;
+    const t = tokens[i];
+    if (AKBA_TOKEN.test(t) || ELECTRIP_TOKEN.test(t)) return true;
+    if (i + 1 < tokens.length) {
+      if (AKBA_HEAD.test(t) && AKBA_TAIL.test(tokens[i + 1])) return true;
+      if (ELECTRIP_HEAD.test(t) && ELECTRIP_TAIL.test(tokens[i + 1])) return true;
     }
   }
   return false;
