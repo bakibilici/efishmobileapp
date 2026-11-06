@@ -24,12 +24,14 @@ export default ({ config }) => ({
   owner: "uptecra",
   version: "1.0.0",
   orientation: "portrait",
-  icon: "./assets/images/app_homepage_icon.png",
+  icon: "./assets/images/electrip_icon.png",
   scheme: "tubitak",
   userInterfaceStyle: "automatic",
   newArchEnabled: true,
   ios: {
     infoPlist: {
+      CFBundleDisplayName: "Electrip AIRouting",
+      CFBundleName: "Electrip AIRouting",
       ITSAppUsesNonExemptEncryption: false,
       NSMicrophoneUsageDescription:
         MIC_PERMISSION,
